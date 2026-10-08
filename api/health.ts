@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
-const NAMES = ['TELEGRAM_BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ALLOWED_TG_IDS', 'ADMIN_TG_IDS']
+const NAMES = ['TELEGRAM_BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ALLOWED_TG_IDS', 'ADMIN_TG_IDS', 'N8N_WEBHOOK_SECRET']
 
 const idList = (v: string | undefined) => {
   const parts = (v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
@@ -14,6 +14,8 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
   // settings: 200 = таблиця є; 404/42P01 = міграцію 001 ще не запущено
   let db: number | string = 'skipped'
   let settingsKeys: number | null = null
+  let reviewSchema: boolean | null = null
+  let readyForReview: number | null = null
   let ms = 0
   if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
@@ -25,6 +27,12 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       db = r.status
       ms = Date.now() - t0
       if (r.ok) settingsKeys = ((await r.json()) as unknown[]).length
+      // Фаза 2: чи запущено 002 (post_versions) і скільки постів чекає Іру після 003
+      const q = await fetch(`${process.env.SUPABASE_URL}/rest/v1/content_plan?select=id&review_status=eq.ready_for_review`, {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+      })
+      reviewSchema = q.ok
+      if (q.ok) readyForReview = ((await q.json()) as unknown[]).length
     } catch (e) {
       db = e instanceof Error ? e.message : 'error'
     }
@@ -51,6 +59,8 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
     db,
     db_ms: ms,
     settings_keys: settingsKeys,
+    review_schema: reviewSchema,
+    ready_for_review: readyForReview,
     region: process.env.VERCEL_REGION ?? null,
   })
 }

@@ -30,3 +30,7 @@ dist-ssr
 # Python
 __pycache__/
 *.pyc
+
+# тексти постів Іри — лише локально
+supabase/003_backfill_notion.sql
+scripts/backfill/*.json

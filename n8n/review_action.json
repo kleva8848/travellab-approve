@@ -1,0 +1,925 @@
+{
+  "name": "[TravelLab] Review Action (Mini App)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-review-action",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "responseCode": 202,
+        "options": {}
+      },
+      "webhookId": "5f0c2b7e-7a1d-4c55-9b0e-tl-review-action",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-plan",
+      "name": "Supabase - Get Plan",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.content_plan_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-versions",
+      "name": "Supabase - Get Versions",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "post_versions",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "content_plan_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Webhook').first().json.body.content_plan_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-comments",
+      "name": "Supabase - Get Comments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "review_comments",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "content_plan_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Webhook').first().json.body.content_plan_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-tours",
+      "name": "Supabase - Get Tours",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "tours",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-stories",
+      "name": "Supabase - Get Stories",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "story_queue",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-approved-posts",
+      "name": "Supabase - Get Approved Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "posts",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-build-generator-input",
+      "name": "Code - Build Generator Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
+      }
+    },
+    {
+      "id": "if-text-comments-",
+      "name": "IF - Text Comments?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-text",
+              "leftValue": "={{ $json._skip_text }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "execute-post-generator",
+      "name": "Execute - Post Generator",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "VZk3w2jPwXFexId2",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-parse-result",
+      "name": "Code - Parse Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Результат генератора → рядок post_versions (або помилка)\nconst g = $json;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst cur = ctx._cur || {};\nconst ok = !!(g && g.status && g.status !== 'failed' && g.text);\nconst lintErr = (g && g.lint_errors) || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String((g && (g.error || g.status)) || 'генератор не повернув текст').slice(0, 300),\n  _plan_id: ctx._plan.id,\n  _expected_version_no: ctx._expected_version_no,\n  _text_comment_ids: ctx._text_comment_ids,\n  row: ok ? {\n    content_plan_id: ctx._plan.id,\n    version_no: ctx._plan.version_no + 1,\n    text_v: (cur.text_v || 0) + 1,\n    image_v: cur.image_v || 0,\n    text: g.text,\n    hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    form: g.form || null,\n    key_idea: g.key_idea || null,\n    media_ids: cur.media_ids || [],\n    rendered_urls: cur.rendered_urls || [],\n    render_params: cur.render_params || {},\n    trigger: 'comment',\n    comment_id: ctx._text_comment_ids[0] || null,\n    model: 'gpt-4.1',\n    prompt_version: 'PRMPT-011 v4',\n    lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []\n  } : null\n} }];"
+      }
+    },
+    {
+      "id": "if-generated-",
+      "name": "IF - Generated?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "gen-ok",
+              "leftValue": "={{ $json._ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-version-row",
+      "name": "Code - Version Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $json.row }];"
+      }
+    },
+    {
+      "id": "supabase-insert-version",
+      "name": "Supabase - Insert Version",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "operation": "create",
+        "tableId": "post_versions",
+        "dataToSend": "autoMapInputData"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "supabase-point-plan-to-version",
+      "name": "Supabase - Point Plan To Version",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "content_plan",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.content_plan_id }}"
+            },
+            {
+              "keyName": "version_no",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Parse Result').first().json._expected_version_no }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "current_version_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "version_no",
+              "fieldValue": "={{ $json.version_no }}"
+            },
+            {
+              "fieldId": "review_status",
+              "fieldValue": "ready_for_review"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "supabase-mark-comments-applied",
+      "name": "Supabase - Mark Comments Applied",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "review_comments",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "content_plan_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Parse Result').first().json._plan_id }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "new"
+            },
+            {
+              "keyName": "target",
+              "condition": "eq",
+              "keyValue": "text"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "applied"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-back-to-changes-requested",
+      "name": "Supabase - Back To Changes Requested",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        220
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "content_plan",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Build Generator Input').first().json._plan.id }}"
+            },
+            {
+              "keyName": "review_status",
+              "condition": "eq",
+              "keyValue": "regenerating"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "review_status",
+              "fieldValue": "changes_requested"
+            },
+            {
+              "fieldId": "review_note",
+              "fieldValue": "={{ $json._error || 'правка лише до фото — чекає фото-треку (фаза 6)' }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-message",
+      "name": "Code - Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nconst ok = $('Code - Parse Result').first().json._ok;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + $('Code - Parse Result').first().json._error\n} }];"
+      }
+    },
+    {
+      "id": "telegram-new-version-to-ira",
+      "name": "Telegram - New Version To Ira",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4180,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Подивитись",
+                    "additionalFields": {
+                      "web_app": {
+                        "url": "={{ $json.url }}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-settings-fail-",
+      "name": "Supabase - Get Settings (fail)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        220
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-fail-message",
+      "name": "Code - Fail Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        220
+      ],
+      "parameters": {
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings (fail)').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nlet ok = false; try { ok = $('Code - Parse Result').first().json._ok; } catch (e) {}\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (() => { try { return $('Code - Parse Result').first().json._error; } catch (e) { return 'лише фото-правка'; } })()\n} }];"
+      }
+    },
+    {
+      "id": "telegram-fail-to-admin",
+      "name": "Telegram - Fail To Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3520,
+        220
+      ],
+      "parameters": {
+        "chatId": "={{ $json.admin_chat_id }}",
+        "text": "={{ $json.fail_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Plan": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Versions": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Comments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Comments": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Tours": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Stories": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Approved Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Approved Posts": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Generator Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Generator Input": {
+      "main": [
+        [
+          {
+            "node": "IF - Text Comments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Text Comments?": {
+      "main": [
+        [
+          {
+            "node": "Execute - Post Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Back To Changes Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute - Post Generator": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Result": {
+      "main": [
+        [
+          {
+            "node": "IF - Generated?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Generated?": {
+      "main": [
+        [
+          {
+            "node": "Code - Version Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Back To Changes Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Version Row": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Version": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Point Plan To Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Point Plan To Version": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Comments Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Mark Comments Applied": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Code - Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Message": {
+      "main": [
+        [
+          {
+            "node": "Telegram - New Version To Ira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Back To Changes Requested": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings (fail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings (fail)": {
+      "main": [
+        [
+          {
+            "node": "Code - Fail Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Fail Message": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Fail To Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

@@ -42,3 +42,159 @@ export async function getMe(): Promise<Me> {
   const r = await call<{ user: Me }>('/api/me')
   return r.user
 }
+
+// ───────────── Фаза 3: черга і огляд постів ─────────────
+
+export type ReviewStatus =
+  | 'planned' | 'generating' | 'needs_data' | 'ready_for_review' | 'changes_requested' | 'regenerating'
+  | 'approved' | 'published' | 'skipped' | 'missed' | 'failed' | 'backlog'
+
+export type Plan = {
+  id: string
+  day: string
+  platform: 'telegram' | 'instagram' | 'threads' | string
+  slot_type: string
+  pillar: string
+  tour_id: string | null
+  hotel_id: string | null
+  scheduled_for: string | null
+  slot_time: string | null
+  review_status: ReviewStatus
+  version_no: number
+  current_version_id: string | null
+  approved_at: string | null
+  published_at: string | null
+}
+
+export type QueueItem = Plan & { hotel_name: string | null; tour_title: string | null; preview: string }
+
+export type Version = {
+  id: string
+  version_no: number
+  text_v: number
+  image_v: number
+  text: string | null
+  hooks: string[] | null
+  form: string | null
+  key_idea: string | null
+  trigger: string
+  comment_id: string | null
+  prompt_version: string | null
+  lint: { note?: string } | null
+  missing_facts: { field?: string; note?: string }[] | null
+  created_at: string
+}
+
+export type Comment = { id: string; version_id: string | null; target: 'text' | 'photo'; body: string; status: string; created_at: string }
+
+export type PostDetail = {
+  plan: Plan
+  hotel: { hotel_id: string; name: string; country: string } | null
+  tour: { tour_id: string; title: string; destination: string; price_range: string | null; dates_example: string | null } | null
+  versions: Version[]
+  comments: Comment[]
+}
+
+export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
+
+export async function getQueue(): Promise<QueueItem[]> {
+  if (isDemo) {
+    await wait()
+    return demo.queue()
+  }
+  return (await call<{ items: QueueItem[] }>('/api/queue')).items
+}
+
+export async function getPost(id: string): Promise<PostDetail> {
+  if (isDemo) {
+    await wait()
+    return demo.post(id)
+  }
+  return call<PostDetail>(`/api/post?id=${encodeURIComponent(id)}`)
+}
+
+export async function reviewAction(
+  id: string,
+  expected_version_no: number,
+  action: 'approve' | 'unapprove' | 'comment' | 'restore',
+  extra: Partial<CommentInput> & { version_id?: string } = {},
+): Promise<{ ok: true; queued?: boolean }> {
+  if (isDemo) {
+    await wait(400)
+    return demo.act(id, action, extra)
+  }
+  return call('/api/review', { method: 'POST', body: JSON.stringify({ id, expected_version_no, action, ...extra }) })
+}
+
+// ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────
+const demo = (() => {
+  const now = new Date().toISOString()
+  const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string): PostDetail => ({
+    plan: {
+      id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
+      review_status: status, version_no: texts.length, current_version_id: `${id}-v${texts.length}`, approved_at: null, published_at: null,
+    },
+    hotel: hotel ? { hotel_id: 'HTL-000', name: hotel, country: '—' } : null,
+    tour: null,
+    versions: texts.map((text, i) => ({
+      id: `${id}-v${i + 1}`, version_no: i + 1, text_v: i + 1, image_v: 0, text, hooks: null, form: 'one_fact',
+      key_idea: 'Демо: головна думка поста', trigger: i ? 'comment' : 'initial', comment_id: i && comment ? `${id}-c1` : null,
+      prompt_version: 'demo', lint: null, missing_facts: [], created_at: now,
+    })),
+    comments: comment ? [{ id: `${id}-c1`, version_id: `${id}-v1`, target: 'text', body: comment, status: 'applied', created_at: now }] : [],
+  })
+  const posts: PostDetail[] = [
+    mk('d1', 'Пн', 'instagram', 'hotel_place', 'Демо-готель на острові', [
+      'Коли родина обирає острів, я завжди питаю одне: а що робитиме дитина між сніданком і вечерею?\n\nТут відповідь проста — риф поруч з берегом. Маску можна взяти одразу після сніданку, без човна й без розкладу.\n\nДеталі на ваші дати — пишіть у приват.',
+      'Коли родина обирає острів, я питаю: а що робитиме дитина між сніданком і вечерею?\n\nТут відповідь — риф поруч з берегом. Маска після сніданку, без човна й без розкладу.\n\nДеталі на ваші дати — пишіть у приват.',
+    ], 'ready_for_review', 'Коротше, без «я завжди»'),
+    mk('d2', 'Ср', 'telegram', 'insider', 'Демо-курорт у Греції', [
+      '**Осінь — і басейн досі чекає на плавання.**\n\nВода підігріта, тож навіть у жовтні не виникає питання, чи вдасться поплавати. Для поїздок у shoulder season це сильна перевага.\n\n→ @demo',
+    ], 'ready_for_review'),
+    mk('d3', 'Пт', 'threads', 'personal_take', null, [
+      'Є готель, за яким я зараз уважно спостерігаю. З висновками не поспішаю — хочу побачити, як він покаже себе в перший сезон.',
+    ], 'approved'),
+  ]
+  const byId = (id: string) => {
+    const p = posts.find((x) => x.plan.id === id)
+    if (!p) throw new ApiError(404, 'not found')
+    return p
+  }
+  return {
+    queue: (): QueueItem[] =>
+      posts.map((p) => ({
+        ...p.plan, hotel_name: p.hotel?.name ?? null, tour_title: null,
+        preview: (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+      })),
+    post: (id: string): PostDetail => structuredClone(byId(id)),
+    act: (id: string, action: string, extra: Partial<CommentInput> & { version_id?: string }) => {
+      const p = byId(id)
+      if (action === 'approve') { p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString() }
+      if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
+      if (action === 'restore') {
+        const old = p.versions.find((v) => v.id === extra.version_id)
+        if (old) {
+          const n = p.versions.length + 1
+          p.versions.push({ ...old, id: `${id}-v${n}`, version_no: n, trigger: 'manual', comment_id: null })
+          Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}`, review_status: 'ready_for_review' })
+        }
+      }
+      if (action === 'comment') {
+        const cid = `${id}-c${p.comments.length + 1}`
+        const body = [extra.text, extra.photo].filter(Boolean).join(' · ')
+        p.comments.push({ id: cid, version_id: p.plan.current_version_id, target: extra.text ? 'text' : 'photo', body, status: 'processing', created_at: new Date().toISOString() })
+        p.plan.review_status = 'regenerating'
+        // Демо: «агент» відповідає за 4 с
+        setTimeout(() => {
+          const prev = p.versions.at(-1)!
+          const n = p.versions.length + 1
+          p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, text_v: prev.text_v + 1, trigger: 'comment', comment_id: cid, text: (prev.text ?? '').split('\n\n').slice(0, 2).join('\n\n') })
+          Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}`, review_status: 'ready_for_review' })
+          p.comments.at(-1)!.status = 'applied'
+        }, 4000)
+        return { ok: true as const, queued: true }
+      }
+      return { ok: true as const }
+    },
+  }
+})()
