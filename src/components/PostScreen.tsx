@@ -105,7 +105,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -194,6 +194,24 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     } finally {
       setUploading(false)
     }
+  }
+
+  // Текст для Instagram / Threads — без **жирного** (там його немає); у Telegram жирний збережеться, якщо копіювати з чату
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText((cur.text ?? '').replace(/\*\*/g, ''))
+      haptic('success')
+      setToast('Текст скопійовано')
+    } catch {
+      setToast('Не вдалося скопіювати — надішли в чат і скопіюй звідти')
+    }
+  }
+
+  const sendToChat = async () => {
+    const r = await act('send_to_chat')
+    if (!r) return
+    haptic('success')
+    setToast(r.photos ? `Надіслала в чат: текст і ${r.photos} фото` : 'Надіслала текст у чат')
   }
 
   const unapprove = async () => {
@@ -352,6 +370,21 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <div key={src} className="fact">{f}<div className="mt-0.5 text-[12px]" style={{ color: 'var(--hint)' }}>{src}</div></div>
                 ))}
               </details>
+            )}
+
+            {approved && view === 'new' && (
+              <div className="card mt-3">
+                <b>Готово до публікації</b>
+                <div className="mt-1 mb-3 text-[13px] leading-snug" style={{ color: 'var(--hint)' }}>
+                  {(cur.media_ids ?? []).length
+                    ? `Надішлю в чат текст і фото файлами — з білою рамкою${post.plan.platform === 'telegram' ? '' : ', під формат 4:5'}. Звідти зберігаєш у галерею і публікуєш.`
+                    : 'Надішлю текст у чат — звідти копіюєш і публікуєш.'}
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn sec" style={{ height: 42, fontSize: 14 }} onClick={() => void copyText()}>Копіювати текст</button>
+                  <button className="btn" style={{ height: 42, fontSize: 14 }} disabled={busy} onClick={() => void sendToChat()}>{busy ? 'Готую…' : 'Надіслати в чат'}</button>
+                </div>
+              </div>
             )}
 
             {!approved && view === 'new' && (

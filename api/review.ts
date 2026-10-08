@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
+import { sendToChat } from '../server/render.js'
 import { notifyN8n } from '../server/review.js'
 import { failSchema } from '../server/schema.js'
 
@@ -8,7 +9,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_COMMENT = 2000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat'
   id?: string
   expected_version_no?: number
   text?: string
@@ -59,6 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const swapped = Boolean(r.data && (r.data as { id?: string }).id)
       return void res.json({ ok: true, swapped })
+    }
+
+    // Готовий пост у чат бота: текст + фото з білою рамкою файлами — звідти Іра публікує
+    if (b.action === 'send_to_chat') {
+      return void res.json({ ok: true, ...(await sendToChat(b.id, user.id)) })
     }
 
     if (b.action === 'upload_url') {
