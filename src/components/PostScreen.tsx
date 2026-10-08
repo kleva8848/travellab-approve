@@ -53,6 +53,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [own, setOwn] = useState<PreparedPhoto | null>(null)
   const [ownMode, setOwnMode] = useState<'replace' | 'add'>('add')
   const [uploading, setUploading] = useState(false)
+  const [draft, setDraft] = useState<string | null>(null)
 
   useBackButton(true, onBack)
 
@@ -70,6 +71,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     setView('new')
     setSlide(0)
     setCText(''); setCPhoto(''); setChipsT([]); setChipsP([])
+    setDraft(null)
     void load()
   }, [load])
 
@@ -105,7 +107,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -194,6 +196,18 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     } finally {
       setUploading(false)
     }
+  }
+
+  // Своя редакція тексту: зберігається як нова версія без агента
+  const saveDraft = async () => {
+    if (draft === null) return
+    if (draft.trim() === (cur.text ?? '').trim()) return setDraft(null)
+    if (!(await act('edit_text', { text: draft }))) return
+    haptic('success')
+    setDraft(null)
+    setToast('Збережено як нову версію')
+    await load()
+    onChanged()
   }
 
   // Текст для Instagram / Threads — без **жирного** (там його немає); у Telegram жирний збережеться, якщо копіювати з чату
@@ -352,6 +366,16 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
               </div>
             )}
 
+            {draft !== null ? (
+              <div className="card">
+                <div className="mb-2 flex items-center justify-between font-semibold">Редагую сама <span className="text-[12px] font-normal" style={{ color: 'var(--hint)' }}>**так** — жирний</span></div>
+                <textarea className="in" rows={Math.min(24, Math.max(10, draft.split('\n').length + Math.ceil(draft.length / 38)))} value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} style={{ fontSize: 15, lineHeight: 1.45 }} />
+                <div className="mt-3 flex gap-2">
+                  <button className="btn sec" disabled={busy} onClick={() => setDraft(null)}>Скасувати</button>
+                  <button className="btn" disabled={busy || !draft.trim()} onClick={() => void saveDraft()}>{busy ? 'Зберігаю…' : 'Зберегти'}</button>
+                </div>
+              </div>
+            ) : (
             <div className="card">
               {view === 'new' && prev && (
                 <label className="mb-2.5 flex items-center gap-2 text-[13px]" style={{ color: 'var(--hint)' }}>
@@ -361,7 +385,13 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
               <div className="ptext">
                 {view === 'new' && prev && showDiff ? renderDiff(diffWords(prev.text ?? '', shown.text ?? '')) : renderPost(shown.text ?? '')}
               </div>
+              {view === 'new' && (
+                <button className="btn sec mt-3" style={{ height: 38, fontSize: 14 }} disabled={busy} onClick={() => { haptic('tap'); setDraft(cur.text ?? '') }}>
+                  ✎ Редагувати текст самій
+                </button>
+              )}
             </div>
+            )}
 
             {facts.length > 0 && (
               <details className="card facts mt-3">
@@ -428,7 +458,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
         ) : (
           <>
             <button className="btn sec" onClick={onNext}>Пізніше</button>
-            <button className="btn" disabled={busy} onClick={() => void approve()}>{busy ? '…' : 'Затвердити'}</button>
+            <button className="btn" disabled={busy || draft !== null} onClick={() => void approve()}>{busy ? '…' : 'Затвердити'}</button>
           </>
         )}
       </div>

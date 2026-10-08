@@ -7,9 +7,10 @@ import { failSchema } from '../server/schema.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_COMMENT = 2000
+const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text'
   id?: string
   expected_version_no?: number
   text?: string
@@ -65,6 +66,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Готовий пост у чат бота: текст + фото з білою рамкою файлами — звідти Іра публікує
     if (b.action === 'send_to_chat') {
       return void res.json({ ok: true, ...(await sendToChat(b.id, user.id)) })
+    }
+
+    // Іра сама виправила текст — нова версія як є, без агента (позначка ira_edit — для навчання, фаза 7)
+    if (b.action === 'edit_text') {
+      const text = (b.text ?? '').replace(/\r\n/g, '\n').trim()
+      if (!text) return void res.status(400).json({ error: 'порожній текст' })
+      if (text.length > MAX_TEXT) return void res.status(400).json({ error: 'задовгий текст' })
+      const p = await db().from('content_plan').select('review_status, version_no, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
+      const r = await db().rpc('tl_add_version', {
+        p_content_plan_id: b.id, p_text: text, p_trigger: 'manual', p_expected_version_no: expected,
+        p_prompt_version: 'ira_edit', p_review_status: p.data.review_status,
+      })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      return void res.json({ ok: true })
     }
 
     if (b.action === 'upload_url') {

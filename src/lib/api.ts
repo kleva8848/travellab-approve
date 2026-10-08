@@ -125,7 +125,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -187,6 +187,12 @@ const demo = (() => {
       const p = byId(id)
       if (action === 'approve') { p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString() }
       if (action === 'upload_url') return { ok: true as const, path: `uploads/${id}/demo.jpg`, signed_url: '' }
+      if (action === 'edit_text') {
+        const prev = p.versions.at(-1)!
+        const v = { ...prev, id: `demo-v${prev.version_no + 1}`, version_no: prev.version_no + 1, text_v: prev.text_v + 1, text: extra.text ?? prev.text, trigger: 'manual', prompt_version: 'ira_edit', created_at: new Date().toISOString() }
+        p.versions.push(v); p.plan.version_no = v.version_no; p.plan.current_version_id = v.id
+        return { ok: true as const }
+      }
       if (action === 'send_to_chat') return { ok: true as const, photos: p.versions.at(-1)?.media_ids.length ?? 0 }
       if (action === 'add_photo') {
         const prev = p.versions.at(-1)!

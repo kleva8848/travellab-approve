@@ -230,7 +230,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
+        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\n// Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати\nconst REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;\nconst editMode = !textNew.some(c => REWRITE.test(c.body));\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  _edit_mode: editMode,\n  _edit_request: textNew.map(c => c.body).join('\\n\\n'),\n  _earlier_raw: comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => c.body),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
       }
     },
     {
@@ -268,6 +268,103 @@
       }
     },
     {
+      "id": "if-edit-mode-",
+      "name": "IF - Edit Mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2090,
+        -220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "edit-mode",
+              "leftValue": "={{ $json._edit_mode }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-edit-prompt",
+      "name": "Code - Build Edit Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -220
+      ],
+      "parameters": {
+        "jsCode": "// Промпт для точкової правки\nconst ctx = $('Code - Build Generator Input').first().json;\nconst h = ctx.hotel || {};\nconst facts = [h.name, h.key_detail, h.who_for, h.caveat && ('Нюанс: ' + h.caveat)].filter(Boolean).join('\\n');\n// Її власні формулювання = довгі шматки тексту з попередніх правок, які зараз є в пості\nconst own = (ctx._earlier_raw || []).flatMap(b => String(b).split(/\\n+/)).map(x => x.trim()).filter(x => x.length >= 30 && (ctx.old_text || '').includes(x));\nconst user = 'ПОСТ ЗАРАЗ:\\n<<<\\n' + (ctx.old_text || '') + '\\n>>>\\n\\nПРАВКА ІРИНИ:\\n<<<\\n' + ctx._edit_request + '\\n>>>'\n  + '\\n\\nЇї власні формулювання (не змінювати):\\n' + (own.length ? own.map(x => '— ' + x).join('\\n') : '—')\n  + '\\n\\nФакти про готель (лише якщо правка просить додати деталі):\\n' + (facts || '—')\n  + '\\n\\nНотатки Ірини (єдине джерело особистого):\\n' + (h.ira_notes || '—');\nreturn [{ json: { systemPrompt: \"Ти — уважний редактор постів Ірини (TravelLab, luxury travel). Тобі дають ГОТОВИЙ пост і її правку.\\nГоловне правило: зміни ЛИШЕ те, про що вона просить. Усе, чого правка не стосується, лишається символ у символ: ті самі слова, порядок, абзаци, переноси рядків, емодзі, посилання, **жирний**.\\nПравила:\\n1. Не переписуй, не «покращуй», не перефразовуй і не додавай від себе нічого, про що вона не просила.\\n2. Якщо вона дає готовий текст або фразу — встав її ДОСЛІВНО (можна лише виправити очевидну одруківку). «Постав мій текст» = весь пост дорівнює її тексту.\\n3. «Прибери X» — прибери X і нічого більше. Посилання/стрілки/@ — прибирай, якщо просить; сам НЕ додавай нових посилань.\\n4. Нові факти — лише якщо вона прямо просить додати факти/деталі, і ТІЛЬКИ з блоку «Факти про готель». Не вигадуй.\\n5. Стильові правки — працюй з ІСНУЮЧИМИ реченнями, НЕ додаючи нових фактів і вражень. «Коротше» = викресли зайве (слова, підрядні, повтори), не перефразовуючи решту. «Тепліше / більше мене» = змінити тон 1–3 речень (живіші слова, звертання, «я раджу», «мені подобається») — без нових подій, людей і деталей. Щонайменше половина речень лишається без жодної зміни.\\n5а. Абзаци й переноси рядків зберігай ЗАВЖДИ (не зливай абзаци в один).\\n6. Останній рядок / фразу з датами, ціною, контактом (@…) не чіпай, якщо правка прямо не про них.\\n7. НІКОЛИ не вигадуй особистого: діти, чоловік, «ми з …», «разом з дитиною», «я відчула». «Нотатки Ірини» і «Факти» використовуй ЛИШЕ коли правка прямо просить додати деталь / враження / факт — і тоді беріть рівно те, про що просить, не більше.\\n8. Не додавай критики й мінусів («це не сюди», «не для вас», «якщо шукаєте тишу…»), рекламних штампів («рідкість», «найкращий», «розкішний», «незабутній», «ідеально»).\\n9. Фрази, які Ірина написала сама (блок «Її власні формулювання»), лишай дослівно, якщо нова правка прямо не просить їх змінити.\\n10. Якщо правка незрозуміла або суперечить сама собі — зроби найменшу безпечну зміну.\\nВідповідь — СТРОГО JSON без іншого тексту: {\\\"text\\\": \\\"повний текст поста після правки\\\", \\\"changed\\\": \\\"одне коротке речення українською: що саме змінено\\\"}\", userPrompt: user } }];"
+      }
+    },
+    {
+      "id": "openai-apply-edit",
+      "name": "OpenAI - Apply Edit",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        2310,
+        -220
+      ],
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "content": "={{ $json.userPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-parse-edit",
+      "name": "Code - Parse Edit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -220
+      ],
+      "parameters": {
+        "jsCode": "// Відповідь редактора → у форматі виходу генератора (далі — спільний Code - Parse Result)\nconst ctx = $('Code - Build Generator Input').first().json;\nconst cur = ctx._cur || {};\nlet out = null;\ntry {\n  const message = Array.isArray($json.output) ? $json.output[0] : (Array.isArray($json) ? $json[0] : $json);\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = String((block && block.text) || $json.text || '').trim().replace(/^\\`\\`\\`json\\s*|\\`\\`\\`$/g, '');\n  out = JSON.parse(raw);\n} catch (e) { out = null; }\nconst text = out && typeof out.text === 'string' ? out.text.trim() : '';\nif (!text) return [{ json: { status: 'failed', error: 'редактор не повернув текст' } }];\nreturn [{ json: { status: 'ok', _edit: true, text, changed: String(out.changed || ''), hooks: cur.hooks || null, form: cur.form || null, key_idea: cur.key_idea || null, lint_errors: [] } }];"
+      }
+    },
+    {
       "id": "execute-post-generator",
       "name": "Execute - Post Generator",
       "type": "n8n-nodes-base.executeWorkflow",
@@ -300,7 +397,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Результат генератора → рядок post_versions (або помилка)\nconst g = $json;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst cur = ctx._cur || {};\nconst ok = !!(g && g.status && g.status !== 'failed' && g.text);\nconst lintErr = (g && g.lint_errors) || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String((g && (g.error || g.status)) || 'генератор не повернув текст').slice(0, 300),\n  _plan_id: ctx._plan.id,\n  _expected_version_no: ctx._expected_version_no,\n  _text_comment_ids: ctx._text_comment_ids,\n  row: ok ? {\n    content_plan_id: ctx._plan.id,\n    version_no: ctx._plan.version_no + 1,\n    text_v: (cur.text_v || 0) + 1,\n    image_v: cur.image_v || 0,\n    text: g.text,\n    hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    form: g.form || null,\n    key_idea: g.key_idea || null,\n    media_ids: cur.media_ids || [],\n    rendered_urls: cur.rendered_urls || [],\n    render_params: cur.render_params || {},\n    trigger: 'comment',\n    comment_id: ctx._text_comment_ids[0] || null,\n    model: 'gpt-4.1',\n    prompt_version: 'PRMPT-011 v4',\n    lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []\n  } : null\n} }];"
+        "jsCode": "// Результат генератора → рядок post_versions (або помилка)\nconst g = $json;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst cur = ctx._cur || {};\nconst ok = !!(g && g.status && g.status !== 'failed' && g.text);\nconst lintErr = (g && g.lint_errors) || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String((g && (g.error || g.status)) || 'генератор не повернув текст').slice(0, 300),\n  _plan_id: ctx._plan.id,\n  _expected_version_no: ctx._expected_version_no,\n  _text_comment_ids: ctx._text_comment_ids,\n  row: ok ? {\n    content_plan_id: ctx._plan.id,\n    version_no: ctx._plan.version_no + 1,\n    text_v: (cur.text_v || 0) + 1,\n    image_v: cur.image_v || 0,\n    text: g.text,\n    hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    form: g.form || null,\n    key_idea: g.key_idea || null,\n    media_ids: cur.media_ids || [],\n    rendered_urls: cur.rendered_urls || [],\n    render_params: cur.render_params || {},\n    trigger: 'comment',\n    comment_id: ctx._text_comment_ids[0] || null,\n    model: 'gpt-4.1',\n    prompt_version: g._edit ? 'EDIT v1' : 'PRMPT-011 v4',\n    lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []\n  } : null\n} }];"
       }
     },
     {
@@ -776,7 +873,7 @@
       "main": [
         [
           {
-            "node": "Execute - Post Generator",
+            "node": "IF - Edit Mode?",
             "type": "main",
             "index": 0
           }
@@ -784,6 +881,57 @@
         [
           {
             "node": "Supabase - Back To Changes Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Edit Mode?": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Edit Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute - Post Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Edit Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Apply Edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Apply Edit": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Edit": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Result",
             "type": "main",
             "index": 0
           }
