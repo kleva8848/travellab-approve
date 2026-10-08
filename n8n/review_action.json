@@ -230,7 +230,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
+        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
       }
     },
     {
@@ -565,7 +565,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nconst ok = $('Code - Parse Result').first().json._ok;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + $('Code - Parse Result').first().json._error\n} }];"
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nconst ok = $('Code - Parse Result').first().json._ok;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + $('Code - Parse Result').first().json._error\n} }];"
       }
     },
     {
@@ -603,6 +603,12 @@
           "appendAttribution": false
         }
       },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
       "onError": "continueRegularOutput"
     },
     {
@@ -638,7 +644,7 @@
         220
       ],
       "parameters": {
-        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings (fail)').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nlet ok = false; try { ok = $('Code - Parse Result').first().json._ok; } catch (e) {}\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (() => { try { return $('Code - Parse Result').first().json._error; } catch (e) { return 'лише фото-правка'; } })()\n} }];"
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings (fail)').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nlet ok = false; try { ok = $('Code - Parse Result').first().json._ok; } catch (e) {}\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (() => { try { return $('Code - Parse Result').first().json._error; } catch (e) { return 'лише фото-правка'; } })()\n} }];"
       }
     },
     {
@@ -655,6 +661,12 @@
         "text": "={{ $json.fail_text }}",
         "additionalFields": {
           "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
         }
       },
       "onError": "continueRegularOutput"

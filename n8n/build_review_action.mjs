@@ -10,8 +10,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const CFG = {
   supabase: { id: 'oj5JHcgmtpi0FPHx', name: 'Travel Lab Test' },
   webhookAuth: { id: 'mO62EQmnKHlk93GW', name: 'TravelLab Approve Webhook' },
-  // Telegram credential бота Іри (@travellab_studio_bot) — створює Влад; поки немає, Telegram-ноди без credential
-  telegram: process.env.TL_TG_CRED_ID ? { id: process.env.TL_TG_CRED_ID, name: 'TravelLab Ira Bot' } : null,
+  // Telegram credential бота Іри (@travellab_studio_bot), створено 08.10
+  telegram: { id: process.env.TL_TG_CRED_ID || 'n0IdHhMlzZgnnc7K', name: 'TravelLab Ira Bot' },
   // Тестовий генератор з PRMPT-011 v4; після апруву Іри → WF-043 rmfe3WbNRAOGUfqS
   generatorId: process.env.TL_GENERATOR_ID || 'VZk3w2jPwXFexId2',
 }
@@ -53,6 +53,8 @@ return [{ json: {
   _cur: cur,
   _text_comment_ids: textNew.map(c => c.id),
   _photo_comment_ids: photoNew.map(c => c.id),
+  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)
+  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,
   _expected_version_no: Number(body.expected_version_no ?? plan.version_no),
   mode: 'regenerate',
   slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },
@@ -112,7 +114,7 @@ const plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' 
 const title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;
 const base = String(s.mini_app_url || '').replace(/\\/$/, '');
 return [{ json: {
-  chat_id: String(s.ira_chat_id || s.admin_chat_id || ''),
+  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),
   admin_chat_id: String(s.admin_chat_id || ''),
   text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',
   url: base ? base + '/?startapp=post_' + plan.id : '',
