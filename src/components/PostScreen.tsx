@@ -102,12 +102,14 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
 
   const plat = PLATFORM[post.plan.platform] ?? { name: post.plan.platform, cls: '' }
   const status = post.plan.review_status
-  const approved = status === 'approved'
+  // Опублікований = затверджений + викладений: так само без правок
+  const published = status === 'published'
+  const approved = status === 'approved' || published
   const shown: Version = view === 'old' && prev ? prev : cur
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -228,6 +230,14 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     setToast(r.photos ? `Надіслала в чат: текст і ${r.photos} фото` : 'Надіслала текст у чат')
   }
 
+  const markPublished = async (action: 'publish' | 'unpublish') => {
+    if (!(await act(action))) return
+    haptic('success')
+    setToast(action === 'publish' ? 'Позначила: викладено' : 'Повернула в календар')
+    await load()
+    onChanged()
+  }
+
   const unapprove = async () => {
     if (!(await act('unapprove'))) return
     setToast('Повернула на перегляд')
@@ -261,7 +271,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
         <div className="flex flex-wrap items-center gap-1.5">
           <span className={`chip ${plat.cls}`}>{plat.name}</span>
           <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
-          {approved && <span className="chip okc">затверджено</span>}
+          {approved && <span className="chip okc">{published ? 'викладено' : 'затверджено'}</span>}
           {cur.version_no > 1 && <span className="chip">версія {cur.version_no}</span>}
           {(cur.trigger === 'photo_edit' || cur.trigger === 'own_photo') && cur.version_no > 1 && <span className="chip">{cur.trigger === 'own_photo' ? 'твоє фото' : 'нове фото'}</span>}
         </div>
@@ -385,7 +395,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
               <div className="ptext">
                 {view === 'new' && prev && showDiff ? renderDiff(diffWords(prev.text ?? '', shown.text ?? '')) : renderPost(shown.text ?? '')}
               </div>
-              {view === 'new' && (
+              {view === 'new' && !published && (
                 <button className="btn sec mt-3" style={{ height: 38, fontSize: 14 }} disabled={busy} onClick={() => { haptic('tap'); setDraft(cur.text ?? '') }}>
                   ✎ Редагувати текст самій
                 </button>
@@ -404,7 +414,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
 
             {approved && view === 'new' && (
               <div className="card mt-3">
-                <b>Готово до публікації</b>
+                <b>{published ? 'Викладено' : 'Готово до публікації'}</b>
                 <div className="mt-1 mb-3 text-[13px] leading-snug" style={{ color: 'var(--hint)' }}>
                   {(cur.media_ids ?? []).length
                     ? `Надішлю в чат текст і фото файлами — з білою рамкою${post.plan.platform === 'telegram' ? '' : ', під формат 4:5'}. Звідти зберігаєш у галерею і публікуєш.`
@@ -414,6 +424,9 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <button className="btn sec" style={{ height: 42, fontSize: 14 }} onClick={() => void copyText()}>Копіювати текст</button>
                   <button className="btn" style={{ height: 42, fontSize: 14 }} disabled={busy} onClick={() => void sendToChat()}>{busy ? 'Готую…' : 'Надіслати в чат'}</button>
                 </div>
+                {!published && (
+                  <button className="btn sec mt-2" style={{ height: 40, fontSize: 14 }} disabled={busy} onClick={() => void markPublished('publish')}>Виклала — позначити опублікованим</button>
+                )}
               </div>
             )}
 
@@ -442,7 +455,9 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           <button className="btn" onClick={onNext}>{total > 1 ? 'Далі, поки чекаю' : 'На головну'}</button>
         ) : approved ? (
           <>
-            <button className="btn sec" disabled={busy} onClick={() => void unapprove()}>Повернути на перегляд</button>
+            {published
+              ? <button className="btn sec" disabled={busy} onClick={() => void markPublished('unpublish')}>Ще не викладено</button>
+              : <button className="btn sec" disabled={busy} onClick={() => void unapprove()}>Повернути на перегляд</button>}
             <button className="btn" onClick={onNext}>Далі</button>
           </>
         ) : view === 'old' && prev ? (

@@ -83,10 +83,18 @@ async function namesFor(rows: Pick<PlanRow, 'hotel_id' | 'tour_id'>[]) {
   }
 }
 
+const PUBLISHED_DAYS = 30
+
 export async function loadQueue() {
-  const r = await db().from('content_plan').select(PLAN_COLS).in('review_status', [...ACTIVE_STATUSES])
+  // + опубліковані за останні 30 днів — для календаря
+  const since = new Date(Date.now() - PUBLISHED_DAYS * 864e5).toISOString()
+  const [r, pub] = await Promise.all([
+    db().from('content_plan').select(PLAN_COLS).in('review_status', [...ACTIVE_STATUSES]),
+    db().from('content_plan').select(PLAN_COLS).eq('review_status', 'published').gte('published_at', since),
+  ])
   if (r.error) throw r.error
-  const rows = sortPlan((r.data ?? []) as PlanRow[])
+  if (pub.error) throw pub.error
+  const rows = sortPlan([...(r.data ?? []), ...(pub.data ?? [])] as PlanRow[])
   const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]
   const v = versionIds.length
     ? await db().from('post_versions').select('id, text, form, key_idea').in('id', versionIds)

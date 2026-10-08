@@ -103,7 +103,7 @@ export default function App() {
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
         {tab === 'today' && <TodayScreen me={auth.me} queue={queue} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
-        {tab === 'calendar' && <CalendarScreen />}
+        {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>
         {TABS.map((t) => (

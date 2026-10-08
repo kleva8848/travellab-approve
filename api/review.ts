@@ -10,7 +10,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish'
   id?: string
   expected_version_no?: number
   text?: string
@@ -119,6 +119,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Опис і теги — у фоні (n8n Vision), апці не чекати
       await notifyN8n({ media_id: mediaId }, 'travellab-media-describe')
       return void res.json({ ok: true, media_id: mediaId })
+    }
+
+    // Ручна публікація: Іра виклала пост сама → позначка в календарі (і навпаки, якщо помилилась)
+    if (b.action === 'publish' || b.action === 'unpublish') {
+      const toPublished = b.action === 'publish'
+      const r = await db()
+        .from('content_plan')
+        .update({ review_status: toPublished ? 'published' : 'approved', published_at: toPublished ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
+        .eq('id', b.id)
+        .eq('review_status', toPublished ? 'approved' : 'published')
+        .select('id')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true }) : void conflict()
     }
 
     if (b.action === 'unapprove') {
