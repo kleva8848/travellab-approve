@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Токени з мокапу (artifact Dyn3ygzdvin5qZvUE5AaYM). Палітру бренду ще не затверджено — ivory/espresso плейсхолдери.
+   Тема — від Telegram (data-theme на <html> ставить initTelegram), поза Telegram — від системи. */
+:root {
+  --bg: #FBF8F2; --bg2: #F1ECE3; --section: #FFFFFF; --text: #2A211B; --hint: #8B7F74;
+  --line: rgba(42,33,27,.12); --btn: #2F2722; --btn-text: #FBF8F2; --accent: #9C7B4F;
+  --ok: #4F7D57; --warn: #A8742A; --warn-bg: #F6EBD8; --bad: #A9473D;
+  --frame: #FFFFFF; --shadow: 0 1px 2px rgba(42,33,27,.08), 0 6px 20px rgba(42,33,27,.06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #191613; --bg2: #100E0C; --section: #24201C; --text: #F1EAE0; --hint: #9C9186;
+    --line: rgba(241,234,224,.12); --btn: #EADFCF; --btn-text: #1B1714; --accent: #C9A877;
+    --ok: #86B48D; --warn: #D9A65A; --warn-bg: #3A2E1E; --bad: #D98074;
+    --frame: #F6F2EC; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #191613; --bg2: #100E0C; --section: #24201C; --text: #F1EAE0; --hint: #9C9186;
+  --line: rgba(241,234,224,.12); --btn: #EADFCF; --btn-text: #1B1714; --accent: #C9A877;
+  --ok: #86B48D; --warn: #D9A65A; --warn-bg: #3A2E1E; --bad: #D98074;
+  --frame: #F6F2EC; --shadow: 0 1px 2px rgba(0,0,0,.4);
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+input, textarea, select, button { font: inherit; color: inherit; }
+
+.serif { font-family: "Cormorant Garamond", serif; font-weight: 600; letter-spacing: .2px; }
+.tn { font-family: "Tenor Sans", sans-serif; text-transform: uppercase; letter-spacing: .14em; }
+.card { background: var(--section); border-radius: 16px; padding: 14px; box-shadow: var(--shadow); }
