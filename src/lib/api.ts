@@ -79,6 +79,7 @@ export type Version = {
   key_idea: string | null
   trigger: string
   comment_id: string | null
+  media_ids: string[]
   prompt_version: string | null
   lint: { note?: string } | null
   missing_facts: { field?: string; note?: string }[] | null
@@ -87,12 +88,17 @@ export type Version = {
 
 export type Comment = { id: string; version_id: string | null; target: 'text' | 'photo'; body: string; status: string; created_at: string }
 
+export type MediaView = { media_id: string; url: string | null; description: string | null; width: number | null; height: number | null }
+
 export type PostDetail = {
   plan: Plan
   hotel: { hotel_id: string; name: string; country: string } | null
   tour: { tour_id: string; title: string; destination: string; price_range: string | null; dates_example: string | null } | null
   versions: Version[]
   comments: Comment[]
+  media: Record<string, MediaView>
+  photo_need: number
+  hotel_photos: number
 }
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
@@ -116,9 +122,9 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore',
-  extra: Partial<CommentInput> & { version_id?: string } = {},
-): Promise<{ ok: true; queued?: boolean }> {
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo',
+  extra: Partial<CommentInput> & { version_id?: string; slide_idx?: number } = {},
+): Promise<{ ok: true; queued?: boolean; swapped?: boolean }> {
   if (isDemo) {
     await wait(400)
     return demo.act(id, action, extra)
@@ -129,7 +135,10 @@ export async function reviewAction(
 // ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────
 const demo = (() => {
   const now = new Date().toISOString()
-  const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string): PostDetail => ({
+  // Демо-фото: градієнти замість справжніх (url null → плейсхолдер у каруселі)
+  const pool = ['D-1', 'D-2', 'D-3', 'D-4', 'D-5', 'D-6']
+  const media = Object.fromEntries(pool.map((m, i) => [m, { media_id: m, url: null, description: `Демо-фото ${i + 1}`, width: 1200, height: 1500 }]))
+  const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string, photos: string[] = []): PostDetail => ({
     plan: {
       id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
       review_status: status, version_no: texts.length, current_version_id: `${id}-v${texts.length}`, approved_at: null, published_at: null,
@@ -139,18 +148,22 @@ const demo = (() => {
     versions: texts.map((text, i) => ({
       id: `${id}-v${i + 1}`, version_no: i + 1, text_v: i + 1, image_v: 0, text, hooks: null, form: 'one_fact',
       key_idea: 'Демо: головна думка поста', trigger: i ? 'comment' : 'initial', comment_id: i && comment ? `${id}-c1` : null,
+      media_ids: photos,
       prompt_version: 'demo', lint: null, missing_facts: [], created_at: now,
     })),
     comments: comment ? [{ id: `${id}-c1`, version_id: `${id}-v1`, target: 'text', body: comment, status: 'applied', created_at: now }] : [],
+    media,
+    photo_need: hotel ? photos.length || 1 : 0,
+    hotel_photos: hotel && photos.length ? pool.length : 0,
   })
   const posts: PostDetail[] = [
     mk('d1', 'Пн', 'instagram', 'hotel_place', 'Демо-готель на острові', [
       'Коли родина обирає острів, я завжди питаю одне: а що робитиме дитина між сніданком і вечерею?\n\nТут відповідь проста — риф поруч з берегом. Маску можна взяти одразу після сніданку, без човна й без розкладу.\n\nДеталі на ваші дати — пишіть у приват.',
       'Коли родина обирає острів, я питаю: а що робитиме дитина між сніданком і вечерею?\n\nТут відповідь — риф поруч з берегом. Маска після сніданку, без човна й без розкладу.\n\nДеталі на ваші дати — пишіть у приват.',
-    ], 'ready_for_review', 'Коротше, без «я завжди»'),
+    ], 'ready_for_review', 'Коротше, без «я завжди»', ['D-1', 'D-2', 'D-3']),
     mk('d2', 'Ср', 'telegram', 'insider', 'Демо-курорт у Греції', [
       '**Осінь — і басейн досі чекає на плавання.**\n\nВода підігріта, тож навіть у жовтні не виникає питання, чи вдасться поплавати. Для поїздок у shoulder season це сильна перевага.\n\n→ @demo',
-    ], 'ready_for_review'),
+    ], 'ready_for_review', undefined, []),
     mk('d3', 'Пт', 'threads', 'personal_take', null, [
       'Є готель, за яким я зараз уважно спостерігаю. З висновками не поспішаю — хочу побачити, як він покаже себе в перший сезон.',
     ], 'approved'),
@@ -167,9 +180,19 @@ const demo = (() => {
         preview: (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
       })),
     post: (id: string): PostDetail => structuredClone(byId(id)),
-    act: (id: string, action: string, extra: Partial<CommentInput> & { version_id?: string }) => {
+    act: (id: string, action: string, extra: Partial<CommentInput> & { version_id?: string; slide_idx?: number }) => {
       const p = byId(id)
       if (action === 'approve') { p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString() }
+      if (action === 'swap_photo') {
+        const prev = p.versions.at(-1)!
+        const ids = [...prev.media_ids]
+        const free = pool.filter((m) => !ids.includes(m))
+        ids[extra.slide_idx ?? 0] = free[Math.floor(Math.random() * free.length)]
+        const n = p.versions.length + 1
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', comment_id: null, media_ids: ids })
+        Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
+        return { ok: true as const, swapped: true }
+      }
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
       if (action === 'restore') {
         const old = p.versions.find((v) => v.id === extra.version_id)

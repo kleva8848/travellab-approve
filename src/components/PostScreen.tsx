@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, getPost, reviewAction, type PostDetail, type Version } from '../lib/api'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { haptic, useBackButton } from '../lib/tg'
+import { Carousel } from './Carousel'
 import { Center, Label, Spinner } from './ui'
 
 export const PLATFORM: Record<string, { name: string; cls: string }> = {
@@ -19,7 +20,8 @@ export const PILLAR: Record<string, string> = {
 const FORM: Record<string, string> = { one_fact: 'один факт', list: 'перелік', story: 'історія', question: 'питання', comparison: 'порівняння' }
 
 const CHIPS_TEXT = ['Коротше', 'Тепліше, більше мене', 'Без ціни', 'Інший початок', 'Більше фактів']
-const CHIPS_PHOTO = ['Інша фотка', 'Обробка не та', 'Без напису', 'Світліше']
+// «Інша фотка» — окрема кнопка під фото (міняє одразу), тут лише те, що чекає обробки (фаза 6c)
+const CHIPS_PHOTO = ['Обробка не та', 'Без напису', 'Світліше', 'Інший ракурс']
 
 const POLL_MS = 5000
 
@@ -45,6 +47,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [chipsT, setChipsT] = useState<string[]>([])
   const [chipsP, setChipsP] = useState<string[]>([])
   const [toast, setToast] = useState('')
+  const [slide, setSlide] = useState(0)
 
   useBackButton(true, onBack)
 
@@ -60,6 +63,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   useEffect(() => {
     setPost(null)
     setView('new')
+    setSlide(0)
     setCText(''); setCPhoto(''); setChipsT([]); setChipsP([])
     void load()
   }, [load])
@@ -96,7 +100,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -142,6 +146,14 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     onChanged()
   }
 
+  const swapPhoto = async () => {
+    const r = await act('swap_photo', { slide_idx: slide })
+    if (!r) return
+    haptic('success')
+    setToast(r.swapped ? 'Поставила інше фото' : 'Інших фото цього готелю поки немає')
+    await load()
+  }
+
   const unapprove = async () => {
     if (!(await act('unapprove'))) return
     setToast('Повернула на перегляд')
@@ -177,6 +189,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
           {approved && <span className="chip okc">затверджено</span>}
           {cur.version_no > 1 && <span className="chip">версія {cur.version_no}</span>}
+          {cur.trigger === 'photo_edit' && cur.version_no > 1 && <span className="chip">нове фото</span>}
         </div>
         <div className="mt-2 text-[13px]" style={{ color: 'var(--hint)' }}>
           {post.plan.scheduled_for ? new Date(post.plan.scheduled_for).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'long' }) : `слот: ${post.plan.day}`}
@@ -222,6 +235,28 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
               </div>
             )}
 
+            {(shown.media_ids ?? []).length > 0 ? (
+              <div className="mb-3">
+                <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} />
+                {view === 'new' && !approved && (
+                  <div className="mt-2.5 flex gap-2">
+                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy} onClick={() => void swapPhoto()}>
+                      Інша фотка{shown.media_ids.length > 1 ? ` (${slide + 1})` : ''}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : post.photo_need > 0 && view === 'new' ? (
+              <div className="card mb-3 text-[14px] leading-snug" style={{ background: 'var(--bg2)', boxShadow: 'none' }}>
+                <b>{post.hotel_photos ? 'Фото ще готуються' : 'Фото цього готелю ще немає'}</b>
+                <div className="mt-1" style={{ color: 'var(--hint)' }}>
+                  {post.hotel_photos
+                    ? 'Агент підставить їх, щойно відкриєш пост наступного разу.'
+                    : 'Незабаром тут з\'явиться кнопка «+ Своє фото». Поки можна затвердити текст — фото додамо пізніше.'}
+                </div>
+              </div>
+            ) : null}
+
             {prev && (
               <div className="seg mb-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <button className={view === 'new' ? 'on' : ''} onClick={() => { haptic('select'); setView('new') }}>Нова (v{cur.version_no})</button>
@@ -259,7 +294,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                 </div>
                 <div className="card mt-3">
                   <div className="mb-2 flex items-center justify-between font-semibold">До фото <span className="text-[13px] font-normal" style={{ color: 'var(--hint)' }}>фото з'являться згодом</span></div>
-                  <textarea className="in" rows={2} value={cPhoto} placeholder="Напр.: інша фотка, без напису" onChange={(e) => setCPhoto(e.target.value)} />
+                  <textarea className="in" rows={2} value={cPhoto} placeholder="Напр.: світліше, без напису на фото" onChange={(e) => setCPhoto(e.target.value)} />
                   <div className="qchips">{CHIPS_PHOTO.map((c) => <button key={c} onClick={() => addChip('photo', c)}>{c}</button>)}</div>
                 </div>
                 <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>

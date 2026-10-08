@@ -1,4 +1,5 @@
 import { db, getSettings } from './http.js'
+import { hotelPhotoCount, mediaViews } from './media.js'
 
 // Статуси, які показуємо Ірі в черзі «на перегляд» (backlog — старі чернетки Notion-епохи, не показуємо)
 export const QUEUE_STATUSES = ['ready_for_review', 'changes_requested', 'regenerating', 'needs_data'] as const
@@ -104,11 +105,28 @@ export async function loadQueue() {
   })
 }
 
+const PHOTO_STATUSES = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
+
+// Пост без фото → один раз підставляємо фото готелю з наявних (SQL tl_attach_photos, фаза 6a).
+// До міграції 004 функції ще нема — тоді просто показуємо пост без фото.
+async function autoAttachPhotos(plan: PlanRow): Promise<boolean> {
+  if (!plan.hotel_id || !plan.current_version_id || !PHOTO_STATUSES.has(plan.review_status)) return false
+  const v = await db().from('post_versions').select('media_ids').eq('id', plan.current_version_id).maybeSingle()
+  if (v.error || (v.data?.media_ids ?? []).length) return false
+  const r = await db().rpc('tl_attach_photos', { p_plan_id: plan.id, p_expected_version_no: plan.version_no })
+  return !r.error && Boolean(r.data && (r.data as { id?: string }).id)
+}
+
 export async function loadPost(id: string) {
-  const r = await db().from('content_plan').select(PLAN_COLS).eq('id', id).maybeSingle()
-  if (r.error) throw r.error
-  if (!r.data) return null
-  const plan = r.data as PlanRow
+  const first = await db().from('content_plan').select(PLAN_COLS).eq('id', id).maybeSingle()
+  if (first.error) throw first.error
+  if (!first.data) return null
+  let plan = first.data as PlanRow
+  if (await autoAttachPhotos(plan)) {
+    const again = await db().from('content_plan').select(PLAN_COLS).eq('id', id).maybeSingle()
+    if (again.error) throw again.error
+    plan = again.data as PlanRow
+  }
   const [v, c, names] = await Promise.all([
     db().from('post_versions').select('*').eq('content_plan_id', id).order('version_no', { ascending: true }),
     db().from('review_comments').select('id, version_id, target, body, chips, source, status, created_at').eq('content_plan_id', id).order('created_at', { ascending: true }),
@@ -116,12 +134,21 @@ export async function loadPost(id: string) {
   ])
   if (v.error) throw v.error
   if (c.error) throw c.error
+  const versions = (v.data ?? []) as VersionRow[]
+  const [media, hotelPhotos, need] = await Promise.all([
+    mediaViews(versions.flatMap((x) => x.media_ids ?? [])).catch(() => ({})),
+    hotelPhotoCount(plan.hotel_id),
+    db().rpc('tl_photo_count', { p_platform: plan.platform, p_slot_type: plan.slot_type, p_pillar: plan.pillar }),
+  ])
   return {
     plan,
     hotel: plan.hotel_id ? names.hotels.get(plan.hotel_id) ?? null : null,
     tour: plan.tour_id ? names.tours.get(plan.tour_id) ?? null : null,
-    versions: (v.data ?? []) as VersionRow[],
+    versions,
     comments: (c.data ?? []) as CommentRow[],
+    media,
+    photo_need: need.error ? 0 : Number(need.data ?? 0),
+    hotel_photos: hotelPhotos,
   }
 }
 

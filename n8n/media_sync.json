@@ -1,0 +1,526 @@
+{
+  "name": "[TravelLab] Media → Storage sync",
+  "nodes": [
+    {
+      "id": "schedule-every-30-min",
+      "name": "Schedule - Every 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook-manual-sync",
+      "name": "Webhook - Manual Sync",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-media-sync",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "7d1c3a9e-2b4f-4e61-9a0c-tl-media-sync",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-unsynced-media",
+      "name": "Supabase - Get Unsynced Media",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "returnAll": false,
+        "limit": 25,
+        "filterType": "string",
+        "filterString": "storage_path=is.null&drive_file_id=not.is.null&sync_error=is.null"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-prepare",
+      "name": "Code - Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Що синхронізувати: шлях у Storage + URL Supabase з settings\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst base = String(s.supabase_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.supabase_url порожній — запусти supabase/004_post_media.sql');\nreturn $('Supabase - Get Unsynced Media').all()\n  .filter(i => i.json.media_id && i.json.drive_file_id)\n  .map(i => ({ json: {\n    media_id: i.json.media_id,\n    drive_file_id: i.json.drive_file_id,\n    storage_path: 'media/' + i.json.media_id + '.jpg',\n    upload_url: base + '/storage/v1/object/post-media/media/' + encodeURIComponent(i.json.media_id) + '.jpg'\n  } }));"
+      }
+    },
+    {
+      "id": "http-drive-file-meta",
+      "name": "HTTP - Drive File Meta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "url": "={{ 'https://www.googleapis.com/drive/v3/files/' + $json.drive_file_id + '?fields=thumbnailLink,mimeType,imageMediaMetadata(width,height)&supportsAllDrives=true' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "jl5ptJX1kMF34ZoI",
+          "name": "v.clevtsov drive"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-thumb-url",
+      "name": "Code - Thumb URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// thumbnailLink Drive → потрібний розмір (=s220 → =s1600)\nconst meta = $('Code - Prepare').item.json;\nconst link = $json.thumbnailLink || '';\nreturn { json: {\n  ...meta,\n  thumb_url: link ? link.replace(/=s\\d+(-c)?$/, '=s1600') : '',\n  width: ($json.imageMediaMetadata && $json.imageMediaMetadata.width) || null,\n  height: ($json.imageMediaMetadata && $json.imageMediaMetadata.height) || null,\n  meta_error: $json.error ? String($json.error.message || $json.error).slice(0, 200) : (link ? '' : 'немає thumbnailLink')\n} };"
+      }
+    },
+    {
+      "id": "http-download-thumb",
+      "name": "HTTP - Download Thumb",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $json.thumb_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "jl5ptJX1kMF34ZoI",
+          "name": "v.clevtsov drive"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "http-upload-to-storage",
+      "name": "HTTP - Upload To Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Thumb URL').item.json.upload_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-upsert",
+              "value": "true"
+            },
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-result",
+      "name": "Code - Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Підсумок по кожному фото: ок → storage_path, інакше sync_error\nconst m = $('Code - Thumb URL').item.json;\nconst err = m.meta_error || ($json.error ? String($json.error.message || $json.error).slice(0, 200) : '');\n// розміри мініатюри пропорційні оригіналу: довша сторона = 1600\nlet w = null, h = null;\nif (m.width && m.height) { const k = 1600 / Math.max(m.width, m.height); w = Math.round(m.width * Math.min(k, 1)); h = Math.round(m.height * Math.min(k, 1)); }\nreturn { json: { media_id: m.media_id, ok: !err, storage_path: m.storage_path, width: w, height: h, error: err } };"
+      }
+    },
+    {
+      "id": "if-synced-",
+      "name": "IF - Synced?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ok",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "supabase-mark-synced",
+      "name": "Supabase - Mark Synced",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "media",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "media_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.media_id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "storage_path",
+              "fieldValue": "={{ $json.storage_path }}"
+            },
+            {
+              "fieldId": "synced_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            },
+            {
+              "fieldId": "width",
+              "fieldValue": "={{ $json.width }}"
+            },
+            {
+              "fieldId": "height",
+              "fieldValue": "={{ $json.height }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "supabase-mark-error",
+      "name": "Supabase - Mark Error",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        200
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "media",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "media_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.media_id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "sync_error",
+              "fieldValue": "={{ $json.error }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-summary",
+      "name": "Code - Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const items = $('Code - Result').all().map(i => i.json);\nreturn [{ json: { synced: items.filter(i => i.ok).length, failed: items.filter(i => !i.ok).map(i => i.media_id + ': ' + i.error) } }];"
+      },
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Schedule - Every 30 min": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Unsynced Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Sync": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Unsynced Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Unsynced Media": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Drive File Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Drive File Meta": {
+      "main": [
+        [
+          {
+            "node": "Code - Thumb URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Thumb URL": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Download Thumb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Download Thumb": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Upload To Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Upload To Storage": {
+      "main": [
+        [
+          {
+            "node": "Code - Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Result": {
+      "main": [
+        [
+          {
+            "node": "IF - Synced?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Synced?": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Synced",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Mark Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Mark Synced": {
+      "main": [
+        [
+          {
+            "node": "Code - Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Mark Error": {
+      "main": [
+        [
+          {
+            "node": "Code - Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

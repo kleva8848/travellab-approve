@@ -7,7 +7,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_COMMENT = 2000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo'
   id?: string
   expected_version_no?: number
   text?: string
@@ -15,6 +15,7 @@ type Body = {
   chips_text?: string[]
   chips_photo?: string[]
   version_id?: string
+  slide_idx?: number
 }
 
 // Дії Іри над постом. expected_version_no — захист від подвійного тапу і застарілого екрана (409 → апка перечитує пост)
@@ -37,7 +38,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .in('review_status', ['ready_for_review', 'changes_requested', 'needs_data'])
         .select('id, review_status, version_no')
       if (r.error) throw r.error
-      return r.data?.length ? void res.json({ ok: true, plan: r.data[0] }) : void conflict()
+      if (!r.data?.length) return void conflict()
+      // Фото затвердженого поста — «використані», щоб підбір наступного разу брав інші
+      await db().rpc('tl_mark_media_used', { p_plan_id: b.id })
+      return void res.json({ ok: true, plan: r.data[0] })
+    }
+
+    if (b.action === 'swap_photo') {
+      const slide = Number(b.slide_idx)
+      if (!Number.isInteger(slide) || slide < 0 || slide > 9) return void res.status(400).json({ error: 'bad slide_idx' })
+      const r = await db().rpc('tl_attach_photos', { p_plan_id: b.id, p_expected_version_no: expected, p_slide: slide })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      const swapped = Boolean(r.data && (r.data as { id?: string }).id)
+      return void res.json({ ok: true, swapped })
     }
 
     if (b.action === 'unapprove') {
