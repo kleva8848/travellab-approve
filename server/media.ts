@@ -27,3 +27,43 @@ export async function hotelPhotoCount(hotelId: string | null): Promise<number> {
   const r = await db().from('media').select('media_id', { count: 'exact', head: true }).eq('hotel_id', hotelId).not('storage_path', 'is', null)
   return r.error ? 0 : r.count ?? 0
 }
+
+// ───────────── Своє фото (фаза 6b) ─────────────
+
+const UPLOAD_RE = (planId: string) => new RegExp(`^uploads/${planId}/[a-z0-9-]{8,40}\\.jpg$`)
+
+// Підписане посилання: апка вантажить файл прямо в Storage (повз ліміт тіла Vercel ~4.5 МБ)
+export async function uploadUrl(planId: string) {
+  const path = `uploads/${planId}/${crypto.randomUUID()}.jpg`
+  const r = await db().storage.from(BUCKET).createSignedUploadUrl(path)
+  if (r.error) throw r.error
+  return { path, signed_url: r.data.signedUrl }
+}
+
+export function isUploadPath(planId: string, path: string) {
+  return UPLOAD_RE(planId).test(path)
+}
+
+export async function uploadExists(path: string): Promise<boolean> {
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const r = await db().storage.from(BUCKET).list(dir, { search: name, limit: 1 })
+  return !r.error && (r.data ?? []).some((f) => f.name === name)
+}
+
+// Новий рядок media з номером MED-NNN — тим самим, що й бот /upload (WF-022 бере «останній» media_id за текстом)
+export async function insertOwnMedia(row: { hotel_id: string | null; storage_path: string; width: number | null; height: number | null }): Promise<string> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const last = await db().from('media').select('media_id').like('media_id', 'MED-%').order('media_id', { ascending: false }).limit(1)
+    if (last.error) throw last.error
+    const n = Number(/(\d+)$/.exec(last.data?.[0]?.media_id ?? '')?.[1] ?? 0) + 1
+    const media_id = `MED-${String(n).padStart(3, '0')}`
+    const ins = await db().from('media').insert({
+      media_id, hotel_id: row.hotel_id, type: 'photo', source: 'ira_app', quality: 'ira_personal',
+      storage_path: row.storage_path, synced_at: new Date().toISOString(), width: row.width, height: row.height, usage_count: 0,
+    })
+    if (!ins.error) return media_id
+    if (ins.error.code !== '23505') throw ins.error // інакше хтось щойно зайняв цей номер — пробуємо наступний
+  }
+  throw new Error('не вдалося видати номер фото')
+}

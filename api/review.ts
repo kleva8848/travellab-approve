@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
+import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { notifyN8n } from '../server/review.js'
 import { failSchema } from '../server/schema.js'
 
@@ -7,7 +8,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_COMMENT = 2000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo'
   id?: string
   expected_version_no?: number
   text?: string
@@ -16,6 +17,10 @@ type Body = {
   chips_photo?: string[]
   version_id?: string
   slide_idx?: number
+  path?: string
+  mode?: 'replace' | 'add'
+  width?: number
+  height?: number
 }
 
 // Дії Іри над постом. expected_version_no — захист від подвійного тапу і застарілого екрана (409 → апка перечитує пост)
@@ -54,6 +59,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const swapped = Boolean(r.data && (r.data as { id?: string }).id)
       return void res.json({ ok: true, swapped })
+    }
+
+    if (b.action === 'upload_url') {
+      return void res.json({ ok: true, ...(await uploadUrl(b.id)) })
+    }
+
+    if (b.action === 'add_photo') {
+      const path = String(b.path ?? '')
+      if (!isUploadPath(b.id, path)) return void res.status(400).json({ error: 'bad path' })
+      if (!(await uploadExists(path))) return void res.status(400).json({ error: 'файл не завантажився' })
+      const p = await db().from('content_plan').select('hotel_id, review_status, version_no, current_version_id, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
+      const v = p.data.current_version_id
+        ? await db().from('post_versions').select('media_ids').eq('id', p.data.current_version_id).maybeSingle()
+        : { data: { media_ids: [] as string[] }, error: null }
+      if (v.error) throw v.error
+      const dim = (x: unknown) => (Number.isInteger(x) && (x as number) > 0 && (x as number) < 20000 ? (x as number) : null)
+      const mediaId = await insertOwnMedia({ hotel_id: p.data.hotel_id, storage_path: path, width: dim(b.width), height: dim(b.height) })
+      const ids = [...((v.data?.media_ids as string[] | undefined) ?? [])]
+      const slide = Number(b.slide_idx)
+      if (b.mode === 'replace' && Number.isInteger(slide) && slide >= 0 && slide < ids.length) ids[slide] = mediaId
+      else ids.push(mediaId)
+      const r = await db().rpc('tl_add_version', {
+        p_content_plan_id: b.id, p_text: null, p_trigger: 'own_photo', p_expected_version_no: expected,
+        p_media_ids: ids.slice(0, 10), p_prompt_version: 'own-photo', p_review_status: p.data.review_status,
+      })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      // Опис і теги — у фоні (n8n Vision), апці не чекати
+      await notifyN8n({ media_id: mediaId }, 'travellab-media-describe')
+      return void res.json({ ok: true, media_id: mediaId })
     }
 
     if (b.action === 'unapprove') {

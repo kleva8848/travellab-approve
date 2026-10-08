@@ -1,0 +1,298 @@
+{
+  "name": "[TravelLab] Media describe (Mini App)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-media-describe",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "responseCode": 202,
+        "options": {}
+      },
+      "webhookId": "3e8b0f52-91c4-4d7a-b6e3-tl-media-describe",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-media",
+      "name": "Supabase - Get Media",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "returnAll": false,
+        "limit": 1,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "media_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.media_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-prepare",
+      "name": "Code - Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst m = $('Supabase - Get Media').first().json;\nif (!m || !m.storage_path) throw new Error('media без storage_path: ' + $('Webhook').first().json.body.media_id);\nreturn [{ json: { media_id: m.media_id, url: String(s.supabase_url || '').replace(/\\/$/, '') + '/storage/v1/object/post-media/' + m.storage_path } }];"
+      }
+    },
+    {
+      "id": "http-download-from-storage",
+      "name": "HTTP - Download From Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "openai-analyze-photo",
+      "name": "OpenAI - Analyze Photo",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "text": "Опиши це фото готелю українською мовою для медіа-бібліотеки luxury travel-агентства: 1-2 атмосферних речення (наприклад: 'захід сонця з приватного пляжу, шезлонги, тиша'). Потім додай 3-6 коротких тегів англійською мовою (наприклад: beach, sunset, private, luxury, pool, room, spa, view). Поверни СТРОГО валідний JSON без жодного додаткового тексту, у форматі: {\"description\": \"...\", \"tags\": [\"...\", \"...\"]}",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-parse-vision",
+      "name": "Code - Parse Vision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Той самий розбір, що в WF-022; теги у форматі Postgres-масиву\nconst id = $('Code - Prepare').first().json.media_id;\nlet parsed;\ntry {\n  const message = Array.isArray($json) ? $json[0] : $json;\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = ((block && block.text) || '').trim().replace(/^```json\\s*|```$/g, '');\n  parsed = JSON.parse(raw);\n} catch (e) { parsed = { description: '', tags: [] }; }\nconst tags = (Array.isArray(parsed.tags) ? parsed.tags : []).map(t => String(t).replace(/[{}\",]/g, '').trim()).filter(Boolean);\nreturn [{ json: { media_id: id, description: parsed.description || '', tags_pg: '{' + tags.join(',') + '}' } }];"
+      }
+    },
+    {
+      "id": "supabase-update-media",
+      "name": "Supabase - Update Media",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "media",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "media_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.media_id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "description",
+              "fieldValue": "={{ $json.description }}"
+            },
+            {
+              "fieldId": "tags",
+              "fieldValue": "={{ $json.tags_pg }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Media": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Download From Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Download From Storage": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Analyze Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Analyze Photo": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Vision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Vision": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Update Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

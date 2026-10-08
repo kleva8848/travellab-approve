@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, getPost, reviewAction, type PostDetail, type Version } from '../lib/api'
+import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
-import { haptic, useBackButton } from '../lib/tg'
+import { haptic, isDemo, useBackButton } from '../lib/tg'
 import { Carousel } from './Carousel'
 import { Center, Label, Spinner } from './ui'
 
@@ -48,6 +49,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [chipsP, setChipsP] = useState<string[]>([])
   const [toast, setToast] = useState('')
   const [slide, setSlide] = useState(0)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [own, setOwn] = useState<PreparedPhoto | null>(null)
+  const [ownMode, setOwnMode] = useState<'replace' | 'add'>('add')
+  const [uploading, setUploading] = useState(false)
 
   useBackButton(true, onBack)
 
@@ -100,7 +105,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -154,6 +159,43 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     await load()
   }
 
+  const pickOwn = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const prepared = await preparePhoto(file)
+      setOwn(prepared)
+      setOwnMode((shown.media_ids ?? []).length ? 'replace' : 'add')
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Не вдалося відкрити фото')
+    }
+  }
+
+  const cancelOwn = () => {
+    if (own) URL.revokeObjectURL(own.preview)
+    setOwn(null)
+  }
+
+  // Своє фото: підписане посилання → файл прямо в Storage → новий рядок media + версія поста
+  const uploadOwn = async () => {
+    if (!own) return
+    setUploading(true)
+    try {
+      const u = await reviewAction(post.plan.id, post.plan.version_no, 'upload_url')
+      if (!isDemo) await putToSignedUrl(u.signed_url ?? '', own.blob)
+      const r = await act('add_photo', { path: u.path, mode: ownMode, slide_idx: slide, width: own.width, height: own.height, preview: own.preview })
+      if (!r) return
+      haptic('success')
+      setToast('Фото додано — опис агент допише сам')
+      setOwn(null)
+      await load()
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : 'Фото не завантажилось')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const unapprove = async () => {
     if (!(await act('unapprove'))) return
     setToast('Повернула на перегляд')
@@ -189,7 +231,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
           {approved && <span className="chip okc">затверджено</span>}
           {cur.version_no > 1 && <span className="chip">версія {cur.version_no}</span>}
-          {cur.trigger === 'photo_edit' && cur.version_no > 1 && <span className="chip">нове фото</span>}
+          {(cur.trigger === 'photo_edit' || cur.trigger === 'own_photo') && cur.version_no > 1 && <span className="chip">{cur.trigger === 'own_photo' ? 'твоє фото' : 'нове фото'}</span>}
         </div>
         <div className="mt-2 text-[13px]" style={{ color: 'var(--hint)' }}>
           {post.plan.scheduled_for ? new Date(post.plan.scheduled_for).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'long' }) : `слот: ${post.plan.day}`}
@@ -240,8 +282,11 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                 <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} />
                 {view === 'new' && !approved && (
                   <div className="mt-2.5 flex gap-2">
-                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy} onClick={() => void swapPhoto()}>
+                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => void swapPhoto()}>
                       Інша фотка{shown.media_ids.length > 1 ? ` (${slide + 1})` : ''}
+                    </button>
+                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => fileRef.current?.click()}>
+                      + Своє фото
                     </button>
                   </div>
                 )}
@@ -251,11 +296,36 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                 <b>{post.hotel_photos ? 'Фото ще готуються' : 'Фото цього готелю ще немає'}</b>
                 <div className="mt-1" style={{ color: 'var(--hint)' }}>
                   {post.hotel_photos
-                    ? 'Агент підставить їх, щойно відкриєш пост наступного разу.'
-                    : 'Незабаром тут з\'явиться кнопка «+ Своє фото». Поки можна затвердити текст — фото додамо пізніше.'}
+                    ? 'Агент підставить їх, щойно відкриєш пост наступного разу. Або додай своє.'
+                    : 'Додай своє фото з телефону — агент сам допише до нього опис.'}
                 </div>
+                {!approved && (
+                  <button className="btn mt-3" style={{ height: 42, fontSize: 15 }} disabled={uploading} onClick={() => fileRef.current?.click()}>
+                    + Своє фото
+                  </button>
+                )}
               </div>
             ) : null}
+
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { void pickOwn(e.target.files?.[0]); e.target.value = '' }} />
+            {own && (
+              <div className="card mb-3">
+                <div className="mb-2 font-semibold">Твоє фото</div>
+                <img src={own.preview} alt="" className="w-full rounded" style={{ maxHeight: 320, objectFit: 'contain', background: 'var(--bg2)' }} />
+                {(shown.media_ids ?? []).length > 0 && (
+                  <div className="seg mt-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                    <button className={ownMode === 'replace' ? 'on' : ''} onClick={() => setOwnMode('replace')}>
+                      Замінити{shown.media_ids.length > 1 ? ` фото ${slide + 1}` : ''}
+                    </button>
+                    <button className={ownMode === 'add' ? 'on' : ''} onClick={() => setOwnMode('add')}>Додати ще одне</button>
+                  </div>
+                )}
+                <div className="mt-3 flex gap-2">
+                  <button className="btn sec" disabled={uploading} onClick={cancelOwn}>Скасувати</button>
+                  <button className="btn" disabled={uploading} onClick={() => void uploadOwn()}>{uploading ? 'Завантажую…' : 'Завантажити'}</button>
+                </div>
+              </div>
+            )}
 
             {prev && (
               <div className="seg mb-3" style={{ gridTemplateColumns: '1fr 1fr' }}>

@@ -153,7 +153,7 @@ export async function loadPost(id: string) {
 }
 
 // Повідомити n8n (Review Action). Без налаштованого вебхука правка лишається «changes_requested» — її підхопить Влад
-export async function notifyN8n(payload: Record<string, unknown>): Promise<boolean> {
+export async function notifyN8n(payload: Record<string, unknown>, hook = 'travellab-review-action'): Promise<boolean> {
   const secret = process.env.N8N_WEBHOOK_SECRET
   const s = await getSettings(['n8n_webhook_base'])
   const base = typeof s.n8n_webhook_base === 'string' ? s.n8n_webhook_base.replace(/\/$/, '') : ''
@@ -161,7 +161,7 @@ export async function notifyN8n(payload: Record<string, unknown>): Promise<boole
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 8000)
   try {
-    const r = await fetch(`${base}/travellab-review-action`, {
+    const r = await fetch(`${base}/${hook}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-TL-Secret': secret },
       body: JSON.stringify(payload),
