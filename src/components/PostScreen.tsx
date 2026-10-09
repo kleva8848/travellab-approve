@@ -22,9 +22,8 @@ export const PILLAR: Record<string, string> = {
 const FORM: Record<string, string> = { one_fact: 'один факт', list: 'перелік', story: 'історія', question: 'питання', comparison: 'порівняння' }
 
 const CHIPS_TEXT = ['Коротше', 'Тепліше, більше мене', 'Без ціни', 'Інший початок', 'Більше фактів']
-// «Інша фотка» — окрема кнопка під фото (міняє одразу), тут лише те, що чекає обробки (фаза 6c)
-// «Без напису», «текст вгору/вниз», «без обробки», «інший кроп» — чипи під самим фото (діють одразу, без агента)
-const CHIPS_PHOTO = ['Обробка не та', 'Світліше', 'Інший ракурс']
+// Підказки до «До фото» — лише те, що вміє парсер у WF-046 (→ photo_edits); чипи під самим фото діють одразу, без агента
+const CHIPS_PHOTO = ['Прибери текст з фото', 'Текст вниз', 'Без обробки', 'Напиши на фото: ']
 
 // «Інший кроп» по колу: як вирішив агент → центр → верх → низ → знову агент
 const CROPS: (PhotoEdit['crop'] | undefined)[] = [undefined, 'centre', 'north', 'south']
@@ -589,8 +588,8 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <div className="qchips">{CHIPS_TEXT.map((c) => <button key={c} onClick={() => addChip('text', c)}>{c}</button>)}</div>
                 </div>
                 <div className="card mt-3">
-                  <div className="mb-2 flex items-center justify-between font-semibold">До фото <span className="text-[13px] font-normal" style={{ color: 'var(--hint)' }}>фото з'являться згодом</span></div>
-                  <textarea className="in" rows={2} value={cPhoto} placeholder="Напр.: світліше, без напису на фото" onChange={(e) => setCPhoto(e.target.value)} />
+                  <div className="mb-2 flex items-center justify-between font-semibold">До фото <span className="text-[13px] font-normal" style={{ color: 'var(--hint)' }}>необов'язково</span></div>
+                  <textarea className="in" rows={2} value={cPhoto} placeholder="Напр.: прибери текст, без обробки" onChange={(e) => setCPhoto(e.target.value)} />
                   <div className="qchips">{CHIPS_PHOTO.map((c) => <button key={c} onClick={() => addChip('photo', c)}>{c}</button>)}</div>
                 </div>
                 <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>
