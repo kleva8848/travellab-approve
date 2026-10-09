@@ -14,8 +14,8 @@ const BUCKET = 'post-media'
 const FRAME = 30 / 1080
 const FEED = { w: 1080, h: 1350 }
 const TG_LONG = 1600
-// Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю) → старі готові фото не беремо з кешу
-const REV = 'r3'
+// Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю; r4 — без розриву «2–4» і висячих «у», «на») → старі готові фото не беремо з кешу
+const REV = 'r4'
 const exportPath = (planId: string, versionNo: number, i: number) => `exports/${planId}/v${versionNo}${REV}_${i + 1}.jpg`
 
 export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null): Promise<Buffer> {
