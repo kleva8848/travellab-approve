@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden'
   id?: string
   expected_version_no?: number
   text?: string
@@ -26,6 +26,7 @@ type Body = {
   height?: number
   date?: string
   time?: string
+  on?: boolean
 }
 
 // Дії Іри над постом. expected_version_no — захист від подвійного тапу і застарілого екрана (409 → апка перечитує пост)
@@ -155,6 +156,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .update({ review_status: toPublished ? 'published' : 'approved', published_at: toPublished ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
         .eq('id', b.id)
         .eq('review_status', toPublished ? 'approved' : 'published')
+        .select('id')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true }) : void conflict()
+    }
+
+    // ⭐ «найкращий»: зірка на версії, яку Іра бачить зараз (приклад для генератора). Повторний тап знімає
+    if (b.action === 'golden') {
+      const plan = await db().from('content_plan').select('current_version_id').eq('id', b.id).eq('version_no', expected).maybeSingle()
+      if (plan.error) throw plan.error
+      if (!plan.data?.current_version_id) return void conflict()
+      const on = b.on !== false
+      const r = await db()
+        .from('post_versions')
+        .update({ is_golden: on, golden_at: on ? new Date().toISOString() : null })
+        .eq('id', plan.data.current_version_id)
         .select('id')
       if (r.error) throw r.error
       return r.data?.length ? void res.json({ ok: true }) : void conflict()

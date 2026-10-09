@@ -40,6 +40,7 @@ export type VersionRow = {
   prompt_version: string | null
   lint: unknown
   missing_facts: unknown
+  is_golden?: boolean
   created_at: string
 }
 

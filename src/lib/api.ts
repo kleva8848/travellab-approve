@@ -83,6 +83,7 @@ export type Version = {
   prompt_version: string | null
   lint: { note?: string } | null
   missing_facts: { field?: string; note?: string }[] | null
+  is_golden?: boolean
   created_at: string
 }
 
@@ -103,7 +104,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string }
+type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean }
 type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 export async function getQueue(): Promise<QueueItem[]> {
@@ -125,7 +126,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -226,6 +227,7 @@ const demo = (() => {
         return { ok: true as const, swapped: true }
       }
       if (action === 'skip') p.plan.review_status = 'skipped'
+      if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
       if (action === 'restore') {
         const old = p.versions.find((v) => v.id === extra.version_id)

@@ -128,7 +128,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -268,6 +268,14 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     onNext()
   }
 
+  const toggleGolden = async () => {
+    const on = !cur.is_golden
+    if (!(await act('golden', { on }))) return
+    haptic('success')
+    setToast(on ? 'Позначила ⭐ — агент рівнятиметься на цей пост' : 'Зірку знято')
+    await load()
+  }
+
   const unapprove = async () => {
     if (!(await act('unapprove'))) return
     setToast('Повернула на перегляд')
@@ -303,6 +311,11 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
           {approved && <span className="chip okc">{published ? 'викладено' : 'затверджено'}</span>}
           {cur.version_no > 1 && <span className="chip">версія {cur.version_no}</span>}
+          {!regenerating && cur.text && (
+            <button className={`chip ${cur.is_golden ? 'okc' : ''}`} disabled={busy} onClick={() => void toggleGolden()}>
+              {cur.is_golden ? '★ найкращий' : '☆ найкращий'}
+            </button>
+          )}
           {(cur.trigger === 'photo_edit' || cur.trigger === 'own_photo') && cur.version_no > 1 && <span className="chip">{cur.trigger === 'own_photo' ? 'твоє фото' : 'нове фото'}</span>}
         </div>
         <div className="mt-2 text-[13px]" style={{ color: 'var(--hint)' }}>
