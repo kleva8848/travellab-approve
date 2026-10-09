@@ -1,0 +1,1488 @@
+{
+  "name": "[TravelLab] Voice Answers (Mini App)",
+  "nodes": [
+    {
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "webhook-test-update",
+      "name": "Webhook - Test Update",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-bot-update-test",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "6b2f0d8e-91a4-4c7b-a3e5-tl-bot-update-test",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "code-normalize",
+      "name": "Code - Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.update_id) ? $json.body : $json;\nconst m = b.message || {};\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nlet planId = null, how = 'none';\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const mm = String(e.url || '').match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (st) route = 'ask';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file } }];"
+      }
+    },
+    {
+      "id": "if-anything-",
+      "name": "IF - Anything?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-anything-",
+              "leftValue": "={{ $json.route !== 'ignore' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-plans",
+      "name": "Supabase - Get Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "={{ $('Code - Normalize').first().json.plan_id ? 'id=eq.' + $('Code - Normalize').first().json.plan_id : 'review_status=eq.needs_data' }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-open-requests",
+      "name": "Supabase - Get Open Requests",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "data_requests",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "status=eq.open"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-tours",
+      "name": "Supabase - Get Tours",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "tours",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-resolve",
+      "name": "Code - Resolve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, '') };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "switch-route",
+      "name": "Switch - Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-ask",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "ask",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "ask"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-answer",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "answer",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "answer"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-help",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-unresolved",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "unresolved",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "unresolved"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-gone",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "gone",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "gone"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-ask",
+      "name": "Code - Ask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -520
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// /start answer_<id>: бот ставить саме питання цього поста\nconst r = $json;\nif (!r.questions.length) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'По цьому посту питань уже немає 🙌', url: r.post_url, button: 'Повернутись у TravelLab' } }];\nreturn [{ json: {\n  chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.post_url) + '<b>' + esc(r.title) + '</b>\\nАгенту бракує ' + (r.questions.length === 1 ? 'одного факту' : 'кількох фактів') + ':\\n\\n' + list(r.questions)\n    + '\\n\\n🎙 Запиши одне голосове з відповідями ' + (r.questions.length > 1 ? 'на всі питання' : '') + ' — у відповідь на це повідомлення. Можна й текстом.'\n} }];"
+      }
+    },
+    {
+      "id": "code-simple-reply",
+      "name": "Code - Simple Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// help / unresolved / gone / нема питань — коротко + кнопка в апку\nconst r = $json;\nconst T = {\n  help: 'Пости на перегляд — у TravelLab (кнопка нижче). Щоб відповісти голосом на питання агента, відкрий пост і натисни «Відповісти голосом».',\n  unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.',\n  gone: 'Цього поста вже немає в роботі 🙌',\n  none: 'По цьому посту питань уже немає 🙌'\n};\nconst k = r.route === 'answer' ? 'none' : r.route;\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];"
+      }
+    },
+    {
+      "id": "if-has-questions-",
+      "name": "IF - Has Questions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-has-questions-",
+              "leftValue": "={{ $json.questions.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-voice-",
+      "name": "IF - Voice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-voice-",
+              "leftValue": "={{ !!$json.file_id }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-get-voice-file",
+      "name": "Telegram - Get Voice File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2640,
+        -130
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $json.file_id }}",
+        "download": true
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-transcribe",
+      "name": "OpenAI - Transcribe",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        2860,
+        -130
+      ],
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "data",
+        "options": {
+          "language": "uk"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-resolve-text",
+      "name": "Code - Resolve Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Текст відповіді: розшифровка голосового або текст як є\nconst r = $('Code - Resolve').first().json;\nlet text = r.text || '';\nif (r.file_id) { try { text = String($('OpenAI - Transcribe').first().json.text || '').trim(); } catch (e) { text = ''; } }\nreturn [{ json: { ...r, answer_text: text } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-got-text-",
+      "name": "IF - Got Text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-got-text-",
+              "leftValue": "={{ !!$json.answer_text }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-parse-prompt",
+      "name": "Code - Parse Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $json;\nconst user = 'ПИТАННЯ:\\n' + r.questions.map((q, i) => (i + 1) + '. [id: ' + q.id + '] ' + q.question).join('\\n') + '\\n\\nВІДПОВІДЬ ІРИНИ:\\n<<<\\n' + r.answer_text + '\\n>>>';\nreturn [{ json: { ...r, systemPrompt: \"Ти розбираєш відповідь Ірини (TravelLab, luxury travel) на питання агента для поста. Дано пронумеровані питання з id і її відповідь — часто це розшифровка голосового, можуть бути помилки розпізнавання.\\nДля кожного питання випиши, що вона відповіла: її словами, коротко (1–2 речення), без вступів. Нічого не вигадуй і не додавай від себе.\\nЦіни й дати — точно як сказала (число, валюта, місяць). Якщо на питання вона не відповіла або сказала «не знаю» — answer null.\\nОдна відповідь може стосуватись кількох питань — тоді розклади по відповідних id.\\nВідповідь — СТРОГО JSON без іншого тексту: {\\\"answers\\\": [{\\\"id\\\": \\\"<id питання>\\\", \\\"answer\\\": \\\"текст\\\" або null}]}\", userPrompt: user } }];"
+      }
+    },
+    {
+      "id": "openai-parse-answers",
+      "name": "OpenAI - Parse Answers",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        3740,
+        0
+      ],
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "content": "={{ $json.userPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-parse-answers",
+      "name": "Code - Parse Answers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Відповідь моделі → які питання закрито\nconst r = $('Code - Resolve Text').first().json;\nlet out = null;\ntry {\n  const j = $json;\n  const message = Array.isArray(j.output) ? j.output[0] : j;\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = String((block && block.text) || j.text || '').trim().replace(/^\\`\\`\\`json\\s*|\\`\\`\\`$/g, '');\n  out = JSON.parse(raw);\n} catch (e) { out = null; }\nconst ids = new Set(r.questions.map(q => q.id));\nconst got = [];\nfor (const a of (out && Array.isArray(out.answers) ? out.answers : [])) {\n  const t = a && typeof a.answer === 'string' ? a.answer.replace(/\\s+/g, ' ').trim().slice(0, 1000) : '';\n  if (a && ids.has(a.id) && t && !got.some(g => g.id === a.id)) got.push({ id: a.id, answer: t });\n}\nconst remaining = r.questions.filter(q => !got.some(g => g.id === q.id));\nreturn [{ json: { ...r, got, remaining, all_done: got.length > 0 && remaining.length === 0, heard: !!r.answer_text } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-any-answer-",
+      "name": "IF - Any Answer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4180,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-any-answer-",
+              "leftValue": "={{ $json.got.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-not-heard",
+      "name": "Code - Not Heard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        260
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.post_url) + (r.heard ? 'Не розчув відповідей на ці питання 🙈' : 'Не вдалось розібрати голосове 🙈') + '\\n\\n' + list(r.questions) + '\\n\\nЗапиши ще раз у відповідь на це повідомлення, будь ласка.'\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-answer-items",
+      "name": "Code - Answer Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Code - Parse Answers').first().json;\nreturn r.got.map(g => ({ json: { id: g.id, answer: g.answer, supabase_url: r.supabase_url } }));"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "http-save-answer",
+      "name": "HTTP - Save Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4620,
+        0
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/data_requests?id=eq.{{ $json.id }}&status=eq.open",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ answer: $json.answer, status: 'answered', answered_via: 'voice_bot', answered_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-after-save",
+      "name": "Code - After Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4840,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// Після запису: всі відповіді → забрали пост у роботу → «Дякую! Записав… Дописую пост»; частина → дописати решту\nconst r = $('Code - Parse Answers').first().json;\nconst saved = $('HTTP - Save Answer').all().map(i => i.json).filter(j => j && j.statusCode >= 200 && j.statusCode < 300).length;\nconst qa = r.got.map(g => '• ' + esc(g.answer)).join('\\n');\nif (!saved) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'Не вдалось записати відповідь 🙈 Спробуй ще раз або відповідай в апці.', url: r.post_url, button: 'Повернутись у TravelLab', claim: false } }];\nif (r.remaining.length) return [{ json: { chat_id: r.chat_id, kind: 'force', claim: false,\n  text: hidden(r.post_url) + 'Записав ✅\\n' + qa + '\\n\\nЛишилось:\\n' + list(r.remaining) + '\\n\\nДозапиши, будь ласка, у відповідь на це повідомлення.'\n} }];\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', claim: true, text: 'Дякую! Записав:\\n' + qa + '\\n\\nДописую пост ✍️', url: r.post_url, button: 'Повернутись у TravelLab' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-claim-",
+      "name": "IF - Claim?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5060,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-claim-",
+              "leftValue": "={{ $json.claim }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-claim-plan",
+      "name": "HTTP - Claim Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5280,
+        -260
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Code - Parse Answers').first().json.supabase_url }}/rest/v1/content_plan?id=eq.{{ $('Code - Parse Answers').first().json.plan.id }}&version_no=eq.{{ $('Code - Parse Answers').first().json.plan.version_no || 0 }}&review_status=in.(needs_data,ready_for_review,changes_requested)&published_at=is.null",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ review_status: 'regenerating', review_note: null, updated_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-claimed",
+      "name": "Code - Claimed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5500,
+        -260
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst ok = c.statusCode >= 200 && c.statusCode < 300 && Array.isArray(c.body) && c.body.length > 0;\nconst r = $('Code - After Save').first().json;\nreturn [{ json: { ...r, run: ok, text: ok ? r.text : r.text.replace('Дописую пост ✍️', 'Пост допишу трохи згодом.') } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-reply",
+      "name": "Code - Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { run: false, ...$input.first().json } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-force-reply-",
+      "name": "IF - Force Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5940,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-force-reply-",
+              "leftValue": "={{ $json.kind === 'force' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-ask-force-reply-",
+      "name": "Telegram - Ask (force reply)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        6160,
+        -130
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "forceReply",
+        "forceReply": {
+          "force_reply": true
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "telegram-reply-button-",
+      "name": "Telegram - Reply (button)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        6160,
+        130
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "={{ $json.button }}",
+                    "additionalFields": {
+                      "web_app": {
+                        "url": "={{ $json.url }}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-run-data-answer-",
+      "name": "IF - Run Data Answer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6380,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-run-data-answer-",
+              "leftValue": "={{ $('Code - Reply').first().json.run === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-data-answer-input",
+      "name": "Code - Data Answer Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Вхід для Data Answer (той самий, що з апки)\nconst r = $('Code - Parse Answers').first().json;\nreturn [{ json: { content_plan_id: r.plan.id, expected_version_no: Number(r.plan.version_no || 0), author_tg_id: r.from_id, via: 'voice_bot', prev_status: r.plan.review_status } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "execute-data-answer",
+      "name": "Execute - Data Answer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        6820,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "7LRWGhCgnoM8MXmW",
+          "mode": "id"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Test Update": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Normalize": {
+      "main": [
+        [
+          {
+            "node": "IF - Anything?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Anything?": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Open Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Open Requests": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Tours": {
+      "main": [
+        [
+          {
+            "node": "Code - Resolve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Resolve": {
+      "main": [
+        [
+          {
+            "node": "Switch - Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Route": {
+      "main": [
+        [
+          {
+            "node": "Code - Ask",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Has Questions?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Questions?": {
+      "main": [
+        [
+          {
+            "node": "IF - Voice?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Voice?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Get Voice File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Resolve Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Get Voice File": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Transcribe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Transcribe": {
+      "main": [
+        [
+          {
+            "node": "Code - Resolve Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Resolve Text": {
+      "main": [
+        [
+          {
+            "node": "IF - Got Text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Got Text?": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Not Heard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Parse Answers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Parse Answers": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Answers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Answers": {
+      "main": [
+        [
+          {
+            "node": "IF - Any Answer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Any Answer?": {
+      "main": [
+        [
+          {
+            "node": "Code - Answer Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Not Heard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Answer Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Save Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Save Answer": {
+      "main": [
+        [
+          {
+            "node": "Code - After Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - After Save": {
+      "main": [
+        [
+          {
+            "node": "IF - Claim?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Claim?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Claim Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Claim Plan": {
+      "main": [
+        [
+          {
+            "node": "Code - Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Claimed": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Ask": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Simple Reply": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Not Heard": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Reply": {
+      "main": [
+        [
+          {
+            "node": "IF - Force Reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Force Reply?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Ask (force reply)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Reply (button)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Reply (button)": {
+      "main": [
+        [
+          {
+            "node": "IF - Run Data Answer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Run Data Answer?": {
+      "main": [
+        [
+          {
+            "node": "Code - Data Answer Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Code - Data Answer Input": {
+      "main": [
+        [
+          {
+            "node": "Execute - Data Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}
