@@ -1,0 +1,1349 @@
+{
+  "name": "[TravelLab] Buffer Filler D+3 (Mini App)",
+  "nodes": [
+    {
+      "id": "schedule-daily-07-00",
+      "name": "Schedule - Daily 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook-manual-run",
+      "name": "Webhook - Manual Run",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-buffer-filler",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "8c1e4a52-3b9d-4f6e-a2c7-tl-buffer-filler",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-plans",
+      "name": "Supabase - Get Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "review_status=in.(planned,needs_data)&published_at=is.null"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-tours",
+      "name": "Supabase - Get Tours",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "tours",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-stories",
+      "name": "Supabase - Get Stories",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "story_queue",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-data-requests",
+      "name": "Supabase - Get Data Requests",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "data_requests",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "status=in.(open,answered)"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-approved-posts",
+      "name": "Supabase - Get Approved Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "posts",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-golden-versions",
+      "name": "Supabase - Get Golden Versions",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "post_versions",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "is_golden=eq.true"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-golden-plans",
+      "name": "Supabase - Get Golden Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-rules",
+      "name": "Supabase - Get Rules",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ira_rules",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "status=eq.active"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-pre-gate",
+      "name": "Code - Pre-Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Які слоти брати, чого бракує, вхід для генератора. Нічого не пише.\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\n\nconst hook = $('Webhook - Manual Run').isExecuted ? ($('Webhook - Manual Run').first().json.body || {}) : null;\n// з вебхука — dry_run, поки прямо не сказано false; за розкладом — справжній прогін\nconst dryRun = hook ? !(hook.dry_run === false || hook.dry_run === 'false' || hook.dry_run === 0 || hook.dry_run === '0') : false;\nconst days = Math.min(Math.max(Number(hook && hook.days) || 3, 0), 14);\n\nconst zone = 'Europe/Kyiv';\n// dry_run можна «перемотати» на інший день (перевірка логіки на минулих тижнях): {\"today\": \"2026-09-28\"}\nconst now = (dryRun && hook && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(hook.today || ''))) ? DateTime.fromISO(hook.today, { zone }) : DateTime.now().setZone(zone);\nconst today = now.toFormat('yyyy-MM-dd');\nconst horizon = now.plus({ days }).toFormat('yyyy-MM-dd');\nconst dm = d => DateTime.fromISO(d).toFormat('dd.MM');\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst stories = Object.fromEntries(all('Supabase - Get Stories').map(x => [x.id, x]));\nconst reqs = all('Supabase - Get Data Requests');\nconst rules = all('Supabase - Get Rules');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\nconst goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));\nconst goldenAll = all('Supabase - Get Golden Versions').filter(v => v.text).sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)));\n\n// Хто про що вже питав: ключ «про що + поле» (готель/тур спільні для всіх постів, тема — на пост)\nconst subj = (r) => r.hotel_id ? 'h:' + r.hotel_id : r.tour_id ? 't:' + r.tour_id : 'p:' + r.content_plan_id;\nconst openKeys = new Set(reqs.filter(r => r.status === 'open').map(r => subj(r) + ':' + r.field));\nconst answered = {};\nfor (const r of reqs.filter(r => r.status === 'answered' && r.answer).sort((a, b) => String(a.answered_at || a.created_at).localeCompare(String(b.answered_at || b.created_at)))) answered[subj(r) + ':' + r.field] = String(r.answer);\n\n// WF-018 поки не пише scheduled_for → дата = week_start (або тиждень created_at) + день тижня слоту.\n// Лише для пошуку слотів у вікні; у БД дату не пишемо (її ставить календар при затвердженні)\nconst DOW = { 'Пн': 1, 'Вт': 2, 'Ср': 3, 'Чт': 4, 'Пт': 5, 'Сб': 6, 'Нд': 7 };\nconst derive = !(hook && (hook.derive_dates === false || hook.derive_dates === 'false'));\nconst plans = all('Supabase - Get Plans').map(p => {\n  if (p.scheduled_for || !derive || !DOW[p.day] || !(p.week_start || p.created_at)) return p;\n  const wk = p.week_start ? DateTime.fromISO(String(p.week_start).slice(0, 10), { zone }) : DateTime.fromISO(p.created_at).setZone(zone);\n  const d = wk.startOf('week').plus({ days: DOW[p.day] - 1 }).toFormat('yyyy-MM-dd');\n  return { ...p, scheduled_for: d, _date_derived: true };\n});\nconst inWindow = p => p.scheduled_for && p.scheduled_for >= today && p.scheduled_for <= horizon;\nconst eligible = p => !p.published_at && (p.review_status === 'planned' || (p.review_status === 'needs_data' && !p.current_version_id));\nconst noDate = plans.filter(p => p.review_status === 'planned' && !p.scheduled_for).length;\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst photoCount = p => (['video', 'template'].includes(p.pillar) || ['reel', 'stories'].includes(p.slot_type)) ? 0 : (p.platform === 'instagram' && String(p.slot_type || '').includes('carousel')) ? 3 : 1;\n\nconst report = [], gen = [], requests = [], needIds = [];\nfor (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.scheduled_for + (a.slot_time || '')).localeCompare(b.scheduled_for + (b.slot_time || '')))) {\n  const hotel0 = p.hotel_id ? hotels[p.hotel_id] || null : null;\n  const tour0 = p.tour_id ? tours[p.tour_id] || null : null;\n  const story = p.story_id ? stories[p.story_id] || null : null;\n  const title = (hotel0 && hotel0.name) || (tour0 && tour0.title) || '';\n  const row = { id: p.id, date: p.scheduled_for, date_derived: !!p._date_derived, time: String(p.slot_time || '').slice(0, 5) || null, platform: p.platform, slot_type: p.slot_type, pillar: p.pillar, status: p.review_status, title: title || null };\n  if (p.slot_type === 'stories') { report.push({ ...row, decision: 'skip', reason: 'сторіз — Іра знімає сама / шаблон, текст не генеруємо' }); continue; }\n  if (p.slot_type === 'reel' || p.pillar === 'video') { report.push({ ...row, decision: 'skip', reason: 'рілс — спершу потрібне відео, текст не генеруємо' }); continue; }\n\n  const hotel = hotel0 ? { ...hotel0 } : null;\n  const tour = tour0 ? { ...tour0 } : null;\n  const missing = [];\n  // need(субʼєкт, поле, питання, навіщо): якщо Іра вже відповіла, але відповідь ще не перенесли в досьє — беремо її\n  const need = (o) => {\n    const key = (o.hotel_id ? 'h:' + o.hotel_id : o.tour_id ? 't:' + o.tour_id : 'p:' + p.id) + ':' + o.field;\n    if (answered[key]) return answered[key];\n    missing.push(o.field);\n    if (!openKeys.has(key)) {\n      openKeys.add(key);\n      requests.push({ content_plan_id: p.id, hotel_id: o.hotel_id || null, tour_id: o.tour_id || null, field: o.field, question: o.question, why_needed: o.why });\n    }\n    return null;\n  };\n\n  const isOffer = p.slot_type === 'offer' || String(p.pillar || '').includes('tour_offer');\n  if (isOffer) {\n    if (!tour && !hotel) {\n      need({ field: 'offer_subject', question: 'Що пропонуємо в пості ' + (PLAT[p.platform] || p.platform) + ' на ' + dm(p.scheduled_for) + '? Готель або тур', why: 'Пост-пропозиція без готелю чи туру не вийде' });\n    } else {\n      const name = title || 'цей готель';\n      const hasPrice = (tour && tour.price_range) || (hotel && (hotel.price_from_night || hotel.price_from));\n      if (!hasPrice) {\n        const a = hotel\n          ? need({ hotel_id: hotel.hotel_id, field: 'price_from_night', question: 'Від якої ціни за ніч ' + name + '? Сума і валюта', why: 'У пропозиції має бути реальна ціна' })\n          : need({ tour_id: tour.tour_id, field: 'price_range', question: 'Скільки коштує тур «' + name + '»? Від … до … і валюта', why: 'У пропозиції має бути реальна ціна' });\n        if (a) { if (tour) tour.price_range = a; else hotel.price_from_night = a; }\n      }\n      if (!(tour && tour.dates_example)) {\n        const a = tour\n          ? need({ tour_id: tour.tour_id, field: 'dates_example', question: 'На які дати пропонуємо «' + name + '»? Наприклад, 10–17 листопада', why: 'У пропозиції мають бути реальні дати' })\n          : need({ field: 'dates', question: 'На які дати пропонуємо ' + name + ' (пост ' + dm(p.scheduled_for) + ')? Наприклад, 10–17 листопада', why: 'У пропозиції мають бути реальні дати' });\n        if (a) { if (tour) tour.dates_example = a; else p._dates = a; }\n      }\n    }\n  }\n  if (p.hotel_id && !hotel) missing.push('hotel_not_found');\n  if (hotel) {\n    const name = hotel.name || 'готель';\n    if (!hotel.key_detail) { const a = need({ hotel_id: hotel.hotel_id, field: 'key_detail', question: 'Чим ' + name + ' відрізняється від схожих готелів? Одна головна деталь', why: 'Пост будується навколо однієї деталі — без неї вийдуть загальні слова' }); if (a) hotel.key_detail = a; }\n    if (!hotel.who_for) { const a = need({ hotel_id: hotel.hotel_id, field: 'who_for', question: 'Кому ' + name + ' підходить найбільше? Наприклад: сімʼї з малюками, пари', why: 'Щоб пост говорив до правильних людей' }); if (a) hotel.who_for = a; }\n  }\n  // Без готелю, туру й історії генератор пише «ні про що» → питаємо тему (особисте) або про що пост (решта)\n  let topic = null;\n  const personal = ['personal_take', 'personal'].includes(p.pillar) || p.slot_type === 'personal_thought';\n  if (!isOffer && !story && !hotel && !tour) {\n    const where = (PLAT[p.platform] || p.platform) + ' на ' + dm(p.scheduled_for);\n    topic = personal\n      ? need({ field: 'topic', question: 'Про що твоя думка в ' + where + '? Одне речення-тема', why: 'Це твої думки — тему агент сам не вигадує' })\n      : need({ field: 'topic', question: 'Про який готель чи тему пост у ' + where + '? Коротко', why: 'Без готелю чи теми вийде загальний текст ні про що' });\n  }\n\n  if (missing.length) {\n    if (p.review_status === 'planned') needIds.push(p.id);\n    report.push({ ...row, decision: 'needs_data', missing });\n    continue;\n  }\n\n  // Вхід генератора — як у WF-046 (mode initial замість regenerate)\n  if (hotel && hotel.price_from_night && tour && !tour.price_range) tour.price_range = 'від ' + hotel.price_from_night + ' ' + (hotel.price_currency || 'USD') + ' за ніч';\n  // генератор бере ціну/дати й дозволяє CTA лише з туру → офер по готелю без туру: «тур» з ціни й дат готелю\n  let genTour = tour;\n  if (isOffer && hotel && !tour) genTour = {\n    title: hotel.name, destination: [hotel.country, hotel.region].filter(Boolean).join(', '), segment: (hotel.tags || []).includes('family') ? 'family' : '',\n    dates_example: p._dates || '', price_range: hotel.price_from_night ? 'від ' + hotel.price_from_night + ' ' + (hotel.price_currency || 'USD') + ' за ніч' : String(hotel.price_from || ''), highlights: ''\n  };\n  const golden = goldenAll\n    .filter(v => v.content_plan_id !== p.id && (goldenPlans[v.content_plan_id] || {}).platform === p.platform)\n    .slice(0, 3).map(v => ({ text: v.text }));\n  const myRules = rules.filter(r => r.scope === 'global' || (r.scope === 'platform' && r.scope_value === p.platform) || (r.scope === 'pillar' && r.scope_value === p.pillar) || (r.scope === 'hotel' && r.scope_value === p.hotel_id)).map(r => r.rule_text);\n  const note = topic ? 'Тема від Іри: ' + topic : (p.note || '');\n  gen.push({\n    plan_id: p.id, orig_status: p.review_status, version_no: Number(p.version_no || 0), photo_count: p.hotel_id ? photoCount(p) : 0,\n    input: {\n      mode: 'initial',\n      slot: { day: p.day, platform: p.platform, slot_type: p.slot_type, pillar: p.pillar, note },\n      week_parity: DateTime.fromISO(p.scheduled_for).weekNumber % 2 === 0 ? 'even' : 'odd',\n      tour: genTour, hotel, story,\n      fewshot: [...golden, ...legacy],\n      rules: myRules,\n      passthrough: { content_plan_id: p.id }\n    }\n  });\n  report.push({ ...row, decision: 'generate', golden_examples: golden.length, rules: myRules.length, photos: p.hotel_id ? photoCount(p) : 0 });\n}\n\nconst supabaseUrl = String(s.supabase_url || '').replace(/\\/$/, '');\nif (!dryRun && !supabaseUrl) throw new Error('settings.supabase_url порожній (SQL 004)');\nreturn [{ json: {\n  dry_run: dryRun, today, horizon, days,\n  supabase_url: supabaseUrl,\n  admin_chat_id: String(s.admin_chat_id || ''),\n  counts: { slots: report.length, generate: gen.length, needs_data: report.filter(r => r.decision === 'needs_data').length, skip: report.filter(r => r.decision === 'skip').length, planned_without_date: noDate, new_questions: requests.length },\n  slots: report,\n  questions: requests.map(r => ({ content_plan_id: r.content_plan_id, field: r.field, question: r.question, why_needed: r.why_needed })),\n  _gen: gen, _requests: requests, _need_ids: needIds\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-dry-run-",
+      "name": "IF - Dry Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-dry-run-",
+              "leftValue": "={{ $json.dry_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-dry-run-report",
+      "name": "Code - Dry Run Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "// dry_run: лише звіт, без записів і без Telegram\nconst g = $('Code - Pre-Gate').first().json;\nreturn [{ json: { dry_run: true, today: g.today, horizon: g.horizon, counts: g.counts, slots: g.slots, questions: g.questions } }];"
+      }
+    },
+    {
+      "id": "http-insert-data-requests",
+      "name": "HTTP - Insert Data Requests",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/data_requests",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json._requests.length ? $json._requests : []) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "http-mark-needs-data",
+      "name": "HTTP - Mark Needs Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        100
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Code - Pre-Gate').first().json.supabase_url }}/rest/v1/content_plan?review_status=eq.planned&id=in.({{ $('Code - Pre-Gate').first().json._need_ids.join(',') || '00000000-0000-0000-0000-000000000000' }})",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ review_status: 'needs_data', updated_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "code-slots-to-generate",
+      "name": "Code - Slots To Generate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Слоти на генерацію → цикл по одному. Результати збираємо в static data цього прогону\nconst g = $('Code - Pre-Gate').first().json;\nconst sd = $getWorkflowStaticData('global');\nsd.bf = { exec: $execution.id, results: [] };\nconst items = g._gen.map(x => ({ json: { ...x, supabase_url: g.supabase_url } }));\nreturn items.length ? items : [{ json: { _none: true, plan_id: '00000000-0000-0000-0000-000000000000', orig_status: 'planned', supabase_url: g.supabase_url } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "loop-slots",
+      "name": "Loop - Slots",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        3520,
+        100
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-lock-slot",
+      "name": "HTTP - Lock Slot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3740,
+        300
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/content_plan?id=eq.{{ $json.plan_id }}&review_status=eq.{{ $json.orig_status }}&current_version_id=is.null",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ review_status: 'generating', updated_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-locked-",
+      "name": "IF - Locked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3960,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-locked-",
+              "leftValue": "={{ !$('Loop - Slots').first().json._none && $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) && $json.body.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-generator-input",
+      "name": "Code - Generator Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $('Loop - Slots').first().json.input }];"
+      }
+    },
+    {
+      "id": "execute-post-generator",
+      "name": "Execute - Post Generator",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4400,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "VZk3w2jPwXFexId2",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-parse-generation",
+      "name": "Code - Parse Generation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4620,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Відповідь генератора → що писати у версію\nconst g = $json || {};\nconst slot = $('Loop - Slots').first().json;\nconst ok = !!(g.status && g.status !== 'failed' && g.text);\nconst lintErr = g.lint_errors || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String(g.error || g.status || 'генератор не повернув текст').slice(0, 300),\n  plan_id: slot.plan_id,\n  photo_count: slot.photo_count,\n  rpc: ok ? {\n    p_content_plan_id: slot.plan_id,\n    p_text: g.text,\n    p_trigger: 'buffer_filler',\n    p_expected_version_no: slot.version_no,\n    p_hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    p_form: g.form || null,\n    p_key_idea: g.key_idea || null,\n    p_model: 'gpt-4.1',\n    p_prompt_version: 'PRMPT-011 v4',\n    p_lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    p_missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : [],\n    p_review_status: 'ready_for_review'\n  } : null\n} }];"
+      }
+    },
+    {
+      "id": "if-generated-",
+      "name": "IF - Generated?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4840,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-generated-",
+              "leftValue": "={{ $json._ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-pick-photos",
+      "name": "HTTP - Pick Photos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5060,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "http-add-version",
+      "name": "HTTP - Add Version",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5280,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_add_version",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'buffer_filler' };\n  const pick = $('HTTP - Pick Photos').first().json;\n  const ids = pick && pick.statusCode >= 200 && pick.statusCode < 300 && Array.isArray(pick.body) ? pick.body : [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-trigger-not-allowed-",
+      "name": "IF - Trigger Not Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5500,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-trigger-not-allowed-",
+              "leftValue": "={{ $json.statusCode >= 400 && String(($json.body || {}).code || '') === '23514' && String(($json.body || {}).message || '').includes('trigger') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-add-version-initial-",
+      "name": "HTTP - Add Version (initial)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5720,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_add_version",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'initial', p_prompt_version: 'PRMPT-011 v4 · buffer_filler' };\n  const pick = $('HTTP - Pick Photos').first().json;\n  const ids = pick && pick.statusCode >= 200 && pick.statusCode < 300 && Array.isArray(pick.body) ? pick.body : [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-record-result",
+      "name": "Code - Record Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5940,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Підсумок одного слота → static data; помилка → повернути статус\nconst slot = $('Loop - Slots').first().json;\nif (slot._none) return [{ json: { _revert: false } }];\nconst prev = $prevNode.name;\nlet status = 'failed', note = '';\nif (prev === 'IF - Locked?') { status = 'busy'; note = 'слот уже взяли / змінився статус'; }\nelse if (prev === 'IF - Generated?') { note = $json._error || 'генератор не повернув текст'; }\nelse {\n  const okHttp = $json.statusCode >= 200 && $json.statusCode < 300;\n  if (okHttp) status = 'generated';\n  else note = String(($json.body && ($json.body.message || $json.body.code)) || $json.error && $json.error.message || ('HTTP ' + $json.statusCode)).slice(0, 300);\n}\nconst sd = $getWorkflowStaticData('global');\nif (!sd.bf || sd.bf.exec !== $execution.id) sd.bf = { exec: $execution.id, results: [] };\nsd.bf.results.push({ plan_id: slot.plan_id, status, note });\nreturn [{ json: { _revert: status === 'failed', plan_id: slot.plan_id, orig_status: slot.orig_status, note, supabase_url: slot.supabase_url } }];"
+      }
+    },
+    {
+      "id": "if-revert-",
+      "name": "IF - Revert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6160,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-revert-",
+              "leftValue": "={{ $json._revert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-revert-slot",
+      "name": "HTTP - Revert Slot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6380,
+        460
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/content_plan?id=eq.{{ $json.plan_id }}&review_status=eq.generating",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ review_status: $json.orig_status, review_note: ('Buffer Filler: ' + $json.note).slice(0, 300), updated_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-summary",
+      "name": "Code - Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Коротко Владу: скільки згенеровано, скільки чекає даних\nconst g = $('Code - Pre-Gate').first().json;\nconst sd = $getWorkflowStaticData('global');\nconst res = (sd.bf && sd.bf.exec === $execution.id) ? sd.bf.results : [];\ndelete sd.bf;\nconst n = res.filter(r => r.status === 'generated').length;\nconst failed = res.filter(r => r.status === 'failed');\nconst lines = ['🗂 Буфер (' + g.today + ' … ' + g.horizon + '): згенеровано ' + n + ', бракує даних ' + g.counts.needs_data];\nif (g.counts.new_questions) lines.push('Нових питань Ірі: ' + g.counts.new_questions);\nif (failed.length) lines.push('⚠️ Не вийшло: ' + failed.length + '\\n' + failed.slice(0, 5).map(r => '• ' + r.plan_id + ': ' + r.note).join('\\n'));\nif (g.counts.planned_without_date) lines.push('Без дати (не беру): ' + g.counts.planned_without_date);\nreturn [{ json: { chat_id: g.admin_chat_id, text: lines.join('\\n'), generated: n, needs_data: g.counts.needs_data, failed: failed.length, results: res } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "telegram-summary-to-admin",
+      "name": "Telegram - Summary To Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3960,
+        -100
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule - Daily 07:00": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Run": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Tours": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Stories": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Data Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Data Requests": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Approved Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Approved Posts": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Versions": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Rules": {
+      "main": [
+        [
+          {
+            "node": "Code - Pre-Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Pre-Gate": {
+      "main": [
+        [
+          {
+            "node": "IF - Dry Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Dry Run?": {
+      "main": [
+        [
+          {
+            "node": "Code - Dry Run Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Insert Data Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Insert Data Requests": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Mark Needs Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Mark Needs Data": {
+      "main": [
+        [
+          {
+            "node": "Code - Slots To Generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Slots To Generate": {
+      "main": [
+        [
+          {
+            "node": "Loop - Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop - Slots": {
+      "main": [
+        [
+          {
+            "node": "Code - Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Lock Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Lock Slot": {
+      "main": [
+        [
+          {
+            "node": "IF - Locked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Locked?": {
+      "main": [
+        [
+          {
+            "node": "Code - Generator Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Generator Input": {
+      "main": [
+        [
+          {
+            "node": "Execute - Post Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute - Post Generator": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Generation": {
+      "main": [
+        [
+          {
+            "node": "IF - Generated?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Generated?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Pick Photos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Pick Photos": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Add Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Add Version": {
+      "main": [
+        [
+          {
+            "node": "IF - Trigger Not Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Trigger Not Allowed?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Add Version (initial)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Add Version (initial)": {
+      "main": [
+        [
+          {
+            "node": "Code - Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Record Result": {
+      "main": [
+        [
+          {
+            "node": "IF - Revert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Revert?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Revert Slot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop - Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Revert Slot": {
+      "main": [
+        [
+          {
+            "node": "Loop - Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Summary": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Summary To Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}
