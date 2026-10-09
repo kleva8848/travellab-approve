@@ -1,16 +1,20 @@
+import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { db } from './http.js'
+import { db, getSettings } from './http.js'
+import { calmZone, softVeil, type Zone } from './look.js'
+import { textLayer, type PhotoText } from './overlay.js'
 
 const BUCKET = 'post-media'
 
-// Готовий файл для публікації (фаза 6c, мінімум): фото БЕЗ обробки кольору + біла рамка (round6: ~30px на 1080).
+// Готовий файл для публікації (фаза 6c). Відповідь Іри 09.10 на п. 8–9: «з текстом, з обробкою, як у тесті; текст всюди — і IG, і TG».
+// Усі фото — м'яка обробка (look.py soft: лише яскравість, кольори як в оригіналі) + біла рамка (round6: ~30px на 1080).
+// Перше фото — вуаль від краю + текст, який придумує агент (n8n «Photo text»: заголовок + готель/місце, зона без людей).
 // Instagram / Threads — обріз 4:5 1080×1350 з розумним кадруванням; Telegram — пропорції оригіналу, довга сторона 1600.
-// Режим «м'яко» (look.py soft + вуаль під текст) додамо перемикачем, коли Іра вибере (PDF раунду 7)
 const FRAME = 30 / 1080
 const FEED = { w: 1080, h: 1350 }
 const TG_LONG = 1600
 
-async function frame(src: Buffer, platform: string): Promise<Buffer> {
+export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null): Promise<Buffer> {
   // Спершу поворот за EXIF — далі розміри вже «як бачить людина»
   const { data, info } = await sharp(src).rotate().toBuffer({ resolveWithObject: true })
   let w = FEED.w
@@ -21,21 +25,61 @@ async function frame(src: Buffer, platform: string): Promise<Buffer> {
     h = Math.round(info.height * scale)
   }
   const pad = Math.round((platform === 'telegram' ? Math.max(w, h) : w) * FRAME)
-  return sharp(data)
-    .resize(w - 2 * pad, h - 2 * pad, { fit: 'cover', position: sharp.strategy.attention })
-    .extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
-    .jpeg({ quality: 92, mozjpeg: true })
-    .toBuffer()
+  const iw = w - 2 * pad
+  const ih = h - 2 * pad
+  const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position: sharp.strategy.attention }).removeAlpha().toColourspace('srgb').raw().toBuffer()
+  const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
+  const toned = softVeil(crop, iw, ih, zone)
+  let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
+  if (zone && text) img = sharp(await img.png().toBuffer()).composite([{ input: await textLayer(w, h, text, zone, pad) }])
+  return img.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
 }
 
-type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[] }
+type Overlay = PhotoText & { zone_hint?: string | null; for_text: string; media_id: string }
+
+// Текст на фото від агента (n8n). Кеш у post_versions.render_params.photo_text — поки текст поста й перше фото ті самі
+async function photoText(versionId: string, params: Record<string, unknown>, post: { text: string; platform: string; hotel: string | null }, mediaId: string, storagePath: string): Promise<Overlay | null> {
+  const forText = createHash('sha1').update(post.text).digest('hex').slice(0, 12)
+  const cached = params.photo_text as Overlay | undefined
+  if (cached?.title && cached.for_text === forText && cached.media_id === mediaId) return cached
+
+  const secret = process.env.N8N_WEBHOOK_SECRET
+  const s = await getSettings(['n8n_webhook_base'])
+  const base = typeof s.n8n_webhook_base === 'string' ? s.n8n_webhook_base.replace(/\/$/, '') : ''
+  if (!base || !secret) return null
+  const signed = await db().storage.from(BUCKET).createSignedUrl(storagePath, 600)
+  if (signed.error) throw signed.error
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30000)
+  try {
+    const r = await fetch(`${base}/travellab-photo-text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TL-Secret': secret },
+      body: JSON.stringify({ text: post.text, platform: post.platform, hotel: post.hotel, image_url: signed.data.signedUrl }),
+      signal: ctrl.signal,
+    })
+    if (!r.ok) return null
+    const j = (await r.json()) as { title?: string; kicker?: string; zone?: string }
+    const title = String(j.title ?? '').trim()
+    if (!title) return null
+    const o: Overlay = { title, kicker: String(j.kicker ?? '').trim() || undefined, zone_hint: j.zone ?? null, for_text: forText, media_id: mediaId }
+    await db().from('post_versions').update({ render_params: { ...params, photo_text: o } }).eq('id', versionId)
+    return o
+  } catch {
+    return null // без тексту фото все одно піде (м'яко + рамка) — пост не блокуємо
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[]; photo_text: string | null }
 
 // Рендерить фото поточної версії поста; копія лягає в Storage `exports/<plan>/v<N>_<i>.jpg` (повторний виклик перезаписує) — для календаря/історії
 async function render(planId: string): Promise<Rendered> {
-  const p = await db().from('content_plan').select('platform, version_no, current_version_id').eq('id', planId).maybeSingle()
+  const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id').eq('id', planId).maybeSingle()
   if (p.error) throw p.error
   if (!p.data?.current_version_id) throw new Error('у поста немає версії')
-  const v = await db().from('post_versions').select('text, media_ids').eq('id', p.data.current_version_id).maybeSingle()
+  const v = await db().from('post_versions').select('id, text, media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle()
   if (v.error) throw v.error
   const ids = ((v.data?.media_ids as string[] | null) ?? []).slice(0, 10)
   const m = ids.length ? await db().from('media').select('media_id, storage_path').in('media_id', ids) : { data: [], error: null }
@@ -43,20 +87,31 @@ async function render(planId: string): Promise<Rendered> {
   const pathOf = new Map((m.data ?? []).map((x) => [x.media_id as string, x.storage_path as string | null]))
 
   const platform = String(p.data.platform)
+  const text = String(v.data?.text ?? '')
+  let overlay: Overlay | null = null
+  const first = ids.find((id) => pathOf.get(id))
+  if (first && text.trim()) {
+    const h = p.data.hotel_id ? await db().from('hotels').select('name, country').eq('hotel_id', p.data.hotel_id).maybeSingle() : null
+    const hotel = h?.data ? [h.data.name, h.data.country].filter(Boolean).join(', ') : null
+    overlay = await photoText(v.data!.id as string, (v.data?.render_params as Record<string, unknown>) ?? {}, { text, platform, hotel }, first, pathOf.get(first)!)
+  }
+
   const files = await Promise.all(
     ids.map(async (id, i) => {
       const src = pathOf.get(id)
       if (!src) return null
       const dl = await db().storage.from(BUCKET).download(src)
       if (dl.error) throw dl.error
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), platform)
+      const withText = id === first ? overlay : null
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), platform, withText, withText?.zone_hint)
       const path = `exports/${planId}/v${p.data!.version_no}_${i + 1}.jpg`
       const up = await db().storage.from(BUCKET).upload(path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
       return { name: `travellab_${platform}_${i + 1}.jpg`, buf: out }
     }),
   )
-  return { text: String(v.data?.text ?? ''), platform, files: files.filter((f) => f !== null) }
+  const photo_text = overlay ? [overlay.kicker, overlay.title].filter(Boolean).join(' · ') : null
+  return { text, platform, files: files.filter((f) => f !== null), photo_text }
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -92,5 +147,5 @@ export async function sendToChat(planId: string, chatId: number) {
     files.forEach((x, i) => f.append(`f${i}`, new Blob([new Uint8Array(x.buf)], { type: 'image/jpeg' }), x.name))
     await tg('sendMediaGroup', f)
   }
-  return { photos: files.length }
+  return { photos: files.length, photo_text: r.photo_text }
 }

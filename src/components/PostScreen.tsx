@@ -227,7 +227,8 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     const r = await act('send_to_chat')
     if (!r) return
     haptic('success')
-    setToast(r.photos ? `Надіслала в чат: текст і ${r.photos} фото` : 'Надіслала текст у чат')
+    const onPhoto = r.photo_text ? ` · на фото: «${r.photo_text}»` : ''
+    setToast(r.photos ? `Надіслала в чат: текст і ${r.photos} фото${onPhoto}` : 'Надіслала текст у чат')
   }
 
   const markPublished = async (action: 'publish' | 'unpublish') => {

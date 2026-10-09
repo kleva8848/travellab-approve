@@ -1,0 +1,122 @@
+{
+  "name": "[TravelLab] Photo text (Mini App)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-photo-text",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "7c41d2e9-5b8a-4f36-9e1d-tl-photo-text",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "code-build-request",
+      "name": "Code - Build Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\nif (!b.text || !b.image_url) throw new Error('потрібні text і image_url');\nconst user = 'Платформа: ' + (b.platform || '') + '\\nГотель / місце з бази: ' + (b.hotel || '—') + '\\n\\nТекст поста:\\n' + String(b.text).slice(0, 3000);\nreturn [{ json: { body: {\n  model: 'gpt-4.1',\n  temperature: 0.5,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: \"Ти пишеш короткий текст НА ФОТО для поста Іри Стойко (TravelLab — кураторка сімейного острівного відпочинку, Instagram / Telegram).\\nПоверни СТРОГО JSON: {\\\"kicker\\\": \\\"...\\\", \\\"title\\\": \\\"...\\\", \\\"zone\\\": \\\"top\\\" | \\\"bottom\\\"}.\\n\\ntitle — головний рядок на фото (шрифт Prata):\\n- українською, з великої літери, 3–8 слів, до 45 знаків, без крапки в кінці;\\n- найсильніша КОНКРЕТНА деталь з поста (що саме там є / для кого / що відчуєш), а не загальна категорія на кшталт «готелі для дорослих»; зрозуміла без підпису;\\n- тільки факти з тексту поста — нічого не вигадуй (цифри, ціни, послуги — лише якщо вони є в тексті);\\n- спокійний тон Іри, як порада подрузі: без реклами, без «найкращий / рідкісний / мало де / унікальний / неймовірний», без знаків оклику, емодзі, хештегів і лапок;\\n- не повторюй дослівно перше речення посту.\\n\\nkicker — дрібний рядок над заголовком (шрифт Tenor Sans, капсом): місце або готель, напр. «Мальдіви · Avani+ Fares», «Корфу · Ikos Odisia». До 32 знаків (якщо довше — лише назва готелю). Якщо в базі є готель — kicker обов'язковий. Якщо пост не про конкретне місце — порожній рядок.\\n\\nzone — де на фото менше деталей і НЕМАЄ людей, облич, дітей: \\\"top\\\" або \\\"bottom\\\". Текст не має лягати на людей.\" },\n    { role: 'user', content: [ { type: 'text', text: user }, { type: 'image_url', image_url: { url: b.image_url, detail: 'low' } } ] },\n  ],\n} } }];"
+      }
+    },
+    {
+      "id": "http-openai-photo-text",
+      "name": "HTTP - OpenAI Photo Text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "code-parse-text",
+      "name": "Code - Parse Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "let o = {};\ntry { o = JSON.parse($json.choices[0].message.content); } catch (e) { o = {}; }\nconst clean = (s, n) => String(s || '').replace(/[«»\"#!]/g, '').replace(/\\s+/g, ' ').replace(/[.\\s]+$/, '').trim().slice(0, n);\nlet title = clean(o.title, 70);\ntitle = title.charAt(0).toUpperCase() + title.slice(1);\nlet kicker = clean(o.kicker, 80);\nif (kicker.length > 34 && kicker.includes('·')) kicker = kicker.split('·').pop().trim(); // задовге «Країна · Готель» → лише готель\nif (kicker.length > 34) kicker = '';\nreturn [{ json: { title, kicker, zone: o.zone === 'top' || o.zone === 'bottom' ? o.zone : null } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP - OpenAI Photo Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - OpenAI Photo Text": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

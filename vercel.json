@@ -1,6 +1,19 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "regions": ["fra1"],
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+  "regions": [
+    "fra1"
+  ],
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/review.ts": {
+      "includeFiles": "server/fonts/**",
+      "maxDuration": 60
+    }
+  }
 }

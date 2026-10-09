@@ -104,7 +104,7 @@ export type PostDetail = {
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
 type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string }
-type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number }
+type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null }
 
 export async function getQueue(): Promise<QueueItem[]> {
   if (isDemo) {
