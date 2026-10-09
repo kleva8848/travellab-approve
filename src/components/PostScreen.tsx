@@ -108,6 +108,12 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   }, [post, cur])
   const askedFor = useMemo(() => post?.comments.filter((c) => cur?.comment_id && c.id === cur.comment_id) ?? [], [post, cur])
   const pending = useMemo(() => post?.comments.filter((c) => c.status === 'new' || c.status === 'processing') ?? [], [post])
+  // Правка до фото, яку автоматично не зробили (лишилась «new»): з того ж запиту, що й поточна версія, — показуємо, щоб не зникла
+  const photoLater = useMemo(() => {
+    if (!post || !cur) return []
+    const from = new Set([cur.id, ...askedFor.map((c) => c.version_id)])
+    return post.comments.filter((c) => c.target === 'photo' && c.status === 'new' && c.id !== cur.comment_id && c.version_id && from.has(c.version_id))
+  }, [post, cur, askedFor])
 
   const curId = cur?.id
   const curPhotos = (cur?.media_ids ?? []).length
@@ -395,6 +401,13 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
               <>
                 <div className="text-[13px]" style={{ color: 'var(--hint)' }}>Ти просила</div>
                 {askedFor.map((c) => <div key={c.id} className="yourc">{c.body}</div>)}
+              </>
+            )}
+
+            {photoLater.length > 0 && status !== 'changes_requested' && view === 'new' && (
+              <>
+                <div className="text-[13px]" style={{ color: 'var(--hint)' }}>Правка до фото — зроблю вручну</div>
+                {photoLater.map((c) => <div key={c.id} className="yourc">{c.body}</div>)}
               </>
             )}
 

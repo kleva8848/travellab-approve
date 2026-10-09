@@ -38,7 +38,9 @@ const cur = versions.find(v => v.id === plan.current_version_id) || versions[ver
 const comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 const fresh = comments.filter(c => c.status === 'new');
 const textNew = fresh.filter(c => c.target === 'text');
-const photoNew = fresh.filter(c => c.target === 'photo');
+// Фото-правки — лише з цього запиту (старі нерозібрані лишаються Владу, не дублюємо)
+const ids = Array.isArray(body.comment_ids) ? body.comment_ids : null;
+const photoNew = fresh.filter(c => c.target === 'photo' && (!ids || ids.includes(c.id)));
 const earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);
 
 const hotels = all('Supabase - Get Hotels');
@@ -68,6 +70,7 @@ return [{ json: {
   _cur: cur,
   _text_comment_ids: textNew.map(c => c.id),
   _photo_comment_ids: photoNew.map(c => c.id),
+  _photo_request: photoNew.map(c => c.body).join('\\n'),
   // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)
   _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,
   _expected_version_no: Number(body.expected_version_no ?? plan.version_no),
@@ -90,7 +93,9 @@ return [{ json: {
 const parseResult = `// Результат генератора → рядок post_versions (або помилка)
 const g = $json;
 const ctx = $('Code - Build Generator Input').first().json;
+const photo = $('Code - Photo Edits').first().json._photo;
 const cur = ctx._cur || {};
+const only = !!(g && g._photo_only);
 const ok = !!(g && g.status && g.status !== 'failed' && g.text);
 const lintErr = (g && g.lint_errors) || [];
 return [{ json: {
@@ -99,22 +104,24 @@ return [{ json: {
   _plan_id: ctx._plan.id,
   _expected_version_no: ctx._expected_version_no,
   _text_comment_ids: ctx._text_comment_ids,
+  // Позначити «applied»: текстові + фото-правки, якщо їх розібрано
+  _applied_ids: [...(only ? [] : ctx._text_comment_ids), ...(photo.ok ? photo.ids : [])],
   row: ok ? {
     content_plan_id: ctx._plan.id,
     version_no: ctx._plan.version_no + 1,
-    text_v: (cur.text_v || 0) + 1,
-    image_v: cur.image_v || 0,
+    text_v: (cur.text_v || 0) + (only ? 0 : 1),
+    image_v: (cur.image_v || 0) + (photo.ok ? 1 : 0),
     text: g.text,
     hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,
     form: g.form || null,
     key_idea: g.key_idea || null,
     media_ids: cur.media_ids || [],
     rendered_urls: cur.rendered_urls || [],
-    render_params: cur.render_params || {},
-    trigger: 'comment',
-    comment_id: ctx._text_comment_ids[0] || null,
+    render_params: photo.ok ? { ...(cur.render_params || {}), photo_edits: photo.edits } : (cur.render_params || {}),
+    trigger: only ? 'photo_edit' : 'comment',
+    comment_id: (only ? photo.ids[0] : ctx._text_comment_ids[0]) || null,
     model: 'gpt-4.1',
-    prompt_version: g._edit ? 'EDIT v1' : 'PRMPT-011 v4',
+    prompt_version: only ? 'photo_look' : g._edit ? 'EDIT v1' : 'PRMPT-011 v4',
     lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,
     missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []
   } : null
@@ -167,22 +174,116 @@ const text = out && typeof out.text === 'string' ? out.text.trim() : '';
 if (!text) return [{ json: { status: 'failed', error: 'редактор не повернув текст' } }];
 return [{ json: { status: 'ok', _edit: true, text, changed: String(out.changed || ''), hooks: cur.hooks || null, form: cur.form || null, key_idea: cur.key_idea || null, lint_errors: [] } }];`
 
-const message = `// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці
+const message = `// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці (і текст Владу, якщо щось не вийшло)
 const s = {};
 for (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;
 const ctx = $('Code - Build Generator Input').first().json;
 const plan = ctx._plan;
-const ok = $('Code - Parse Result').first().json._ok;
+// Parse Result не виконувався = була лише правка до фото, і її не розібрано
+let pr = null;
+try { pr = $('Code - Parse Result').first().json; } catch (e) { pr = null; }
+const ok = !!(pr && pr._ok);
+const photo = $('Code - Photo Edits').first().json._photo;
 const plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;
 const title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;
 const base = String(s.mini_app_url || '').replace(/\\/$/, '');
+const url = base ? base + '/?startapp=post_' + plan.id : '';
+const failText = ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (pr ? pr._error : 'немає нових правок');
+// Частина правки до фото, яку автоматично не зроблено → Владу зрозумілим текстом
+const photoNote = photo.ids.length && photo.note
+  ? '📷 Іра просить до фото: «' + photo.body + '»\\n' + title + ' · ' + plat + '\\n\\n'
+    + (ok && photo.ok && photo.summary ? 'Зробив: ' + photo.summary + '\\n' : '')
+    + 'Автоматично не вмію: ' + photo.note
+    + (pr ? '' : '\\nПост повернувся їй на перегляд, правка видна в апці.')
+    + (url ? '\\n' + url : '')
+  : '';
 return [{ json: {
   chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),
   admin_chat_id: String(s.admin_chat_id || ''),
   text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',
-  url: base ? base + '/?startapp=post_' + plan.id : '',
-  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + $('Code - Parse Result').first().json._error
+  url,
+  fail_text: failText,
+  photo_note: photoNote,
+  admin_text: pr ? [failText, photoNote].filter(Boolean).join('\\n\\n') : (photoNote || failText)
 } }];`
+
+// ───── «До фото» вільним текстом → ті самі правки, що й чипи під фото (render_params.photo_edits[media_id], рендер — у Vercel) ─────
+export const PHOTO_SYSTEM = [
+  'Ти розбираєш правку Ірини (TravelLab) до ФОТО поста. Фото оформлює програма, і вона вміє лише такі правки:',
+  '- text: "off" — прибрати напис з фото; "top" — напис угорі; "bottom" — напис унизу.',
+  '- look: "none" — без нашої обробки (кольори й світло як в оригіналі). Синоніми: «без фільтрів», «без обробки», «як в оригіналі», «природніше», «обробка не та».',
+  '- crop: "north" — кадр зсунути вгору (більше неба / верху), "south" — вниз (більше води, піску, низу), "centre" — по центру.',
+  '- title: свій текст напису на фото — ДОСЛІВНО те, що вона просить написати (без лапок). kicker: дрібний рядок над написом (місце / готель), якщо вона прямо його дає.',
+  'Поле, яке правка не зачіпає, не включай. null — повернути як було (наприклад «поверни напис» = text: null).',
+  'НЕ вмієш (це йде в unsupported, а не в edit): інше / нове фото, додати фото, інший шрифт / колір / палітра / лого / рамка, зовсім інший стиль, ретуш, прибрати людей чи предмети, «світліше / темніше / яскравіше / контрастніше» як окрема правка (яскравість ми не регулюємо), а також кроп «щоб було видно X», коли не сказано, вгорі X чи внизу (ти не бачиш фото).',
+  'slides — до яких фото правка: "cover" (перше / обкладинка — за замовчуванням для напису й кропу), "all" (усі фото — коли каже «всі», «скрізь», або для look без уточнення), або масив номерів [2, 3] якщо називає конкретні («на другому фото»).',
+  'confidence 0..1 — наскільки ти впевнений, що edit — саме те, чого вона хоче. Якщо правка розмита або частково незрозуміла — нижче 0.7.',
+  'Приклади: «прибери текст з фото» → {"text":"off"}, cover, 0.95. «текст вниз» → {"text":"bottom"}, cover, 0.95. «без фільтрів» → {"look":"none"}, all, 0.9. «більше неба» → {"crop":"north"}, cover, 0.85.',
+  '«обріж по-іншому, щоб було видно басейн» → edit {}, confidence 0.3, unsupported "кроп під басейн — не бачу, де він на фото" (ти НЕ знаєш, де басейн, не вгадуй напрямок). «зроби світліше» → edit {}, unsupported "яскравість не регулюю". «інше фото» → edit {}, unsupported "інше фото".',
+  'Відповідь — СТРОГО JSON без іншого тексту: {"edit": {…} або {}, "slides": "cover" | "all" | [номери], "confidence": 0.0, "unsupported": "що з правки не вмієш, коротко українською, або порожній рядок", "summary": "одне коротке речення українською: що зробиш"}'
+].join('\n')
+
+export const photoPrompt = `// Промпт парсера правки до фото
+const ctx = $json;
+const n = ((ctx._cur || {}).media_ids || []).length;
+const user = 'Фото в пості: ' + n + '\\n\\nПРАВКА ІРИНИ ДО ФОТО:\\n<<<\\n' + ctx._photo_request + '\\n>>>';
+return [{ json: { systemPrompt: ${JSON.stringify(PHOTO_SYSTEM)}, userPrompt: user } }];`
+
+// Відповідь парсера → patch photo_edits (та сама перевірка значень, що й parseEdit в api/review.ts)
+export const photoEdits = `const ctx = $('Code - Build Generator Input').first().json;
+const out = { ok: false, ids: [], body: '', edits: null, note: '', summary: '' };
+if ((ctx._photo_comment_ids || []).length) {
+  out.ids = ctx._photo_comment_ids; out.body = ctx._photo_request;
+  let r = null;
+  try {
+    const j = $('OpenAI - Parse Photo').first().json;
+    const message = Array.isArray(j.output) ? j.output[0] : j;
+    const block = message && Array.isArray(message.content) ? message.content[0] : null;
+    const raw = String((block && block.text) || j.text || '').trim().replace(/^\\\`\\\`\\\`json\\s*|\\\`\\\`\\\`$/g, '');
+    r = JSON.parse(raw);
+  } catch (e) { r = null; }
+  const allowed = { text: ['off', 'top', 'bottom'], look: ['none'], crop: ['centre', 'north', 'south'], title: 'text', kicker: 'text' };
+  const patch = {};
+  let bad = !r;
+  for (const [k, v] of Object.entries((r && r.edit) || {})) {
+    const rule = allowed[k];
+    if (!rule) { bad = true; continue; }
+    if (v === null) patch[k] = null;
+    else if (rule === 'text' && typeof v === 'string' && v.trim()) patch[k] = v.replace(/\\s+/g, ' ').trim().slice(0, 140);
+    else if (Array.isArray(rule) && rule.includes(v)) patch[k] = v;
+    else bad = true;
+  }
+  const cur = ctx._cur || {};
+  const media = (cur.media_ids || []).slice(0, 10);
+  const s = r && r.slides;
+  const targets = s === 'all' ? media : Array.isArray(s) ? s.map(x => media[Number(x) - 1]).filter(Boolean) : media.slice(0, 1);
+  const conf = Number((r && r.confidence) || 0);
+  out.summary = String((r && r.summary) || '');
+  const unsupported = String((r && r.unsupported) || '').trim();
+  if (!media.length) out.note = 'у поста ще немає фото';
+  else if (!r) out.note = 'не вдалось розібрати правку';
+  else if (Object.keys(patch).length && targets.length && conf >= 0.7 && !bad) {
+    const edits = { ...(((cur.render_params || {}).photo_edits) || {}) };
+    for (const mid of targets) {
+      const next = { ...(edits[mid] || {}) };
+      for (const [k, v] of Object.entries(patch)) { if (v === null) delete next[k]; else next[k] = v; }
+      if (Object.keys(next).length) edits[mid] = next; else delete edits[mid];
+    }
+    out.ok = true; out.edits = edits;
+    out.note = unsupported;
+  } else out.note = unsupported || (conf < 0.7 ? 'не впевнений, що правильно зрозумів' : 'такої правки фото не вмію');
+}
+return [{ json: { ...ctx, _photo: out } }];`
+
+const photoOnly = `// Лише правка до фото → «вихід генератора» з тим самим текстом; далі спільний Code - Parse Result
+const cur = $json._cur || {};
+return [{ json: { status: 'ok', _photo_only: true, text: cur.text || '', hooks: cur.hooks || null, form: cur.form || null, key_idea: cur.key_idea || null, lint_errors: [] } }];`
+
+const ifTrue = (name, x, expr, y = 0) => node(name, 'n8n-nodes-base.if', 2.2, x, {
+  conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
+    conditions: [{ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), leftValue: expr, rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }] },
+  options: {},
+}, { y })
 
 const tgCreds = CFG.telegram ? { credentials: { telegramApi: CFG.telegram } } : {}
 
@@ -206,6 +307,22 @@ const nodes = [
     filterString: "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})",
   }, { credentials: sb, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput' }),
   node('Code - Build Generator Input', 'n8n-nodes-base.code', 2, 1760, { jsCode: buildInput }),
+  ifTrue('IF - Photo Comments?', 1800, '={{ ($json._photo_comment_ids || []).length > 0 }}', -440),
+  node('Code - Build Photo Prompt', 'n8n-nodes-base.code', 2, 1840, { jsCode: photoPrompt }, { y: -440 }),
+  node('OpenAI - Parse Photo', '@n8n/n8n-nodes-langchain.openAi', 2.3, 1880, {
+    modelId: { __rl: true, value: 'gpt-4.1', mode: 'id' },
+    responses: { values: [{ role: 'system', content: '={{ $json.systemPrompt }}' }, { content: '={{ $json.userPrompt }}' }] },
+    builtInTools: {}, options: {},
+  }, { credentials: { openAiApi: CFG.openai }, onError: 'continueRegularOutput', y: -440 }),
+  node('Code - Photo Edits', 'n8n-nodes-base.code', 2, 1920, { jsCode: photoEdits }),
+  ifTrue('IF - Photo Parsed?', 2090, '={{ $json._photo.ok }}', 440),
+  node('Code - Photo Only', 'n8n-nodes-base.code', 2, 2200, { jsCode: photoOnly }, { y: 440 }),
+  node('Supabase - Back To Review (photo)', 'n8n-nodes-base.supabase', 1, 2420, {
+    operation: 'update', tableId: 'content_plan', filterType: 'manual', matchType: 'allFilters',
+    filters: { conditions: [eq('id', "={{ $('Code - Build Generator Input').first().json._plan.id }}"), eq('review_status', 'regenerating')] },
+    dataToSend: 'defineBelow',
+    fieldsUi: { fieldValues: [{ fieldId: 'review_status', fieldValue: 'ready_for_review' }, { fieldId: 'review_note', fieldValue: "={{ 'до фото вручну: ' + ($json._photo.note || 'немає нових правок') }}" }, { fieldId: 'updated_at', fieldValue: '={{ $now.toISO() }}' }] },
+  }, { credentials: sb, alwaysOutputData: true, executeOnce: true, y: 660 }),
   node('IF - Text Comments?', 'n8n-nodes-base.if', 2.2, 1980, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
       conditions: [{ id: 'has-text', leftValue: '={{ $json._skip_text }}', rightValue: false, operator: { type: 'boolean', operation: 'false', singleValue: true } }] },
@@ -246,15 +363,16 @@ const nodes = [
     ] },
   }, { credentials: sb, alwaysOutputData: true }),
   node('Supabase - Mark Comments Applied', 'n8n-nodes-base.supabase', 1, 3520, {
-    operation: 'update', tableId: 'review_comments', filterType: 'manual', matchType: 'allFilters',
-    filters: { conditions: [eq('content_plan_id', "={{ $('Code - Parse Result').first().json._plan_id }}"), eq('status', 'new'), eq('target', 'text')] },
+    operation: 'update', tableId: 'review_comments',
+    filterType: 'string',
+    filterString: "=id=in.({{ $('Code - Parse Result').first().json._applied_ids.join(',') || '00000000-0000-0000-0000-000000000000' }})",
     dataToSend: 'defineBelow', fieldsUi: { fieldValues: [{ fieldId: 'status', fieldValue: 'applied' }] },
   }, { credentials: sb, alwaysOutputData: true, executeOnce: true }),
   node('Supabase - Back To Changes Requested', 'n8n-nodes-base.supabase', 1, 2860, {
     operation: 'update', tableId: 'content_plan', filterType: 'manual', matchType: 'allFilters',
     filters: { conditions: [eq('id', "={{ $('Code - Build Generator Input').first().json._plan.id }}"), eq('review_status', 'regenerating')] },
     dataToSend: 'defineBelow',
-    fieldsUi: { fieldValues: [{ fieldId: 'review_status', fieldValue: 'changes_requested' }, { fieldId: 'review_note', fieldValue: "={{ $json._error || 'правка лише до фото — чекає фото-треку (фаза 6)' }}" }] },
+    fieldsUi: { fieldValues: [{ fieldId: 'review_status', fieldValue: 'changes_requested' }, { fieldId: 'review_note', fieldValue: "={{ $json._error || 'не вдалось переробити' }}" }] },
   }, { credentials: sb, alwaysOutputData: true, executeOnce: true, y: 220 }),
   getAll('Supabase - Get Settings', 3740, 'settings'),
   node('Code - Message', 'n8n-nodes-base.code', 2, 3960, { jsCode: message }),
@@ -263,26 +381,38 @@ const nodes = [
     inlineKeyboard: { rows: [{ row: { buttons: [{ text: 'Подивитись', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } }] },
     additionalFields: { appendAttribution: false },
   }, { ...tgCreds, onError: 'continueRegularOutput' }),
+  // Змішана правка: текст зроблено, а частину до фото — ні → Владу
+  ifTrue('IF - Photo Note?', 4180, "={{ !!$json.photo_note }}", 220),
+  node('Telegram - Photo Note To Admin', 'n8n-nodes-base.telegram', 1.2, 4400, {
+    chatId: '={{ $json.admin_chat_id }}', text: '={{ $json.photo_note }}', additionalFields: { appendAttribution: false },
+  }, { ...tgCreds, onError: 'continueRegularOutput', y: 220 }),
 ]
 
 // Гілка помилки / лише фото-правки: статус назад + Владу в бот (якщо є Telegram credential)
 nodes.push(
   getAll('Supabase - Get Settings (fail)', 3080, 'settings', null, { y: 220 }),
-  node('Code - Fail Message', 'n8n-nodes-base.code', 2, 3300, { jsCode: message.replace(/Supabase - Get Settings'/, "Supabase - Get Settings (fail)'").replace("const ok = $('Code - Parse Result').first().json._ok;", "let ok = false; try { ok = $('Code - Parse Result').first().json._ok; } catch (e) {}").replace("$('Code - Parse Result').first().json._error", "(() => { try { return $('Code - Parse Result').first().json._error; } catch (e) { return 'лише фото-правка'; } })()") }, { y: 220 }),
+  node('Code - Fail Message', 'n8n-nodes-base.code', 2, 3300, { jsCode: message.replace(/Supabase - Get Settings'/, "Supabase - Get Settings (fail)'") }, { y: 220 }),
   node('Telegram - Fail To Admin', 'n8n-nodes-base.telegram', 1.2, 3520, {
-    chatId: '={{ $json.admin_chat_id }}', text: '={{ $json.fail_text }}', additionalFields: { appendAttribution: false },
+    chatId: '={{ $json.admin_chat_id }}', text: '={{ $json.admin_text }}', additionalFields: { appendAttribution: false },
   }, { ...tgCreds, onError: 'continueRegularOutput', y: 220 }),
 )
 
 const chain = (...names) => Object.fromEntries(names.slice(0, -1).map((n, i) => [n, { main: [[{ node: names[i + 1], type: 'main', index: 0 }]] }]))
 const connections = {
-  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans', 'Code - Build Generator Input', 'IF - Text Comments?'),
-  'IF - Text Comments?': { main: [[{ node: 'IF - Edit Mode?', type: 'main', index: 0 }], [{ node: 'Supabase - Back To Changes Requested', type: 'main', index: 0 }]] },
+  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans', 'Code - Build Generator Input', 'IF - Photo Comments?'),
+  'IF - Photo Comments?': { main: [[{ node: 'Code - Build Photo Prompt', type: 'main', index: 0 }], [{ node: 'Code - Photo Edits', type: 'main', index: 0 }]] },
+  ...chain('Code - Build Photo Prompt', 'OpenAI - Parse Photo', 'Code - Photo Edits', 'IF - Text Comments?'),
+  'IF - Text Comments?': { main: [[{ node: 'IF - Edit Mode?', type: 'main', index: 0 }], [{ node: 'IF - Photo Parsed?', type: 'main', index: 0 }]] },
+  'IF - Photo Parsed?': { main: [[{ node: 'Code - Photo Only', type: 'main', index: 0 }], [{ node: 'Supabase - Back To Review (photo)', type: 'main', index: 0 }]] },
+  'Code - Photo Only': { main: [[{ node: 'Code - Parse Result', type: 'main', index: 0 }]] },
+  'Supabase - Back To Review (photo)': { main: [[{ node: 'Supabase - Get Settings (fail)', type: 'main', index: 0 }]] },
   'IF - Edit Mode?': { main: [[{ node: 'Code - Build Edit Prompt', type: 'main', index: 0 }], [{ node: 'Execute - Post Generator', type: 'main', index: 0 }]] },
   ...chain('Code - Build Edit Prompt', 'OpenAI - Apply Edit', 'Code - Parse Edit', 'Code - Parse Result'),
   ...chain('Execute - Post Generator', 'Code - Parse Result', 'IF - Generated?'),
   'IF - Generated?': { main: [[{ node: 'Code - Version Row', type: 'main', index: 0 }], [{ node: 'Supabase - Back To Changes Requested', type: 'main', index: 0 }]] },
-  ...chain('Code - Version Row', 'Supabase - Insert Version', 'Supabase - Point Plan To Version', 'Supabase - Mark Comments Applied', 'Supabase - Get Settings', 'Code - Message', 'Telegram - New Version To Ira'),
+  ...chain('Code - Version Row', 'Supabase - Insert Version', 'Supabase - Point Plan To Version', 'Supabase - Mark Comments Applied', 'Supabase - Get Settings', 'Code - Message'),
+  'Code - Message': { main: [[{ node: 'Telegram - New Version To Ira', type: 'main', index: 0 }, { node: 'IF - Photo Note?', type: 'main', index: 0 }]] },
+  'IF - Photo Note?': { main: [[{ node: 'Telegram - Photo Note To Admin', type: 'main', index: 0 }]] },
   ...chain('Supabase - Back To Changes Requested', 'Supabase - Get Settings (fail)', 'Code - Fail Message', 'Telegram - Fail To Admin'),
 }
 

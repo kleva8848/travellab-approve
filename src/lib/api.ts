@@ -262,6 +262,12 @@ const demo = (() => {
         p.plan.review_status = 'regenerating'
         // Демо: «агент» відповідає за 4 с
         setTimeout(() => {
+          // Демо: правка лише до фото, якої агент не вміє («інше фото», шрифт…) — лишається видимою, пост повертається на перегляд
+          if (!extra.text && /інше фото|шрифт|лого|стиль/i.test(String(extra.photo ?? ''))) {
+            p.plan.review_status = 'ready_for_review'
+            p.comments.at(-1)!.status = 'new'
+            return
+          }
           const prev = p.versions.at(-1)!
           const n = p.versions.length + 1
           p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, text_v: prev.text_v + 1, trigger: 'comment', comment_id: cid, text: (prev.text ?? '').split('\n\n').slice(0, 2).join('\n\n') })

@@ -282,8 +282,207 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n// ⭐ Іри (post_versions.is_golden): спершу 3 найсвіжіші тієї ж платформи (крім самого цього поста), далі — старі схвалені\nconst goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));\nconst golden = all('Supabase - Get Golden Versions')\n  .filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform)\n  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))\n  .slice(0, 3)\n  .map(v => ({ text: v.text }));\nconst fewshot = [...golden, ...legacy];\n\n// Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати\nconst REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;\nconst editMode = !textNew.some(c => REWRITE.test(c.body));\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  _edit_mode: editMode,\n  _edit_request: textNew.map(c => c.body).join('\\n\\n'),\n  _earlier_raw: comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => c.body),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
+        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\n// Фото-правки — лише з цього запиту (старі нерозібрані лишаються Владу, не дублюємо)\nconst ids = Array.isArray(body.comment_ids) ? body.comment_ids : null;\nconst photoNew = fresh.filter(c => c.target === 'photo' && (!ids || ids.includes(c.id)));\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n// ⭐ Іри (post_versions.is_golden): спершу 3 найсвіжіші тієї ж платформи (крім самого цього поста), далі — старі схвалені\nconst goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));\nconst golden = all('Supabase - Get Golden Versions')\n  .filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform)\n  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))\n  .slice(0, 3)\n  .map(v => ({ text: v.text }));\nconst fewshot = [...golden, ...legacy];\n\n// Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати\nconst REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;\nconst editMode = !textNew.some(c => REWRITE.test(c.body));\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  _photo_request: photoNew.map(c => c.body).join('\\n'),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  _edit_mode: editMode,\n  _edit_request: textNew.map(c => c.body).join('\\n\\n'),\n  _earlier_raw: comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => c.body),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
       }
+    },
+    {
+      "id": "if-photo-comments-",
+      "name": "IF - Photo Comments?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        -440
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-photo-comments-",
+              "leftValue": "={{ ($json._photo_comment_ids || []).length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-photo-prompt",
+      "name": "Code - Build Photo Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        -440
+      ],
+      "parameters": {
+        "jsCode": "// Промпт парсера правки до фото\nconst ctx = $json;\nconst n = ((ctx._cur || {}).media_ids || []).length;\nconst user = 'Фото в пості: ' + n + '\\n\\nПРАВКА ІРИНИ ДО ФОТО:\\n<<<\\n' + ctx._photo_request + '\\n>>>';\nreturn [{ json: { systemPrompt: \"Ти розбираєш правку Ірини (TravelLab) до ФОТО поста. Фото оформлює програма, і вона вміє лише такі правки:\\n- text: \\\"off\\\" — прибрати напис з фото; \\\"top\\\" — напис угорі; \\\"bottom\\\" — напис унизу.\\n- look: \\\"none\\\" — без нашої обробки (кольори й світло як в оригіналі). Синоніми: «без фільтрів», «без обробки», «як в оригіналі», «природніше», «обробка не та».\\n- crop: \\\"north\\\" — кадр зсунути вгору (більше неба / верху), \\\"south\\\" — вниз (більше води, піску, низу), \\\"centre\\\" — по центру.\\n- title: свій текст напису на фото — ДОСЛІВНО те, що вона просить написати (без лапок). kicker: дрібний рядок над написом (місце / готель), якщо вона прямо його дає.\\nПоле, яке правка не зачіпає, не включай. null — повернути як було (наприклад «поверни напис» = text: null).\\nНЕ вмієш (це йде в unsupported, а не в edit): інше / нове фото, додати фото, інший шрифт / колір / палітра / лого / рамка, зовсім інший стиль, ретуш, прибрати людей чи предмети, «світліше / темніше / яскравіше / контрастніше» як окрема правка (яскравість ми не регулюємо), а також кроп «щоб було видно X», коли не сказано, вгорі X чи внизу (ти не бачиш фото).\\nslides — до яких фото правка: \\\"cover\\\" (перше / обкладинка — за замовчуванням для напису й кропу), \\\"all\\\" (усі фото — коли каже «всі», «скрізь», або для look без уточнення), або масив номерів [2, 3] якщо називає конкретні («на другому фото»).\\nconfidence 0..1 — наскільки ти впевнений, що edit — саме те, чого вона хоче. Якщо правка розмита або частково незрозуміла — нижче 0.7.\\nПриклади: «прибери текст з фото» → {\\\"text\\\":\\\"off\\\"}, cover, 0.95. «текст вниз» → {\\\"text\\\":\\\"bottom\\\"}, cover, 0.95. «без фільтрів» → {\\\"look\\\":\\\"none\\\"}, all, 0.9. «більше неба» → {\\\"crop\\\":\\\"north\\\"}, cover, 0.85.\\n«обріж по-іншому, щоб було видно басейн» → edit {}, confidence 0.3, unsupported \\\"кроп під басейн — не бачу, де він на фото\\\" (ти НЕ знаєш, де басейн, не вгадуй напрямок). «зроби світліше» → edit {}, unsupported \\\"яскравість не регулюю\\\". «інше фото» → edit {}, unsupported \\\"інше фото\\\".\\nВідповідь — СТРОГО JSON без іншого тексту: {\\\"edit\\\": {…} або {}, \\\"slides\\\": \\\"cover\\\" | \\\"all\\\" | [номери], \\\"confidence\\\": 0.0, \\\"unsupported\\\": \\\"що з правки не вмієш, коротко українською, або порожній рядок\\\", \\\"summary\\\": \\\"одне коротке речення українською: що зробиш\\\"}\", userPrompt: user } }];"
+      }
+    },
+    {
+      "id": "openai-parse-photo",
+      "name": "OpenAI - Parse Photo",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1880,
+        -440
+      ],
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "content": "={{ $json.userPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-photo-edits",
+      "name": "Code - Photo Edits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Build Generator Input').first().json;\nconst out = { ok: false, ids: [], body: '', edits: null, note: '', summary: '' };\nif ((ctx._photo_comment_ids || []).length) {\n  out.ids = ctx._photo_comment_ids; out.body = ctx._photo_request;\n  let r = null;\n  try {\n    const j = $('OpenAI - Parse Photo').first().json;\n    const message = Array.isArray(j.output) ? j.output[0] : j;\n    const block = message && Array.isArray(message.content) ? message.content[0] : null;\n    const raw = String((block && block.text) || j.text || '').trim().replace(/^\\`\\`\\`json\\s*|\\`\\`\\`$/g, '');\n    r = JSON.parse(raw);\n  } catch (e) { r = null; }\n  const allowed = { text: ['off', 'top', 'bottom'], look: ['none'], crop: ['centre', 'north', 'south'], title: 'text', kicker: 'text' };\n  const patch = {};\n  let bad = !r;\n  for (const [k, v] of Object.entries((r && r.edit) || {})) {\n    const rule = allowed[k];\n    if (!rule) { bad = true; continue; }\n    if (v === null) patch[k] = null;\n    else if (rule === 'text' && typeof v === 'string' && v.trim()) patch[k] = v.replace(/\\s+/g, ' ').trim().slice(0, 140);\n    else if (Array.isArray(rule) && rule.includes(v)) patch[k] = v;\n    else bad = true;\n  }\n  const cur = ctx._cur || {};\n  const media = (cur.media_ids || []).slice(0, 10);\n  const s = r && r.slides;\n  const targets = s === 'all' ? media : Array.isArray(s) ? s.map(x => media[Number(x) - 1]).filter(Boolean) : media.slice(0, 1);\n  const conf = Number((r && r.confidence) || 0);\n  out.summary = String((r && r.summary) || '');\n  const unsupported = String((r && r.unsupported) || '').trim();\n  if (!media.length) out.note = 'у поста ще немає фото';\n  else if (!r) out.note = 'не вдалось розібрати правку';\n  else if (Object.keys(patch).length && targets.length && conf >= 0.7 && !bad) {\n    const edits = { ...(((cur.render_params || {}).photo_edits) || {}) };\n    for (const mid of targets) {\n      const next = { ...(edits[mid] || {}) };\n      for (const [k, v] of Object.entries(patch)) { if (v === null) delete next[k]; else next[k] = v; }\n      if (Object.keys(next).length) edits[mid] = next; else delete edits[mid];\n    }\n    out.ok = true; out.edits = edits;\n    out.note = unsupported;\n  } else out.note = unsupported || (conf < 0.7 ? 'не впевнений, що правильно зрозумів' : 'такої правки фото не вмію');\n}\nreturn [{ json: { ...ctx, _photo: out } }];"
+      }
+    },
+    {
+      "id": "if-photo-parsed-",
+      "name": "IF - Photo Parsed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2090,
+        440
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-photo-parsed-",
+              "leftValue": "={{ $json._photo.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-photo-only",
+      "name": "Code - Photo Only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        440
+      ],
+      "parameters": {
+        "jsCode": "// Лише правка до фото → «вихід генератора» з тим самим текстом; далі спільний Code - Parse Result\nconst cur = $json._cur || {};\nreturn [{ json: { status: 'ok', _photo_only: true, text: cur.text || '', hooks: cur.hooks || null, form: cur.form || null, key_idea: cur.key_idea || null, lint_errors: [] } }];"
+      }
+    },
+    {
+      "id": "supabase-back-to-review-photo-",
+      "name": "Supabase - Back To Review (photo)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        660
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "content_plan",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Build Generator Input').first().json._plan.id }}"
+            },
+            {
+              "keyName": "review_status",
+              "condition": "eq",
+              "keyValue": "regenerating"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "review_status",
+              "fieldValue": "ready_for_review"
+            },
+            {
+              "fieldId": "review_note",
+              "fieldValue": "={{ 'до фото вручну: ' + ($json._photo.note || 'немає нових правок') }}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
     },
     {
       "id": "if-text-comments-",
@@ -449,7 +648,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Результат генератора → рядок post_versions (або помилка)\nconst g = $json;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst cur = ctx._cur || {};\nconst ok = !!(g && g.status && g.status !== 'failed' && g.text);\nconst lintErr = (g && g.lint_errors) || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String((g && (g.error || g.status)) || 'генератор не повернув текст').slice(0, 300),\n  _plan_id: ctx._plan.id,\n  _expected_version_no: ctx._expected_version_no,\n  _text_comment_ids: ctx._text_comment_ids,\n  row: ok ? {\n    content_plan_id: ctx._plan.id,\n    version_no: ctx._plan.version_no + 1,\n    text_v: (cur.text_v || 0) + 1,\n    image_v: cur.image_v || 0,\n    text: g.text,\n    hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    form: g.form || null,\n    key_idea: g.key_idea || null,\n    media_ids: cur.media_ids || [],\n    rendered_urls: cur.rendered_urls || [],\n    render_params: cur.render_params || {},\n    trigger: 'comment',\n    comment_id: ctx._text_comment_ids[0] || null,\n    model: 'gpt-4.1',\n    prompt_version: g._edit ? 'EDIT v1' : 'PRMPT-011 v4',\n    lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []\n  } : null\n} }];"
+        "jsCode": "// Результат генератора → рядок post_versions (або помилка)\nconst g = $json;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst photo = $('Code - Photo Edits').first().json._photo;\nconst cur = ctx._cur || {};\nconst only = !!(g && g._photo_only);\nconst ok = !!(g && g.status && g.status !== 'failed' && g.text);\nconst lintErr = (g && g.lint_errors) || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String((g && (g.error || g.status)) || 'генератор не повернув текст').slice(0, 300),\n  _plan_id: ctx._plan.id,\n  _expected_version_no: ctx._expected_version_no,\n  _text_comment_ids: ctx._text_comment_ids,\n  // Позначити «applied»: текстові + фото-правки, якщо їх розібрано\n  _applied_ids: [...(only ? [] : ctx._text_comment_ids), ...(photo.ok ? photo.ids : [])],\n  row: ok ? {\n    content_plan_id: ctx._plan.id,\n    version_no: ctx._plan.version_no + 1,\n    text_v: (cur.text_v || 0) + (only ? 0 : 1),\n    image_v: (cur.image_v || 0) + (photo.ok ? 1 : 0),\n    text: g.text,\n    hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    form: g.form || null,\n    key_idea: g.key_idea || null,\n    media_ids: cur.media_ids || [],\n    rendered_urls: cur.rendered_urls || [],\n    render_params: photo.ok ? { ...(cur.render_params || {}), photo_edits: photo.edits } : (cur.render_params || {}),\n    trigger: only ? 'photo_edit' : 'comment',\n    comment_id: (only ? photo.ids[0] : ctx._text_comment_ids[0]) || null,\n    model: 'gpt-4.1',\n    prompt_version: only ? 'photo_look' : g._edit ? 'EDIT v1' : 'PRMPT-011 v4',\n    lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : []\n  } : null\n} }];"
       }
     },
     {
@@ -590,27 +789,8 @@
       "parameters": {
         "operation": "update",
         "tableId": "review_comments",
-        "filterType": "manual",
-        "matchType": "allFilters",
-        "filters": {
-          "conditions": [
-            {
-              "keyName": "content_plan_id",
-              "condition": "eq",
-              "keyValue": "={{ $('Code - Parse Result').first().json._plan_id }}"
-            },
-            {
-              "keyName": "status",
-              "condition": "eq",
-              "keyValue": "new"
-            },
-            {
-              "keyName": "target",
-              "condition": "eq",
-              "keyValue": "text"
-            }
-          ]
-        },
+        "filterType": "string",
+        "filterString": "=id=in.({{ $('Code - Parse Result').first().json._applied_ids.join(',') || '00000000-0000-0000-0000-000000000000' }})",
         "dataToSend": "defineBelow",
         "fieldsUi": {
           "fieldValues": [
@@ -667,7 +847,7 @@
             },
             {
               "fieldId": "review_note",
-              "fieldValue": "={{ $json._error || 'правка лише до фото — чекає фото-треку (фаза 6)' }}"
+              "fieldValue": "={{ $json._error || 'не вдалось переробити' }}"
             }
           ]
         }
@@ -714,7 +894,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nconst ok = $('Code - Parse Result').first().json._ok;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + $('Code - Parse Result').first().json._error\n} }];"
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці (і текст Владу, якщо щось не вийшло)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\n// Parse Result не виконувався = була лише правка до фото, і її не розібрано\nlet pr = null;\ntry { pr = $('Code - Parse Result').first().json; } catch (e) { pr = null; }\nconst ok = !!(pr && pr._ok);\nconst photo = $('Code - Photo Edits').first().json._photo;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst url = base ? base + '/?startapp=post_' + plan.id : '';\nconst failText = ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (pr ? pr._error : 'немає нових правок');\n// Частина правки до фото, яку автоматично не зроблено → Владу зрозумілим текстом\nconst photoNote = photo.ids.length && photo.note\n  ? '📷 Іра просить до фото: «' + photo.body + '»\\n' + title + ' · ' + plat + '\\n\\n'\n    + (ok && photo.ok && photo.summary ? 'Зробив: ' + photo.summary + '\\n' : '')\n    + 'Автоматично не вмію: ' + photo.note\n    + (pr ? '' : '\\nПост повернувся їй на перегляд, правка видна в апці.')\n    + (url ? '\\n' + url : '')\n  : '';\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url,\n  fail_text: failText,\n  photo_note: photoNote,\n  admin_text: pr ? [failText, photoNote].filter(Boolean).join('\\n\\n') : (photoNote || failText)\n} }];"
       }
     },
     {
@@ -761,6 +941,64 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "if-photo-note-",
+      "name": "IF - Photo Note?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4180,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-photo-note-",
+              "leftValue": "={{ !!$json.photo_note }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-photo-note-to-admin",
+      "name": "Telegram - Photo Note To Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4400,
+        220
+      ],
+      "parameters": {
+        "chatId": "={{ $json.admin_chat_id }}",
+        "text": "={{ $json.photo_note }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "supabase-get-settings-fail-",
       "name": "Supabase - Get Settings (fail)",
       "type": "n8n-nodes-base.supabase",
@@ -793,7 +1031,7 @@
         220
       ],
       "parameters": {
-        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці\nconst s = {};\nfor (const r of $('Supabase - Get Settings (fail)').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\nlet ok = false; try { ok = $('Code - Parse Result').first().json._ok; } catch (e) {}\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url: base ? base + '/?startapp=post_' + plan.id : '',\n  fail_text: ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (() => { try { return $('Code - Parse Result').first().json._error; } catch (e) { return 'лише фото-правка'; } })()\n} }];"
+        "jsCode": "// Текст для бота Іри + кнопка, що відкриває саме цей пост в апці (і текст Владу, якщо щось не вийшло)\nconst s = {};\nfor (const r of $('Supabase - Get Settings (fail)').all()) s[r.json.key] = r.json.value;\nconst ctx = $('Code - Build Generator Input').first().json;\nconst plan = ctx._plan;\n// Parse Result не виконувався = була лише правка до фото, і її не розібрано\nlet pr = null;\ntry { pr = $('Code - Parse Result').first().json; } catch (e) { pr = null; }\nconst ok = !!(pr && pr._ok);\nconst photo = $('Code - Photo Edits').first().json._photo;\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = (ctx.hotel && ctx.hotel.name) || (ctx.tour && ctx.tour.title) || plan.pillar;\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst url = base ? base + '/?startapp=post_' + plan.id : '';\nconst failText = ok ? '' : '⚠️ Review Action: не вдалось переробити пост ' + plan.id + ' (' + title + ' · ' + plat + '): ' + (pr ? pr._error : 'немає нових правок');\n// Частина правки до фото, яку автоматично не зроблено → Владу зрозумілим текстом\nconst photoNote = photo.ids.length && photo.note\n  ? '📷 Іра просить до фото: «' + photo.body + '»\\n' + title + ' · ' + plat + '\\n\\n'\n    + (ok && photo.ok && photo.summary ? 'Зробив: ' + photo.summary + '\\n' : '')\n    + 'Автоматично не вмію: ' + photo.note\n    + (pr ? '' : '\\nПост повернувся їй на перегляд, правка видна в апці.')\n    + (url ? '\\n' + url : '')\n  : '';\nreturn [{ json: {\n  chat_id: String(ctx._author_tg_id || s.ira_chat_id || s.admin_chat_id || ''),\n  admin_chat_id: String(s.admin_chat_id || ''),\n  text: ok ? '✨ Нова версія готова\\n' + title + ' · ' + plat + '\\n\\nГлянеш?' : '',\n  url,\n  fail_text: failText,\n  photo_note: photoNote,\n  admin_text: pr ? [failText, photoNote].filter(Boolean).join('\\n\\n') : (photoNote || failText)\n} }];"
       }
     },
     {
@@ -807,7 +1045,7 @@
       ],
       "parameters": {
         "chatId": "={{ $json.admin_chat_id }}",
-        "text": "={{ $json.fail_text }}",
+        "text": "={{ $json.admin_text }}",
         "additionalFields": {
           "appendAttribution": false
         }
@@ -936,6 +1174,57 @@
       "main": [
         [
           {
+            "node": "IF - Photo Comments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Photo Comments?": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Photo Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Photo Edits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Photo Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Parse Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Parse Photo": {
+      "main": [
+        [
+          {
+            "node": "Code - Photo Edits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Photo Edits": {
+      "main": [
+        [
+          {
             "node": "IF - Text Comments?",
             "type": "main",
             "index": 0
@@ -954,7 +1243,47 @@
         ],
         [
           {
-            "node": "Supabase - Back To Changes Requested",
+            "node": "IF - Photo Parsed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Photo Parsed?": {
+      "main": [
+        [
+          {
+            "node": "Code - Photo Only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Back To Review (photo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Photo Only": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Back To Review (photo)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings (fail)",
             "type": "main",
             "index": 0
           }
@@ -1112,6 +1441,22 @@
         [
           {
             "node": "Telegram - New Version To Ira",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF - Photo Note?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Photo Note?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Photo Note To Admin",
             "type": "main",
             "index": 0
           }
