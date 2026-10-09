@@ -59,7 +59,7 @@ export async function insertOwnMedia(row: { hotel_id: string | null; storage_pat
     const n = Number(/(\d+)$/.exec(last.data?.[0]?.media_id ?? '')?.[1] ?? 0) + 1
     const media_id = `MED-${String(n).padStart(3, '0')}`
     const ins = await db().from('media').insert({
-      media_id, hotel_id: row.hotel_id, type: 'photo', source: 'ira_app', quality: 'ira_personal',
+      media_id, hotel_id: row.hotel_id, type: 'photo', source: 'ira_personal', quality: 'ira_app',
       storage_path: row.storage_path, synced_at: new Date().toISOString(), width: row.width, height: row.height, usage_count: 0,
     })
     if (!ins.error) return media_id
