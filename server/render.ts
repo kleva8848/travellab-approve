@@ -14,6 +14,9 @@ const BUCKET = 'post-media'
 const FRAME = 30 / 1080
 const FEED = { w: 1080, h: 1350 }
 const TG_LONG = 1600
+// Сторіз 9:16 (той самий стиль). Згори й знизу Instagram кладе аватар і поле відповіді — текст відсуваємо на ~9% висоти
+const STORY = { w: 1080, h: 1920 }
+const STORY_SAFE = 0.09
 // Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю; r4 — без розриву «2–4» і висячих «у», «на») → старі готові фото не беремо з кешу
 const REV = 'r4'
 const exportPath = (planId: string, versionNo: number, i: number) => `exports/${planId}/v${versionNo}${REV}_${i + 1}.jpg`
@@ -32,6 +35,8 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
     w = Math.round(info.width * scale)
     h = Math.round(info.height * scale)
   }
+  if (platform === 'story') { w = STORY.w; h = STORY.h }
+  const inset = platform === 'story' ? Math.round(h * STORY_SAFE) : 0
   const pad = Math.round((platform === 'telegram' ? Math.max(w, h) : w) * FRAME)
   const iw = w - 2 * pad
   const ih = h - 2 * pad
@@ -41,7 +46,7 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position }).removeAlpha().toColourspace('srgb').raw().toBuffer()
   const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
   // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
-  const layer = zone && text ? await textLayer(w, h, text, zone, pad) : null
+  const layer = zone && text ? await textLayer(w, h, text, zone, pad, inset) : null
   const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none')
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
   if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
@@ -120,7 +125,8 @@ async function captionTexts(post: PostInfo, slides: { id: string; path: string }
 type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[]; photo_text: string | null }
 
 // Рендерить фото поточної версії поста; копія лягає в Storage `exports/<plan>/v<N><REV>_<i>.jpg` (повторний виклик перезаписує) — для календаря/історії
-async function render(planId: string): Promise<Rendered> {
+// story — номер фото: лише воно, у форматі сторіз 9:16, без копії в Storage
+async function render(planId: string, story?: number): Promise<Rendered> {
   const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id').eq('id', planId).maybeSingle()
   if (p.error) throw p.error
   if (!p.data?.current_version_id) throw new Error('у поста немає версії')
@@ -176,11 +182,12 @@ async function render(planId: string): Promise<Rendered> {
   const files = await Promise.all(
     ids.map(async (id, i) => {
       const src = pathOf.get(id)
-      if (!src) return null
+      if (!src || (story !== undefined && i !== story)) return null
       const dl = await db().storage.from(BUCKET).download(src)
       if (dl.error) throw dl.error
       const withText = textFor(id)
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), platform, withText, withText?.zone_hint, edits[id])
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), story !== undefined ? 'story' : platform, withText, withText?.zone_hint, edits[id])
+      if (story !== undefined) return { name: `travellab_story_${i + 1}.jpg`, buf: out }
       const path = exportPath(planId, Number(p.data!.version_no), i)
       const up = await db().storage.from(BUCKET).upload(path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
@@ -254,4 +261,16 @@ export async function sendToChat(planId: string, chatId: number) {
     await tg('sendMediaGroup', f)
   }
   return { photos: files.length, photo_text: r.photo_text }
+}
+
+// Сторіз 9:16 з фото №slide у чат бота — файлом, як і пост (без стиснення Telegram)
+export async function sendStory(planId: string, chatId: number, slide: number) {
+  const r = await render(planId, slide)
+  const file = r.files[0]
+  if (!file) return { photos: 0 }
+  const f = new FormData()
+  f.append('chat_id', String(chatId))
+  f.append('document', new Blob([new Uint8Array(file.buf)], { type: 'image/jpeg' }), file.name)
+  await tg('sendDocument', f)
+  return { photos: 1 }
 }

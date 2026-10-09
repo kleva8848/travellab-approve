@@ -141,7 +141,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -263,6 +263,13 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     haptic('success')
     const onPhoto = r.photo_text ? ` · на фото: «${r.photo_text}»` : ''
     setToast(r.photos ? `Надіслала в чат: текст і ${r.photos} фото${onPhoto}` : 'Надіслала текст у чат')
+  }
+
+  const sendStory = async () => {
+    const r = await act('send_story', { slide_idx: slide })
+    if (!r) return
+    haptic('success')
+    setToast(r.photos ? 'Надіслала в чат сторіз 9:16' : 'Це фото ще не готове')
   }
 
   const markPublished = async (action: 'publish' | 'unpublish') => {
@@ -573,6 +580,11 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <button className="btn sec" style={{ height: 42, fontSize: 14 }} onClick={() => void copyText()}>Копіювати текст</button>
                   <button className="btn" style={{ height: 42, fontSize: 14 }} disabled={busy} onClick={() => void sendToChat()}>{busy ? 'Готую…' : 'Надіслати в чат'}</button>
                 </div>
+                {(cur.media_ids ?? []).length > 0 && (
+                  <button className="btn sec mt-2" style={{ height: 40, fontSize: 14 }} disabled={busy} onClick={() => void sendStory()}>
+                    Сторіз 9:16 у чат{(cur.media_ids ?? []).length > 1 ? ` · фото ${slide + 1}` : ''}
+                  </button>
+                )}
                 {!published && (
                   <button className="btn sec mt-2" style={{ height: 40, fontSize: 14 }} disabled={busy} onClick={() => void markPublished('publish')}>Виклала — позначити опублікованим</button>
                 )}

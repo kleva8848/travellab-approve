@@ -33,7 +33,8 @@ type El = { type: string; props: Record<string, unknown> }
 const el = (type: string, style: Record<string, unknown>, children?: unknown): El => ({ type, props: { style, children } })
 
 // Прозорий PNG w×h з текстом — кладемо поверх фото (sharp composite)
-export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, frame: number): Promise<Buffer> {
+// inset — додатковий відступ згори/знизу (сторіз: там лежать аватар і поле відповіді Instagram)
+export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, frame: number, inset = 0): Promise<Buffer> {
   const color = zone.text === 'light' ? CREAM : GRAPH
   const shadow = zone.text === 'light' ? '0 1px 3px rgba(0,0,0,0.45), 0 2px 18px rgba(0,0,0,0.45)' : 'none'
   const inner = w - 2 * frame
@@ -47,7 +48,7 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
   }
   kids.push(el('div', { fontFamily: 'Prata', fontSize: titleSize, lineHeight: 1.22, textShadow: shadow }, typo(t.title)))
 
-  const pad = zone.zone === 'top' ? { paddingTop: Math.round(frame + (h - 2 * frame) * 0.08) } : { paddingBottom: Math.round(frame + (h - 2 * frame) * 0.07) }
+  const pad = zone.zone === 'top' ? { paddingTop: Math.round(frame + inset + (h - 2 * frame) * 0.08) } : { paddingBottom: Math.round(frame + inset + (h - 2 * frame) * 0.07) }
   const root = el('div', {
     width: w, height: h, display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: zone.zone === 'top' ? 'flex-start' : 'flex-end',

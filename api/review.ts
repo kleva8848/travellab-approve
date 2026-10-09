@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
-import { previewUrls, sendToChat, type PhotoEdit } from '../server/render.js'
+import { previewUrls, sendStory, sendToChat, type PhotoEdit } from '../server/render.js'
 import { notifyN8n } from '../server/review.js'
 import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story'
   id?: string
   expected_version_no?: number
   text?: string
@@ -113,6 +113,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Готовий пост у чат бота: текст + фото з білою рамкою файлами — звідти Іра публікує
     if (b.action === 'send_to_chat') {
       return void res.json({ ok: true, ...(await sendToChat(b.id, user.id)) })
+    }
+
+    // Сторіз 9:16 з поточного фото — файлом у чат бота
+    if (b.action === 'send_story') {
+      const slide = Number(b.slide_idx)
+      if (!Number.isInteger(slide) || slide < 0 || slide > 9) return void res.status(400).json({ error: 'bad slide_idx' })
+      return void res.json({ ok: true, ...(await sendStory(b.id, user.id, slide)) })
     }
 
     // Іра сама виправила текст — нова версія як є, без агента (позначка ira_edit — для навчання, фаза 7)
