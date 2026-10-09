@@ -4,7 +4,8 @@ alter table public.hotels add column if not exists price_currency text not null 
 alter table public.hotels add column if not exists price_source text check (price_source in ('ira', 'site', 'agent'));
 alter table public.hotels add column if not exists price_updated_at timestamptz;
 
--- нагадування й дайджест (WF-050) — тепер Ірі, не Владу
+-- нагадування й дайджест (WF-050) — тепер Ірі, не Владу. TG ID Іри 616980577 (якщо ще не заповнений)
+update public.settings set value = '"616980577"' where key = 'ira_chat_id' and (value is null or value = 'null'::jsonb);
 update public.settings set value = '"ira"' where key = 'notify_target';
 
 notify pgrst, 'reload schema';
