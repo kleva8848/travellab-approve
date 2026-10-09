@@ -221,6 +221,58 @@
       "executeOnce": true
     },
     {
+      "id": "supabase-get-golden-versions",
+      "name": "Supabase - Get Golden Versions",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "post_versions",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "is_golden=eq.true"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-golden-plans",
+      "name": "Supabase - Get Golden Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "code-build-generator-input",
       "name": "Code - Build Generator Input",
       "type": "n8n-nodes-base.code",
@@ -230,7 +282,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n\n// Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати\nconst REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;\nconst editMode = !textNew.some(c => REWRITE.test(c.body));\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  _edit_mode: editMode,\n  _edit_request: textNew.map(c => c.body).join('\\n\\n'),\n  _earlier_raw: comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => c.body),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
+        "jsCode": "// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри\nconst body = $('Webhook').first().json.body || {};\nconst all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };\nconst plan = all('Supabase - Get Plan')[0];\nif (!plan) throw new Error('content_plan не знайдено: ' + body.content_plan_id);\nconst versions = all('Supabase - Get Versions').sort((a, b) => a.version_no - b.version_no);\nconst cur = versions.find(v => v.id === plan.current_version_id) || versions[versions.length - 1] || null;\nconst comments = all('Supabase - Get Comments').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = comments.filter(c => c.status === 'new');\nconst textNew = fresh.filter(c => c.target === 'text');\nconst photoNew = fresh.filter(c => c.target === 'photo');\nconst earlier = comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => '— ' + c.body);\n\nconst hotels = all('Supabase - Get Hotels');\nconst tours = all('Supabase - Get Tours');\nconst stories = all('Supabase - Get Stories');\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\n// ⭐ Іри (post_versions.is_golden): спершу 3 найсвіжіші тієї ж платформи (крім самого цього поста), далі — старі схвалені\nconst goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));\nconst golden = all('Supabase - Get Golden Versions')\n  .filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform)\n  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))\n  .slice(0, 3)\n  .map(v => ({ text: v.text }));\nconst fewshot = [...golden, ...legacy];\n\n// Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати\nconst REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;\nconst editMode = !textNew.some(c => REWRITE.test(c.body));\n\nlet feedback = textNew.map(c => c.body).join('\\n');\nif (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');\n\nreturn [{ json: {\n  _skip_text: textNew.length === 0,\n  _plan: plan,\n  _cur: cur,\n  _text_comment_ids: textNew.map(c => c.id),\n  _photo_comment_ids: photoNew.map(c => c.id),\n  // «Нова версія готова» — тому, хто просив правку (Іра або Влад на тесті)\n  _author_tg_id: (fresh[fresh.length - 1] || {}).author_tg_id || null,\n  _expected_version_no: Number(body.expected_version_no ?? plan.version_no),\n  _edit_mode: editMode,\n  _edit_request: textNew.map(c => c.body).join('\\n\\n'),\n  _earlier_raw: comments.filter(c => c.status === 'applied' && c.target === 'text').map(c => c.body),\n  mode: 'regenerate',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar },\n  week_parity: DateTime.now().weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: tours.find(t => t.tour_id === plan.tour_id) || null,\n  hotel: hotels.find(h => h.hotel_id === plan.hotel_id) || null,\n  story: stories.find(s => s.id === plan.story_id) || null,\n  fewshot,\n  old_text: cur ? cur.text : '',\n  ira_feedback: feedback,\n  had_feedback: !!feedback,\n  passthrough: { content_plan_id: plan.id }\n} }];"
       }
     },
     {
@@ -848,6 +900,28 @@
       ]
     },
     "Supabase - Get Approved Posts": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Versions": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Plans": {
       "main": [
         [
           {

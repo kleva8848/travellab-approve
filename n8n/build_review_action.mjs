@@ -45,7 +45,15 @@ const hotels = all('Supabase - Get Hotels');
 const tours = all('Supabase - Get Tours');
 const stories = all('Supabase - Get Stories');
 const CUTOVER = new Date('2026-09-19T12:00:00Z');
-const fewshot = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
+const legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
+// ⭐ Іри (post_versions.is_golden): спершу 3 найсвіжіші тієї ж платформи (крім самого цього поста), далі — старі схвалені
+const goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));
+const golden = all('Supabase - Get Golden Versions')
+  .filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform)
+  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))
+  .slice(0, 3)
+  .map(v => ({ text: v.text }));
+const fewshot = [...golden, ...legacy];
 
 // Точкова правка (за замовчуванням) vs повна переробка генератором — лише коли Іра прямо просить переписати
 const REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;
@@ -189,6 +197,14 @@ const nodes = [
   getAll('Supabase - Get Tours', 1100, 'tours'),
   getAll('Supabase - Get Stories', 1320, 'story_queue'),
   getAll('Supabase - Get Approved Posts', 1540, 'posts'),
+  // SQL 006 ще не запущено → помилку ігноруємо, лишаються старі приклади
+  node('Supabase - Get Golden Versions', 'n8n-nodes-base.supabase', 1, 1600, {
+    operation: 'getAll', tableId: 'post_versions', returnAll: true, filterType: 'string', filterString: 'is_golden=eq.true',
+  }, { credentials: sb, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput' }),
+  node('Supabase - Get Golden Plans', 'n8n-nodes-base.supabase', 1, 1680, {
+    operation: 'getAll', tableId: 'content_plan', returnAll: true, filterType: 'string',
+    filterString: "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})",
+  }, { credentials: sb, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput' }),
   node('Code - Build Generator Input', 'n8n-nodes-base.code', 2, 1760, { jsCode: buildInput }),
   node('IF - Text Comments?', 'n8n-nodes-base.if', 2.2, 1980, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
@@ -260,7 +276,7 @@ nodes.push(
 
 const chain = (...names) => Object.fromEntries(names.slice(0, -1).map((n, i) => [n, { main: [[{ node: names[i + 1], type: 'main', index: 0 }]] }]))
 const connections = {
-  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Code - Build Generator Input', 'IF - Text Comments?'),
+  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans', 'Code - Build Generator Input', 'IF - Text Comments?'),
   'IF - Text Comments?': { main: [[{ node: 'IF - Edit Mode?', type: 'main', index: 0 }], [{ node: 'Supabase - Back To Changes Requested', type: 'main', index: 0 }]] },
   'IF - Edit Mode?': { main: [[{ node: 'Code - Build Edit Prompt', type: 'main', index: 0 }], [{ node: 'Execute - Post Generator', type: 'main', index: 0 }]] },
   ...chain('Code - Build Edit Prompt', 'OpenAI - Apply Edit', 'Code - Parse Edit', 'Code - Parse Result'),
