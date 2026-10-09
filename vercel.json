@@ -14,6 +14,10 @@
     "api/review.ts": {
       "includeFiles": "server/**",
       "maxDuration": 60
+    },
+    "api/publish.ts": {
+      "includeFiles": "server/**",
+      "maxDuration": 60
     }
   }
 }

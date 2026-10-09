@@ -129,7 +129,7 @@ type Rendered = { text: string; platform: string; files: { name: string; buf: Bu
 
 // Рендерить фото поточної версії поста; копія лягає в Storage `exports/<plan>/v<N><REV>_<i>.jpg` (повторний виклик перезаписує) — для календаря/історії
 // story — номер фото: лише воно, у форматі сторіз 9:16, без копії в Storage
-async function render(planId: string, story?: number): Promise<Rendered> {
+export async function render(planId: string, story?: number): Promise<Rendered> {
   const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id').eq('id', planId).maybeSingle()
   if (p.error) throw p.error
   if (!p.data?.current_version_id) throw new Error('у поста немає версії')
@@ -235,7 +235,7 @@ export async function previewUrls(planId: string): Promise<{ version_no: number;
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 // **жирний** з тексту агента → HTML Telegram (у чаті Іра скопіює вже з форматуванням)
-const toHtml = (text: string) => esc(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+export const toHtml = (text: string) => esc(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
 
 async function tg(method: string, body: FormData | object) {
   const token = process.env.TELEGRAM_BOT_TOKEN

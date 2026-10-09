@@ -1,0 +1,167 @@
+{
+  "name": "[TravelLab] Autopublish TG",
+  "nodes": [
+    {
+      "id": "schedule-every-5-min",
+      "name": "Schedule - Every 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "key=in.(autopublish_tg,mini_app_url,admin_chat_id)"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-check-switch",
+      "name": "Code - Check Switch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Перемикач вимкнено / не налаштовано → нічого не робимо (жодного виклику Vercel)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nif (s.autopublish_tg !== 'on') return [];\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\nreturn [{ json: { url: base + '/api/publish', admin_chat_id: String(s.admin_chat_id || '') } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "http-publish-due-posts",
+      "name": "HTTP - Publish Due Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 70000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "telegram-alert-admin",
+      "name": "Telegram - Alert Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "chatId": "={{ $('Code - Check Switch').first().json.admin_chat_id }}",
+        "text": "={{ '⚠️ Автопублікація TG: Vercel /api/publish не відповів\\n' + String($json.error?.message || $json.error || 'помилка').slice(0, 500) }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule - Every 5 min": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Switch": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Publish Due Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Publish Due Posts": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Telegram - Alert Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}
