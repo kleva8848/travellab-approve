@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, getPost, reviewAction, type PostDetail, type Version } from '../lib/api'
 import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
-import { haptic, isDemo, useBackButton } from '../lib/tg'
+import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { Carousel } from './Carousel'
 import { whenLabel } from './CalendarScreen'
 import { Center, Label, Spinner } from './ui'
@@ -128,7 +128,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -258,6 +258,14 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     setToast(action === 'publish' ? 'Позначила: викладено' : 'Повернула в календар')
     await load()
     onChanged()
+  }
+
+  const skip = async () => {
+    if (!(await confirmAction('Пропустити цей пост? Він зникне з черги і календаря.'))) return
+    if (!(await act('skip'))) return
+    haptic('success')
+    onChanged()
+    onNext()
   }
 
   const unapprove = async () => {
@@ -469,6 +477,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <div className="qchips">{CHIPS_PHOTO.map((c) => <button key={c} onClick={() => addChip('photo', c)}>{c}</button>)}</div>
                 </div>
                 <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>
+                <button className="mx-auto mt-4 block text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy} onClick={() => void skip()}>Пропустити цей пост</button>
               </>
             )}
           </>

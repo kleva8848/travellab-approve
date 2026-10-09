@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip'
   id?: string
   expected_version_no?: number
   text?: string
@@ -155,6 +155,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .update({ review_status: toPublished ? 'published' : 'approved', published_at: toPublished ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
         .eq('id', b.id)
         .eq('review_status', toPublished ? 'approved' : 'published')
+        .select('id')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true }) : void conflict()
+    }
+
+    // Іра пропускає пост: зникає з черги й календаря (статус skipped — кінцевий)
+    if (b.action === 'skip') {
+      const r = await db()
+        .from('content_plan')
+        .update({ review_status: 'skipped', updated_at: new Date().toISOString() })
+        .eq('id', b.id)
+        .in('review_status', ['ready_for_review', 'changes_requested', 'needs_data', 'approved'])
+        .is('published_at', null)
         .select('id')
       if (r.error) throw r.error
       return r.data?.length ? void res.json({ ok: true }) : void conflict()

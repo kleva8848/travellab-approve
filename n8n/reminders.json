@@ -1,0 +1,418 @@
+{
+  "name": "[TravelLab] Reminders & Digest",
+  "nodes": [
+    {
+      "id": "schedule-every-5-min",
+      "name": "Schedule - Every 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "schedule-digest-10-00",
+      "name": "Schedule - Digest 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook-manual-run",
+      "name": "Webhook - Manual Run",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        660,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-reminders",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "3f8b2c61-5d7e-4a90-b1c4-tl-reminders",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-open-plans",
+      "name": "Supabase - Get Open Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "review_status=in.(approved,ready_for_review,needs_data,changes_requested,regenerating,generating)&published_at=is.null"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "supabase-get-tours",
+      "name": "Supabase - Get Tours",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "tours",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "code-build-messages",
+      "name": "Code - Build Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Що слати: дайджест (10:00 або вебхук mode=digest) чи нагадування (кожні 5 хв або mode=remind)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst fromHook = $('Webhook - Manual Run').isExecuted ? String(($('Webhook - Manual Run').first().json.body || {}).mode || 'digest') : '';\nconst mode = fromHook || ($('Schedule - Digest 10:00').isExecuted ? 'digest' : 'remind');\n\nconst target = String(s.notify_target || 'admin');\nconst chats = [...new Set([\n  target !== 'ira' ? String(s.admin_chat_id || '') : '',\n  target !== 'admin' ? String(s.ira_chat_id || '') : '',\n].filter(Boolean))];\nif (!chats.length) throw new Error('немає отримувача: заповни settings.admin_chat_id / ira_chat_id (notify_target=' + target + ')');\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\n\nconst hotels = {}, tours = {};\nfor (const h of $('Supabase - Get Hotels').all()) if (h.json.hotel_id) hotels[h.json.hotel_id] = h.json.name;\nfor (const t of $('Supabase - Get Tours').all()) if (t.json.tour_id) tours[t.json.tour_id] = t.json.title;\nconst plans = $('Supabase - Get Open Plans').all().map(i => i.json).filter(p => p.id);\n\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst title = p => hotels[p.hotel_id] || tours[p.tour_id] || p.pillar || 'пост';\nconst hhmm = p => String(p.slot_time || '').slice(0, 5);\nconst slotKey = p => p.scheduled_for + ' ' + hhmm(p);\nconst zone = 'Europe/Kyiv';\nconst now = DateTime.now().setZone(zone);\nconst slotAt = p => (p.scheduled_for && p.slot_time) ? DateTime.fromISO(p.scheduled_for + 'T' + hhmm(p), { zone }) : null;\nconst postUrl = p => base + '/?startapp=post_' + p.id;\nconst out = [];\n\nif (mode === 'remind') {\n  const before = Number(s.remind_before_min) || 30;\n  for (const p of plans) {\n    if (p.review_status !== 'approved' || p.published_at) continue;\n    const at = slotAt(p);\n    if (!at) continue;\n    const mins = at.diff(now, 'minutes').minutes;\n    if (mins <= 0 || mins > before || p.reminded_slot === slotKey(p)) continue;\n    const text = '⏰ Через ' + Math.ceil(mins) + ' хв публікація\\n' + hhmm(p) + ' · ' + (PLAT[p.platform] || p.platform) + '\\n' + title(p) + '\\n\\nТекст і фото готові — відкрий, скопіюй і виклади. Після публікації тисни «Виклала».';\n    for (const chat_id of chats) out.push({ json: { kind: 'remind', chat_id, text, url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, slot: slotKey(p) } });\n  }\n  return out;\n}\n\n// Дайджест\nconst today = now.toFormat('yyyy-MM-dd');\nconst line = p => '• ' + (hhmm(p) || '—') + ' ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p);\nconst bySlot = (a, b) => slotKey(a).localeCompare(slotKey(b));\nconst todayPosts = plans.filter(p => p.review_status === 'approved' && !p.published_at && p.scheduled_for === today && (slotAt(p) || now) >= now).sort(bySlot);\nconst missed = plans.filter(p => p.review_status === 'approved' && !p.published_at && slotAt(p) && slotAt(p) < now).sort(bySlot);\nconst review = plans.filter(p => p.review_status === 'ready_for_review');\nconst needData = plans.filter(p => p.review_status === 'needs_data');\nconst inWork = plans.filter(p => ['changes_requested', 'regenerating', 'generating'].includes(p.review_status));\n\nconst parts = ['☀️ Доброго ранку! ' + now.setLocale('uk').toFormat('cccc, d MMMM')];\nparts.push(todayPosts.length ? '\\n📅 Сьогодні виходить:\\n' + todayPosts.map(line).join('\\n') : '\\n📅 Сьогодні публікацій немає');\nif (missed.length) parts.push('\\n⚠️ Час минув, ще не викладено:\\n' + missed.slice(0, 5).map(p => line(p) + ' (' + DateTime.fromISO(p.scheduled_for).toFormat('dd.MM') + ')').join('\\n'));\nif (review.length) parts.push('\\n📝 Чекають твого перегляду: ' + review.length + '\\n' + review.slice(0, 5).map(p => '• ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p)).join('\\n') + (review.length > 5 ? '\\n…' : ''));\nif (needData.length) parts.push('\\n❓ Бракує даних: ' + needData.length);\nif (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWork.length);\nif (!todayPosts.length && !missed.length && !review.length && !needData.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');\nfor (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок' } });\nreturn out;"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "telegram-send",
+      "name": "Telegram - Send",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "={{ $json.button }}",
+                    "additionalFields": {
+                      "web_app": {
+                        "url": "={{ $json.url }}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-reminder-sent-",
+      "name": "IF - Reminder Sent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "kind",
+              "leftValue": "={{ $('Code - Build Messages').item.json.kind }}",
+              "rightValue": "remind",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "ok",
+              "leftValue": "={{ !$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "supabase-mark-reminded",
+      "name": "Supabase - Mark Reminded",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "content_plan",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Build Messages').item.json.plan_id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "reminded_slot",
+              "fieldValue": "={{ $('Code - Build Messages').item.json.slot }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Every 5 min": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule - Digest 10:00": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Run": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Open Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Open Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Tours": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Messages": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send": {
+      "main": [
+        [
+          {
+            "node": "IF - Reminder Sent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Reminder Sent?": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Reminded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

@@ -125,7 +125,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -225,6 +225,7 @@ const demo = (() => {
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
         return { ok: true as const, swapped: true }
       }
+      if (action === 'skip') p.plan.review_status = 'skipped'
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
       if (action === 'restore') {
         const old = p.versions.find((v) => v.id === extra.version_id)
