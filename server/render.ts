@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import { db, getSettings } from './http.js'
-import { calmZone, softVeil, type Zone } from './look.js'
+import { calmZone, softVeil, type Band, type Zone } from './look.js'
 import { textLayer, type PhotoText } from './overlay.js'
 
 const BUCKET = 'post-media'
@@ -14,8 +14,8 @@ const BUCKET = 'post-media'
 const FRAME = 30 / 1080
 const FEED = { w: 1080, h: 1350 }
 const TG_LONG = 1600
-// Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі) → старі готові фото не беремо з кешу
-const REV = 'r2'
+// Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю) → старі готові фото не беремо з кешу
+const REV = 'r3'
 const exportPath = (planId: string, versionNo: number, i: number) => `exports/${planId}/v${versionNo}${REV}_${i + 1}.jpg`
 
 export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null): Promise<Buffer> {
@@ -33,10 +33,25 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const ih = h - 2 * pad
   const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position: sharp.strategy.attention }).removeAlpha().toColourspace('srgb').raw().toBuffer()
   const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
-  const toned = softVeil(crop, iw, ih, zone)
+  // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
+  const layer = zone && text ? await textLayer(w, h, text, zone, pad) : null
+  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null)
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
-  if (zone && text) img = sharp(await img.png().toBuffer()).composite([{ input: await textLayer(w, h, text, zone, pad) }])
+  if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
   return img.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
+}
+
+// Перший і останній рядок з непрозорими пікселями шару тексту → у координатах фото без рамки
+async function textBand(layer: Buffer, w: number, h: number, pad: number): Promise<Band | null> {
+  const a = await sharp(layer).ensureAlpha().extractChannel(3).raw().toBuffer()
+  let y0 = -1
+  let y1 = -1
+  for (let row = 0; row < h; row++) {
+    let on = false
+    for (let col = 0; col < w; col += 2) if (a[row * w + col] > 40) { on = true; break }
+    if (on) { if (y0 < 0) y0 = row; y1 = row }
+  }
+  return y0 < 0 ? null : { y0: Math.max(0, y0 - pad), y1: Math.min(h - 2 * pad - 1, y1 - pad) }
 }
 
 type Overlay = PhotoText & { zone_hint?: string | null; for_text: string; media_id: string }

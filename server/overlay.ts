@@ -31,7 +31,7 @@ const el = (type: string, style: Record<string, unknown>, children?: unknown): E
 // Прозорий PNG w×h з текстом — кладемо поверх фото (sharp composite)
 export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, frame: number): Promise<Buffer> {
   const color = zone.text === 'light' ? CREAM : GRAPH
-  const shadow = zone.text === 'light' ? '0 2px 18px rgba(0,0,0,0.35)' : 'none'
+  const shadow = zone.text === 'light' ? '0 1px 3px rgba(0,0,0,0.45), 0 2px 18px rgba(0,0,0,0.45)' : 'none'
   const inner = w - 2 * frame
   const titleSize = Math.round(inner * (t.small ? 0.05 : t.title.length > 34 ? 0.058 : 0.068))
   const kids: El[] = []

@@ -44,8 +44,13 @@ export async function calmZone(img: Buffer, hint?: string | null, frac = 0.42): 
   return { zone, text: L > 165 ? 'dark' : 'light', source: hint === 'top' || hint === 'bottom' ? 'hint' : 'auto' }
 }
 
-// Raw RGB уже потрібного розміру → soft (+ veil, якщо є зона тексту). Повертає raw RGB того ж розміру
-export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36): Buffer {
+// Рядки, де реально лежить текст (у координатах фото без рамки) — щоб вуаль покривала весь заголовок, а не лише край
+export type Band = { y0: number; y1: number }
+
+// Raw RGB уже потрібного розміру → soft (+ veil, якщо є зона тексту). Повертає raw RGB того ж розміру.
+// З band: під текстом вуаль на повну силу, а сила — від яскравості фото саме під текстом (біла піна / пісок / небо
+// під кремовим текстом → темніше, до 70%); далі м'яко сходить до центру кадру
+export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null): Buffer {
   const px = w * h
   const y = new Float32Array(px)
   for (let i = 0; i < px; i++) y[i] = lum(rgb[i * 3] / 255, rgb[i * 3 + 1] / 255, rgb[i * 3 + 2] / 255)
@@ -64,18 +69,34 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
   if (hot / px > 0.02) g = Math.max(g, 0.97) // сонце в кадрі не роздуваємо
   const lift = Math.min(Math.max(percentile(sorted, 0.5) - 0.04, 0), 0.06) * 0.5 // серпанок — половину, не більше 3%
 
+  const tone = (yi: number) => Math.pow(Math.min(1, Math.max(0, (yi - lift) / (1 - lift))), g)
+  let weight = (row: number) => {
+    const t = h > 1 ? row / (h - 1) : 0
+    return smooth(zone!.zone === 'top' ? 1 - t : t, 1 - frac, 1) // 1 біля краю з текстом
+  }
+  if (zone && band) {
+    const margin = Math.round(h * 0.05)
+    const feather = Math.round(h * 0.22)
+    const y0 = Math.max(0, band.y0 - margin)
+    const y1 = Math.min(h - 1, band.y1 + margin)
+    // світлі місця під текстом (p85 яскравості після soft) — їх і треба приглушити, середнє тут бреше
+    const under: number[] = []
+    for (let row = y0; row <= y1; row += 2) for (let col = 0; col < w; col += 2) under.push(tone(y[row * w + col]))
+    under.sort((a, b) => a - b)
+    const hi = under.length ? under[Math.floor(under.length * 0.85)] : 0
+    if (zone.text === 'light') strength = Math.min(0.7, Math.max(strength, 1 - 0.4 / Math.max(hi, 1e-3)))
+    else strength = Math.min(0.75, Math.max(strength, hi < 0.6 ? (0.6 - hi) / (0.45 * (1 - hi)) : 0))
+    weight = (row: number) =>
+      zone.zone === 'top' ? (row <= y1 ? 1 : 1 - smooth(row, y1, y1 + feather)) : row >= y0 ? 1 : smooth(row, y0 - feather, y0)
+  }
+
   const out = Buffer.alloc(px * 3)
   for (let row = 0; row < h; row++) {
-    let m = 0
-    if (zone) {
-      const t = h > 1 ? row / (h - 1) : 0
-      const d = zone.zone === 'top' ? 1 - t : t // 1 біля краю з текстом
-      m = smooth(d, 1 - frac, 1) * strength
-    }
+    const m = zone ? weight(row) * strength : 0
     for (let col = 0; col < w; col++) {
       const i = row * w + col
       const yi = y[i]
-      const yn = Math.pow(Math.min(1, Math.max(0, (yi - lift) / (1 - lift))), g)
+      const yn = tone(yi)
       const k = yn / Math.max(yi, 1e-4)
       let r = (rgb[i * 3] / 255) * k
       let gg = (rgb[i * 3 + 1] / 255) * k
