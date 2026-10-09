@@ -50,7 +50,8 @@ export type Band = { y0: number; y1: number }
 // Raw RGB уже потрібного розміру → soft (+ veil, якщо є зона тексту). Повертає raw RGB того ж розміру.
 // З band: під текстом вуаль на повну силу, а сила — від яскравості фото саме під текстом (біла піна / пісок / небо
 // під кремовим текстом → темніше, до 70%); далі м'яко сходить до центру кадру
-export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null): Buffer {
+// tone: false — «без обробки»: кольори й яскравість як в оригіналі, лишається лише вуаль під текстом (щоб читався)
+export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null, tone = true): Buffer {
   const px = w * h
   const y = new Float32Array(px)
   for (let i = 0; i < px; i++) y[i] = lum(rgb[i * 3] / 255, rgb[i * 3 + 1] / 255, rgb[i * 3 + 2] / 255)
@@ -58,7 +59,7 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
   const med = percentile(sorted, 50)
 
   let g = 1
-  if (med < 0.32 || med > 0.58) { // лише явно темні / явно світлі кадри
+  if (tone && (med < 0.32 || med > 0.58)) { // лише явно темні / явно світлі кадри
     const target = med < 0.32 ? 0.36 : 0.52
     g = Math.log(target) / Math.log(Math.min(0.95, Math.max(0.05, med)))
     g = Math.min(1.2, Math.max(0.8, g))
@@ -67,9 +68,9 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
   let hot = 0
   for (let i = 0; i < px; i++) if (y[i] > 0.97) hot++
   if (hot / px > 0.02) g = Math.max(g, 0.97) // сонце в кадрі не роздуваємо
-  const lift = Math.min(Math.max(percentile(sorted, 0.5) - 0.04, 0), 0.06) * 0.5 // серпанок — половину, не більше 3%
+  const lift = !tone ? 0 : Math.min(Math.max(percentile(sorted, 0.5) - 0.04, 0), 0.06) * 0.5 // серпанок — половину, не більше 3%
 
-  const tone = (yi: number) => Math.pow(Math.min(1, Math.max(0, (yi - lift) / (1 - lift))), g)
+  const toned = (yi: number) => Math.pow(Math.min(1, Math.max(0, (yi - lift) / (1 - lift))), g)
   let weight = (row: number) => {
     const t = h > 1 ? row / (h - 1) : 0
     return smooth(zone!.zone === 'top' ? 1 - t : t, 1 - frac, 1) // 1 біля краю з текстом
@@ -81,7 +82,7 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
     const y1 = Math.min(h - 1, band.y1 + margin)
     // світлі місця під текстом (p85 яскравості після soft) — їх і треба приглушити, середнє тут бреше
     const under: number[] = []
-    for (let row = y0; row <= y1; row += 2) for (let col = 0; col < w; col += 2) under.push(tone(y[row * w + col]))
+    for (let row = y0; row <= y1; row += 2) for (let col = 0; col < w; col += 2) under.push(toned(y[row * w + col]))
     under.sort((a, b) => a - b)
     const hi = under.length ? under[Math.floor(under.length * 0.85)] : 0
     if (zone.text === 'light') strength = Math.min(0.7, Math.max(strength, 1 - 0.4 / Math.max(hi, 1e-3)))
@@ -96,7 +97,7 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
     for (let col = 0; col < w; col++) {
       const i = row * w + col
       const yi = y[i]
-      const yn = tone(yi)
+      const yn = toned(yi)
       const k = yn / Math.max(yi, 1e-4)
       let r = (rgb[i * 3] / 255) * k
       let gg = (rgb[i * 3 + 1] / 255) * k

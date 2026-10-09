@@ -84,7 +84,15 @@ export type Version = {
   lint: { note?: string } | null
   missing_facts: { field?: string; note?: string }[] | null
   is_golden?: boolean
+  render_params?: RenderParams | null
   created_at: string
+}
+
+export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+export type RenderParams = {
+  photo_text?: { title?: string; kicker?: string }
+  photo_captions?: { items?: ({ title?: string } | null)[] }
+  photo_edits?: Record<string, PhotoEdit>
 }
 
 export type Comment = { id: string; version_id: string | null; target: 'text' | 'photo'; body: string; status: string; created_at: string }
@@ -104,7 +112,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean }
+type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
 type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 export async function getQueue(): Promise<QueueItem[]> {
@@ -126,7 +134,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -225,6 +233,16 @@ const demo = (() => {
         p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', comment_id: null, media_ids: ids })
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
         return { ok: true as const, swapped: true }
+      }
+      if (action === 'photo_edit' && extra.media_id) {
+        const prev = p.versions.at(-1)!
+        const edits = { ...(prev.render_params?.photo_edits ?? {}) }
+        const next: Record<string, unknown> = { ...(edits[extra.media_id] ?? {}) }
+        for (const [k, v] of Object.entries(extra.edit ?? {})) if (v === null) delete next[k]; else next[k] = v
+        edits[extra.media_id] = next as PhotoEdit
+        const n = p.versions.length + 1
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, photo_edits: edits } })
+        Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
       }
       if (action === 'skip') p.plan.review_status = 'skipped'
       if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }

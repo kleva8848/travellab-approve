@@ -18,7 +18,11 @@ const TG_LONG = 1600
 const REV = 'r4'
 const exportPath = (planId: string, versionNo: number, i: number) => `exports/${planId}/v${versionNo}${REV}_${i + 1}.jpg`
 
-export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null): Promise<Buffer> {
+// Ручні правки Іри до конкретного фото (чипи під фото) — render_params.photo_edits[media_id]
+export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+const CROP = { centre: sharp.gravity.centre, north: sharp.gravity.north, south: sharp.gravity.south } as const
+
+export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}): Promise<Buffer> {
   // Спершу поворот за EXIF — далі розміри вже «як бачить людина»
   const { data, info } = await sharp(src).rotate().toBuffer({ resolveWithObject: true })
   let w = FEED.w
@@ -31,11 +35,14 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const pad = Math.round((platform === 'telegram' ? Math.max(w, h) : w) * FRAME)
   const iw = w - 2 * pad
   const ih = h - 2 * pad
-  const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position: sharp.strategy.attention }).removeAlpha().toColourspace('srgb').raw().toBuffer()
+  if (edit.text === 'off') text = null
+  if (edit.text === 'top' || edit.text === 'bottom') hint = edit.text
+  const position = edit.crop ? CROP[edit.crop] : sharp.strategy.attention
+  const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position }).removeAlpha().toColourspace('srgb').raw().toBuffer()
   const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
   // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
   const layer = zone && text ? await textLayer(w, h, text, zone, pad) : null
-  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null)
+  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none')
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
   if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
   return img.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
@@ -153,10 +160,17 @@ async function render(planId: string): Promise<Rendered> {
     if (!capsOk && caps) patch.photo_captions = caps
     if (Object.keys(patch).length) await db().from('post_versions').update({ render_params: { ...params, ...patch } }).eq('id', v.data!.id)
   }
+  const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
+  // Текст Іри на фото має пріоритет над текстом агента
   const textFor = (id: string): (PhotoText & { zone_hint?: string | null }) | null => {
-    if (id === first) return overlay
+    const e = edits[id] ?? {}
+    if (id === first) {
+      const title = e.title ?? overlay?.title
+      return title ? { title, kicker: e.kicker !== undefined ? e.kicker || undefined : overlay?.kicker, zone_hint: overlay?.zone_hint ?? null } : null
+    }
     const c = captions?.items[rest.indexOf(id)]
-    return c ? { title: c.title, small: true, zone_hint: c.zone_hint } : null
+    const title = e.title ?? c?.title
+    return title ? { title, small: true, zone_hint: c?.zone_hint ?? null } : null
   }
 
   const files = await Promise.all(
@@ -166,14 +180,15 @@ async function render(planId: string): Promise<Rendered> {
       const dl = await db().storage.from(BUCKET).download(src)
       if (dl.error) throw dl.error
       const withText = textFor(id)
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), platform, withText, withText?.zone_hint)
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), platform, withText, withText?.zone_hint, edits[id])
       const path = exportPath(planId, Number(p.data!.version_no), i)
       const up = await db().storage.from(BUCKET).upload(path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
       return { name: `travellab_${platform}_${i + 1}.jpg`, buf: out }
     }),
   )
-  const photo_text = overlay ? [overlay.kicker, overlay.title].filter(Boolean).join(' · ') : null
+  const cover = first && edits[first]?.text !== 'off' ? textFor(first) : null
+  const photo_text = cover ? [cover.kicker, cover.title].filter(Boolean).join(' · ') : null
   return { text, platform, files: files.filter((f) => f !== null), photo_text }
 }
 

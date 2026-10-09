@@ -67,6 +67,8 @@ input.in { min-width: 0; border: 1px solid var(--line); background: var(--bg); b
 input.in:focus { border-color: var(--accent); }
 .qchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .qchips button { border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; font-size: 13px; background: var(--section); }
+.qchips button.on { border-color: var(--text); background: var(--bg2); font-weight: 600; }
+.qchips button:disabled { opacity: .5; }
 .yourc { border-left: 3px solid var(--accent); padding: 6px 10px; font-size: 14px; background: var(--bg2); border-radius: 0 10px 10px 0; margin: 6px 0 12px; }
 .facts summary { list-style: none; display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 15px; cursor: pointer; }
 .facts summary::-webkit-details-marker { display: none; }

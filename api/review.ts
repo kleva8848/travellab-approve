@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
-import { previewUrls, sendToChat } from '../server/render.js'
+import { previewUrls, sendToChat, type PhotoEdit } from '../server/render.js'
 import { notifyN8n } from '../server/review.js'
 import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit'
   id?: string
   expected_version_no?: number
   text?: string
@@ -27,6 +27,26 @@ type Body = {
   date?: string
   time?: string
   on?: boolean
+  media_id?: string
+  edit?: Record<string, unknown>
+}
+
+const MAX_PHOTO_TEXT = 140
+// Чипи під фото: кожне поле — значення або null (= прибрати правку, як вирішив агент)
+function parseEdit(raw: Record<string, unknown>): Record<string, string | null> | null {
+  const out: Record<string, string | null> = {}
+  const allowed: Record<string, string[] | 'text'> = { text: ['off', 'top', 'bottom'], look: ['none'], crop: ['centre', 'north', 'south'], title: 'text', kicker: 'text' }
+  for (const [k, v] of Object.entries(raw)) {
+    const rule = allowed[k]
+    if (!rule) return null
+    if (v === null) out[k] = null
+    else if (rule === 'text') {
+      if (typeof v !== 'string') return null
+      out[k] = v.replace(/\s+/g, ' ').trim().slice(0, MAX_PHOTO_TEXT)
+    } else if (typeof v === 'string' && rule.includes(v)) out[k] = v
+    else return null
+  }
+  return Object.keys(out).length ? out : null
 }
 
 // Дії Іри над постом. expected_version_no — захист від подвійного тапу і застарілого екрана (409 → апка перечитує пост)
@@ -106,6 +126,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const r = await db().rpc('tl_add_version', {
         p_content_plan_id: b.id, p_text: text, p_trigger: 'manual', p_expected_version_no: expected,
         p_prompt_version: 'ira_edit', p_review_status: p.data.review_status,
+      })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      return void res.json({ ok: true })
+    }
+
+    // Правка конкретного фото (без тексту / текст вгору-вниз / без обробки / інший кроп / свій текст на фото) —
+    // нова версія з тим самим текстом поста, лише render_params.photo_edits; агент не задіяний, фото перемальовується одразу
+    if (b.action === 'photo_edit') {
+      const mid = String(b.media_id ?? '')
+      const patch = parseEdit(b.edit ?? {})
+      if (!mid || !patch) return void res.status(400).json({ error: 'bad edit' })
+      const p = await db().from('content_plan').select('review_status, version_no, current_version_id, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data?.current_version_id || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
+      const v = await db().from('post_versions').select('media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle()
+      if (v.error) throw v.error
+      if (!((v.data?.media_ids as string[] | null) ?? []).includes(mid)) return void res.status(400).json({ error: 'фото не з цього поста' })
+      const params = (v.data?.render_params as Record<string, unknown> | null) ?? {}
+      const edits = { ...((params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}) }
+      const next: Record<string, unknown> = { ...(edits[mid] ?? {}) }
+      for (const [k, val] of Object.entries(patch)) if (val === null) delete next[k]; else next[k] = val
+      if (Object.keys(next).length) edits[mid] = next as PhotoEdit
+      else delete edits[mid]
+      const r = await db().rpc('tl_add_version', {
+        p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
+        p_render_params: { ...params, photo_edits: edits }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
       })
       if (r.error) {
         if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
