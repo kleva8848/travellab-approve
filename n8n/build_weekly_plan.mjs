@@ -25,16 +25,29 @@ const stories = rows('Supabase - Get New Stories');
 tours.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 stories.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-// ISO-тиждень — для ротації готелів (щоб не той самий готель щотижня)
-const d0 = new Date(); d0.setHours(0, 0, 0, 0); d0.setDate(d0.getDate() + 3 - ((d0.getDay() + 6) % 7));
-const w1 = new Date(d0.getFullYear(), 0, 4);
-const WEEK = 1 + Math.round(((d0 - w1) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7);
-const rotate = (arr) => arr.length ? arr.slice(WEEK % arr.length).concat(arr.slice(0, WEEK % arr.length)) : arr;
+// Дата — за Києвом. Тиждень плану: у понеділок (запуск за розкладом) — поточний, в інші дні (ручний запуск) — наступний.
+const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const today = new Date(kyiv + 'T00:00:00Z');
+const dow = (today.getUTCDay() + 6) % 7; // 0 = Пн
+const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));
+const ymd = (d) => d.toISOString().slice(0, 10);
+const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
+const WEEK_START = ymd(weekStart);
+const dateOf = (day) => ymd(new Date(weekStart.getTime() + DAYS.indexOf(day) * 86400000));
+// ISO-номер тижня плану — для ротації готелів (щоб не той самий готель щотижня)
+const thu = new Date(weekStart.getTime() + 3 * 86400000);
+const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));
 
 // ── Офер: лише найстаріший готовий тур (≤ OFFERS_PER_WEEK). Решта турів чекає наступних тижнів.
 const offerTours = tours.slice(0, OFFERS_PER_WEEK);
 const offerTour = offerTours[0] || null;
 const used = new Set(offerTours.map(t => t.hotel_id).filter(Boolean));
+
+const byId = (a, b) => String(a.hotel_id).localeCompare(String(b.hotel_id));
+const rotate = (arr) => arr.length ? arr.slice(WEEK % arr.length).concat(arr.slice(0, WEEK % arr.length)) : arr;
+// Немає туру → готель з ціною «від … за ніч» (колонки може не бути — тоді просто не офер)
+const priceHotel = offerTour ? null : (rotate(hotels.filter(h => h.hotel_id && Number(h.price_from_night) > 0).sort(byId))[0] || null);
+if (priceHotel) used.add(priceHotel.hotel_id);
 
 // ── «Незвичайні готелі»: детермінований критерій
 // 1) тег 'unusual' / 'незвичайний' у hotels.tags (явна позначка) — пріоритет;
@@ -46,7 +59,6 @@ const UNUSUAL_TEXT = /перш(ий|а|е)\s|єдин|підводн|над\s+(�
 const ready = (h) => !!(h && h.hotel_id && String(h.key_detail || '').trim() && String(h.who_for || '').trim());
 const tagged = (h) => (Array.isArray(h.tags) ? h.tags : []).some(t => UNUSUAL_TAG.test(String(t)));
 const marked = (h) => UNUSUAL_TEXT.test(String(h.key_detail || '')) || UNUSUAL_TEXT.test(String(h.type || ''));
-const byId = (a, b) => String(a.hotel_id).localeCompare(String(b.hotel_id));
 const free = hotels.filter(h => ready(h) && !used.has(h.hotel_id));
 const unusualPool = free.filter(tagged).sort(byId).length ? free.filter(tagged).sort(byId) : free.filter(marked).sort(byId);
 const unusualHotel = unusualPool.length ? unusualPool[WEEK % unusualPool.length] : null;
@@ -71,14 +83,19 @@ S({ day: 'Ср', platform: 'telegram', slot_type: 'content', pillar: 'insider', 
 S({ day: 'Ср', platform: 'instagram', slot_type: 'stories', pillar: 'behind_scenes', note: 'live від Іри' });
 S({ day: 'Ср', platform: 'threads', slot_type: 'personal_thought', pillar: 'personal_take', note: "власна думка/експертиза Іри, без прив'язки до туру чи готелю" });
 
-// Пара B (Чт IG / Пт TG): єдиний прямий офер тижня — найстаріший тур; немає туру → інсайдер про готель
+// Пара B (Чт IG / Пт TG): єдиний прямий офер тижня — найстаріший тур;
+// турів нема → офер на готель з відомою ціною (hotels.price_from_night, SQL 007); нема й такого → інсайдер про готель
 if (offerTour) {
   S({ day: 'Пт', platform: 'telegram', slot_type: 'offer', pillar: 'tour_offer', tour_id: offerTour.tour_id, hotel_id: offerTour.hotel_id, pair_key: 'B' });
   S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'tour_offer', tour_id: offerTour.tour_id, hotel_id: offerTour.hotel_id, pair_key: 'B' });
+} else if (priceHotel) {
+  const note = 'офер на готель: турів у черзі нема, ціна — hotels.price_from_night';
+  S({ day: 'Пт', platform: 'telegram', slot_type: 'offer', pillar: 'tour_offer', hotel_id: priceHotel.hotel_id, pair_key: 'B', note });
+  S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'tour_offer', hotel_id: priceHotel.hotel_id, pair_key: 'B', note });
 } else {
   const hB = nextHotel();
-  S({ day: 'Пт', platform: 'telegram', slot_type: 'content', pillar: 'insider', hotel_id: hB, pair_key: 'B', note: 'турів у черзі нема — замість офера' });
-  S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hB, pair_key: 'B', note: 'турів у черзі нема — замість офера' });
+  S({ day: 'Пт', platform: 'telegram', slot_type: 'content', pillar: 'insider', hotel_id: hB, pair_key: 'B', note: 'турів і цін у черзі нема — замість офера' });
+  S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hB, pair_key: 'B', note: 'турів і цін у черзі нема — замість офера' });
 }
 
 // Пара D (Сб TG / Пт IG / Пт Threads): особиста історія з черги; немає → інсайдер про готель (раніше — 4-й тур-офер)
@@ -107,12 +124,42 @@ if (unusualHotel) {
 S({ day: 'Вт', platform: 'instagram', slot_type: 'reel', pillar: 'video', note: 'джерело — відео з media, тур не потрібен' });
 S({ day: 'Сб', platform: 'instagram', slot_type: 'stories', pillar: 'template', note: 'шаблон агента, тема тижня' });
 
-return slots.map(s => ({ json: s }));`
+// Дата слоту для апки / Buffer Filler (WF-051) і стан огляду
+return slots.map(s => ({ json: Object.assign(s, { week_start: WEEK_START, scheduled_for: dateOf(s.day), review_status: 'planned' }) }));`
 
 const wf = JSON.parse(readFileSync(join(here, 'weekly_plan.json'), 'utf8'))
 const plan = wf.nodes.find((n) => n.name === PLAN_NODE)
 if (!plan) throw new Error('нема вузла ' + PLAN_NODE)
 plan.parameters.jsCode = PLAN_CODE
+
+// Рядки content_plan: + week_start, scheduled_for (дата слоту), review_status='planned' (колонки з 002_review_schema.sql)
+const PREPARE_CODE = String.raw`const slots = $('Code - Build Weekly Slot Plan').all().map(i => i.json);
+return slots.map(s => ({ json: {
+  day: s.day,
+  platform: s.platform,
+  slot_type: s.slot_type,
+  pillar: s.pillar,
+  tour_id: s.tour_id || null,
+  hotel_id: s.hotel_id || null,
+  story_id: s.story_id || null,
+  pair_key: s.pair_key || null,
+  note: s.note || null,
+  status: 'draft',
+  week_start: s.week_start || null,
+  scheduled_for: s.scheduled_for || null,
+  review_status: s.review_status || 'planned'
+} }));`
+const prep = wf.nodes.find((n) => n.name === 'Code - Prepare Content Plan Rows')
+prep.parameters.jsCode = PREPARE_CODE
+const ins = wf.nodes.find((n) => n.name === 'Supabase - Insert Content Plan Rows')
+const fv = ins.parameters.fieldsUi.fieldValues
+for (const f of ['week_start', 'scheduled_for', 'review_status']) {
+  if (!fv.some((x) => x.fieldId === f)) fv.push({ fieldId: f, fieldValue: `={{ $json.${f} }}` })
+}
+// Падіння одного рядка (напр. невідомий CHECK на pillar) не зупиняє вставку решти тижня
+ins.onError = 'continueRegularOutput'
+// Розклад «Пн 07:30» — за Києвом (раніше часовий пояс інстансу)
+wf.settings = { ...wf.settings, timezone: 'Europe/Kyiv' }
 const out = { name: wf.name, nodes: wf.nodes, connections: wf.connections, settings: wf.settings }
 
 // імпорт з тестового харнеса (PLAN_CODE) — без CLI-дій
