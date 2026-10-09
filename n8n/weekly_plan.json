@@ -1,0 +1,520 @@
+{
+  "name": "[TravelLab] Крок 7 Stage 1 - Weekly Slot Plan",
+  "nodes": [
+    {
+      "id": "trigger-schedule",
+      "name": "Schedule - Weekly Mon 7:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 7,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "trigger-webhook",
+      "name": "Webhook - Manual Regenerate",
+      "webhookId": "c8dae615-1926-449f-8a4e-adb817d04965",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-step7-regenerate",
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "get-tours",
+      "name": "Supabase - Get Ready Tours",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "tours",
+        "returnAll": true,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "Ready for Content"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "get-hotels",
+      "name": "Supabase - Get Ready Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "Active"
+            },
+            {
+              "keyName": "content_status",
+              "condition": "eq",
+              "keyValue": "Ready"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "get-stories",
+      "name": "Supabase - Get New Stories",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "story_queue",
+        "returnAll": true,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "new"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "build-plan",
+      "name": "Code - Build Weekly Slot Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// WF-018 — план тижня. Джерело правди: n8n/build_weekly_plan.mjs (репо travellab-approve)\nconst OFFERS_PER_WEEK = 1; // прямих оферів на платформу (TG, IG); Threads — без продажу\n\nconst rows = (n) => $(n).all().map(i => i.json).filter(j => Object.keys(j).length > 0);\nconst tours = rows('Supabase - Get Ready Tours');\nconst hotels = rows('Supabase - Get Ready Hotels');\nconst stories = rows('Supabase - Get New Stories');\n\ntours.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));\nstories.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));\n\n// ISO-тиждень — для ротації готелів (щоб не той самий готель щотижня)\nconst d0 = new Date(); d0.setHours(0, 0, 0, 0); d0.setDate(d0.getDate() + 3 - ((d0.getDay() + 6) % 7));\nconst w1 = new Date(d0.getFullYear(), 0, 4);\nconst WEEK = 1 + Math.round(((d0 - w1) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7);\nconst rotate = (arr) => arr.length ? arr.slice(WEEK % arr.length).concat(arr.slice(0, WEEK % arr.length)) : arr;\n\n// ── Офер: лише найстаріший готовий тур (≤ OFFERS_PER_WEEK). Решта турів чекає наступних тижнів.\nconst offerTours = tours.slice(0, OFFERS_PER_WEEK);\nconst offerTour = offerTours[0] || null;\nconst used = new Set(offerTours.map(t => t.hotel_id).filter(Boolean));\n\n// ── «Незвичайні готелі»: детермінований критерій\n// 1) тег 'unusual' / 'незвичайний' у hotels.tags (явна позначка) — пріоритет;\n// 2) або маркер у key_detail (поле Іри) / type: перший·єдиний, підводний, над водою/океаном, tree-house,\n//    нестандартний/незвичайний, глемпінг, еко-лодж, печера, маяк, замок.\n// Обов'язково key_detail і who_for (як у pre-gate), готель не зайнятий цього тижня. Ротація — за ISO-тижнем.\nconst UNUSUAL_TAG = /^(unusual|незвичайн)/i;\nconst UNUSUAL_TEXT = /перш(ий|а|е)\\s|єдин|підводн|над\\s+(водою|океаном|морем)|tree-?house|на\\s+дерев|нестандартн|незвичайн|unusual|глемпінг|glamping|lodge|лодж|печер|\\bcave|маяк|lighthouse|замок|castle/i;\nconst ready = (h) => !!(h && h.hotel_id && String(h.key_detail || '').trim() && String(h.who_for || '').trim());\nconst tagged = (h) => (Array.isArray(h.tags) ? h.tags : []).some(t => UNUSUAL_TAG.test(String(t)));\nconst marked = (h) => UNUSUAL_TEXT.test(String(h.key_detail || '')) || UNUSUAL_TEXT.test(String(h.type || ''));\nconst byId = (a, b) => String(a.hotel_id).localeCompare(String(b.hotel_id));\nconst free = hotels.filter(h => ready(h) && !used.has(h.hotel_id));\nconst unusualPool = free.filter(tagged).sort(byId).length ? free.filter(tagged).sort(byId) : free.filter(marked).sort(byId);\nconst unusualHotel = unusualPool.length ? unusualPool[WEEK % unusualPool.length] : null;\nif (unusualHotel) used.add(unusualHotel.hotel_id);\n\n// ── Готелі для контент-слотів (замість зайвих оферів): вільні, з ротацією за тижнем\nlet pool = rotate(hotels.filter(h => h.hotel_id && !used.has(h.hotel_id)).sort(byId));\nconst nextHotel = () => { const h = pool.shift() || null; if (h) used.add(h.hotel_id); return h ? h.hotel_id : null; };\n\nconst pickedStory = stories.length > 0 ? stories[0] : null;\nconst slots = [];\nconst S = (o) => slots.push(Object.assign({ tour_id: null, hotel_id: null, story_id: null, pair_key: null }, o));\n\n// Пара A (Пн): був тур-офер → тепер м'яка рекомендація «про готель», без ціни\nconst hA = nextHotel();\nS({ day: 'Пн', platform: 'telegram', slot_type: 'content', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A' });\nS({ day: 'Пн', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A' });\nS({ day: 'Пн', platform: 'threads', slot_type: 'expert_take', pillar: 'tour_expert', hotel_id: hA, pair_key: 'A', note: \"мінімальна прив'язка до готелю, авторитетний тон, не продаж\" });\n\n// Ср: інсайдер (самостійний готель) + IG сторіз + Threads думка\nS({ day: 'Ср', platform: 'telegram', slot_type: 'content', pillar: 'insider', hotel_id: nextHotel() });\nS({ day: 'Ср', platform: 'instagram', slot_type: 'stories', pillar: 'behind_scenes', note: 'live від Іри' });\nS({ day: 'Ср', platform: 'threads', slot_type: 'personal_thought', pillar: 'personal_take', note: \"власна думка/експертиза Іри, без прив'язки до туру чи готелю\" });\n\n// Пара B (Чт IG / Пт TG): єдиний прямий офер тижня — найстаріший тур; немає туру → інсайдер про готель\nif (offerTour) {\n  S({ day: 'Пт', platform: 'telegram', slot_type: 'offer', pillar: 'tour_offer', tour_id: offerTour.tour_id, hotel_id: offerTour.hotel_id, pair_key: 'B' });\n  S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'tour_offer', tour_id: offerTour.tour_id, hotel_id: offerTour.hotel_id, pair_key: 'B' });\n} else {\n  const hB = nextHotel();\n  S({ day: 'Пт', platform: 'telegram', slot_type: 'content', pillar: 'insider', hotel_id: hB, pair_key: 'B', note: 'турів у черзі нема — замість офера' });\n  S({ day: 'Чт', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hB, pair_key: 'B', note: 'турів у черзі нема — замість офера' });\n}\n\n// Пара D (Сб TG / Пт IG / Пт Threads): особиста історія з черги; немає → інсайдер про готель (раніше — 4-й тур-офер)\nif (pickedStory) {\n  S({ day: 'Сб', platform: 'telegram', slot_type: 'content', pillar: pickedStory.pillar, hotel_id: pickedStory.hotel_id || null, story_id: pickedStory.id, pair_key: 'D' });\n} else {\n  S({ day: 'Сб', platform: 'telegram', slot_type: 'content', pillar: 'insider', hotel_id: nextHotel(), pair_key: 'D' });\n}\nconst sat = slots[slots.length - 1];\nS({ day: 'Пт', platform: 'instagram', slot_type: 'reel_or_feed', pillar: 'personal', hotel_id: sat.hotel_id, story_id: sat.story_id, pair_key: 'D' });\nS({ day: 'Пт', platform: 'threads', slot_type: 'personal_thought', pillar: sat.story_id ? sat.pillar : 'personal_take', story_id: sat.story_id || null, pair_key: 'D', note: 'особиста історія Іри в авторитетному форматі, якщо є в черзі; інакше самостійна думка' });\n\n// Пара C (Нд): рубрика «Незвичайні готелі» — карусель TG + IG, 1/тиждень, якщо є кандидат;\n// інакше — атмосфера про готель (раніше — сезонний тур-офер)\nif (unusualHotel) {\n  const note = 'рубрика «Незвичайні готелі», карусель: чим саме цей готель не схожий на інші (з key_detail)';\n  S({ day: 'Нд', platform: 'telegram', slot_type: 'feed_carousel', pillar: 'unusual_hotels', hotel_id: unusualHotel.hotel_id, pair_key: 'C', note });\n  S({ day: 'Нд', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'unusual_hotels', hotel_id: unusualHotel.hotel_id, pair_key: 'C', note });\n} else {\n  const hC = nextHotel();\n  S({ day: 'Нд', platform: 'telegram', slot_type: 'content', pillar: 'atmosphere', hotel_id: hC, pair_key: 'C' });\n  S({ day: 'Нд', platform: 'instagram', slot_type: 'feed', pillar: 'atmosphere', hotel_id: hC, pair_key: 'C' });\n}\n\n// IG без прив'язки до черги\nS({ day: 'Вт', platform: 'instagram', slot_type: 'reel', pillar: 'video', note: 'джерело — відео з media, тур не потрібен' });\nS({ day: 'Сб', platform: 'instagram', slot_type: 'stories', pillar: 'template', note: 'шаблон агента, тема тижня' });\n\nreturn slots.map(s => ({ json: s }));"
+      }
+    },
+    {
+      "id": "tours-to-mark",
+      "name": "Code - Tours To Mark",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const items = $('Code - Build Weekly Slot Plan').all().map(i => i.json);\nconst tourIds = [...new Set(items.filter(s => s.tour_id).map(s => s.tour_id))];\nreturn tourIds.map(id => ({ json: { tour_id: id } }));"
+      }
+    },
+    {
+      "id": "mark-tours",
+      "name": "Supabase - Mark Tours Assigned",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        1792,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "tours",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "tour_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.tour_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "Assigned"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "stories-to-mark",
+      "name": "Code - Stories To Mark",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        192
+      ],
+      "parameters": {
+        "jsCode": "const items = $('Code - Build Weekly Slot Plan').all().map(i => i.json);\nconst storyIds = [...new Set(items.filter(s => s.story_id).map(s => s.story_id))];\nreturn storyIds.map(id => ({ json: { story_id: id } }));"
+      }
+    },
+    {
+      "id": "mark-stories",
+      "name": "Supabase - Mark Stories Used",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        1792,
+        192
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "story_queue",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.story_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "used"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "format-report",
+      "name": "Code - Format Weekly Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst dayOrder = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];\nconst tg = items.filter(s => s.platform === 'telegram').sort((a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day));\nconst ig = items.filter(s => s.platform === 'instagram').sort((a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day));\nconst threads = items.filter(s => s.platform === 'threads').sort((a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day));\n\nfunction line(s) {\n  let ref;\n  if (s.tour_id) ref = 'тур ' + s.tour_id;\n  else if (s.story_id) ref = 'історія ' + s.story_id;\n  else if (s.hotel_id) ref = 'готель ' + s.hotel_id;\n  else ref = s.note || 'без прив\\'язки';\n  const cleanType = s.slot_type.replace(/_/g, '-');\n  const cleanPillar = s.pillar.replace(/_/g, ' ');\n  return s.day + ' — ' + cleanType + ' (' + cleanPillar + ') — ' + ref;\n}\n\nlet text = '📅 Крок 7 Stage 1 — тестовий план тижня (без AI-тексту, тільки розподіл слотів)\\n\\n📢 Telegram:\\n';\ntext += tg.map(line).join('\\n');\ntext += '\\n\\n📸 Instagram:\\n';\ntext += ig.map(line).join('\\n');\ntext += '\\n\\n🧵 Threads:\\n';\ntext += threads.map(line).join('\\n');\n\nreturn [{ json: { text } }];"
+      }
+    },
+    {
+      "id": "send-report",
+      "name": "Telegram - Send Weekly Plan Report",
+      "webhookId": "b3ce591f-016e-4dfe-8a1c-c81c20d8c1ad",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1344,
+        96
+      ],
+      "parameters": {
+        "chatId": "293569556",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "afqZPOV7VoUd3LoS",
+          "name": "@vlad_assistantbot"
+        }
+      }
+    },
+    {
+      "id": "prepare-content-plan",
+      "name": "Code - Prepare Content Plan Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        384
+      ],
+      "parameters": {
+        "jsCode": "const slots = $('Code - Build Weekly Slot Plan').all().map(i => i.json);\nreturn slots.map(s => ({ json: {\n  day: s.day,\n  platform: s.platform,\n  slot_type: s.slot_type,\n  pillar: s.pillar,\n  tour_id: s.tour_id || null,\n  hotel_id: s.hotel_id || null,\n  story_id: s.story_id || null,\n  pair_key: s.pair_key || null,\n  note: s.note || null,\n  status: 'draft'\n} }));"
+      }
+    },
+    {
+      "id": "insert-content-plan",
+      "name": "Supabase - Insert Content Plan Rows",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1792,
+        384
+      ],
+      "parameters": {
+        "tableId": "content_plan",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "day",
+              "fieldValue": "={{ $json.day }}"
+            },
+            {
+              "fieldId": "platform",
+              "fieldValue": "={{ $json.platform }}"
+            },
+            {
+              "fieldId": "slot_type",
+              "fieldValue": "={{ $json.slot_type }}"
+            },
+            {
+              "fieldId": "pillar",
+              "fieldValue": "={{ $json.pillar }}"
+            },
+            {
+              "fieldId": "tour_id",
+              "fieldValue": "={{ $json.tour_id }}"
+            },
+            {
+              "fieldId": "hotel_id",
+              "fieldValue": "={{ $json.hotel_id }}"
+            },
+            {
+              "fieldId": "story_id",
+              "fieldValue": "={{ $json.story_id }}"
+            },
+            {
+              "fieldId": "pair_key",
+              "fieldValue": "={{ $json.pair_key }}"
+            },
+            {
+              "fieldId": "note",
+              "fieldValue": "={{ $json.note }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Weekly Mon 7:30": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Ready Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Regenerate": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Ready Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Ready Tours": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Ready Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Ready Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get New Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get New Stories": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Weekly Slot Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Weekly Slot Plan": {
+      "main": [
+        [
+          {
+            "node": "Code - Format Weekly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Tours To Mark": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Tours Assigned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Stories To Mark": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Stories Used",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format Weekly Report": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Weekly Plan Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Weekly Plan Report": {
+      "main": [
+        [
+          {
+            "node": "Code - Tours To Mark",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code - Stories To Mark",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code - Prepare Content Plan Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare Content Plan Rows": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Content Plan Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "binaryMode": "separate"
+  }
+}
