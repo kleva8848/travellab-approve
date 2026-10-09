@@ -3,6 +3,7 @@ import sharp from 'sharp'
 import { db, getSettings } from './http.js'
 import { calmZone, softVeil, type Band, type Zone } from './look.js'
 import { textLayer, type PhotoText } from './overlay.js'
+import { addWatermark, watermarkTag, type WmKind } from './watermark.js'
 
 const BUCKET = 'post-media'
 
@@ -19,13 +20,14 @@ const STORY = { w: 1080, h: 1920 }
 const STORY_SAFE = 0.09
 // Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю; r4 — без розриву «2–4» і висячих «у», «на») → старі готові фото не беремо з кешу
 const REV = 'r4'
-const exportPath = (planId: string, versionNo: number, i: number) => `exports/${planId}/v${versionNo}${REV}_${i + 1}.jpg`
+// tag — водяні знаки (watermark.ts): '' коли вимкнені → назви файлів як раніше
+const exportPath = (planId: string, versionNo: number, i: number, tag = '') => `exports/${planId}/v${versionNo}${REV}${tag}_${i + 1}.jpg`
 
 // Ручні правки Іри до конкретного фото (чипи під фото) — render_params.photo_edits[media_id]
 export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
 const CROP = { centre: sharp.gravity.centre, north: sharp.gravity.north, south: sharp.gravity.south } as const
 
-export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}): Promise<Buffer> {
+export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null): Promise<Buffer> {
   // Спершу поворот за EXIF — далі розміри вже «як бачить людина»
   const { data, info } = await sharp(src).rotate().toBuffer({ resolveWithObject: true })
   let w = FEED.w
@@ -50,6 +52,7 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none')
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
   if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
+  if (wm) img = sharp(await addWatermark(await img.png().toBuffer(), wm, zone?.zone ?? null, pad, inset))
   return img.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
 }
 
@@ -167,6 +170,8 @@ async function render(planId: string, story?: number): Promise<Rendered> {
     if (Object.keys(patch).length) await db().from('post_versions').update({ render_params: { ...params, ...patch } }).eq('id', v.data!.id)
   }
   const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
+  const tag = await watermarkTag()
+  const wm: WmKind | null = tag ? (story !== undefined ? 'wm2' : 'wm3') : null
   // Текст Іри на фото має пріоритет над текстом агента
   const textFor = (id: string): (PhotoText & { zone_hint?: string | null }) | null => {
     const e = edits[id] ?? {}
@@ -186,9 +191,9 @@ async function render(planId: string, story?: number): Promise<Rendered> {
       const dl = await db().storage.from(BUCKET).download(src)
       if (dl.error) throw dl.error
       const withText = textFor(id)
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), story !== undefined ? 'story' : platform, withText, withText?.zone_hint, edits[id])
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), story !== undefined ? 'story' : platform, withText, withText?.zone_hint, edits[id], wm)
       if (story !== undefined) return { name: `travellab_story_${i + 1}.jpg`, buf: out }
-      const path = exportPath(planId, Number(p.data!.version_no), i)
+      const path = exportPath(planId, Number(p.data!.version_no), i, tag)
       const up = await db().storage.from(BUCKET).upload(path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
       return { name: `travellab_${platform}_${i + 1}.jpg`, buf: out }
@@ -213,11 +218,12 @@ export async function previewUrls(planId: string): Promise<{ version_no: number;
   const m = await db().from('media').select('media_id, storage_path').in('media_id', ids)
   if (m.error) throw m.error
   const has = new Set((m.data ?? []).filter((x) => x.storage_path).map((x) => x.media_id as string))
-  const paths = ids.map((id, i) => (has.has(id) ? exportPath(planId, n, i) : null))
+  const tag = await watermarkTag()
+  const paths = ids.map((id, i) => (has.has(id) ? exportPath(planId, n, i, tag) : null))
   const want = paths.filter((x): x is string => Boolean(x))
   if (!want.length) return { version_no: n, urls: paths }
 
-  const list = await db().storage.from(BUCKET).list(`exports/${planId}`, { search: `v${n}${REV}_`, limit: 100 })
+  const list = await db().storage.from(BUCKET).list(`exports/${planId}`, { search: `v${n}${REV}${tag}_`, limit: 100 })
   const ready = new Set((list.data ?? []).map((f) => `exports/${planId}/${f.name}`))
   if (!want.every((x) => ready.has(x))) await render(planId)
 

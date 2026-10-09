@@ -11,7 +11,7 @@ const CREAM = '#F3EBDD'
 const GRAPH = '#2F2B27'
 
 let fonts: { name: string; data: Buffer; weight: 400; style: 'normal' }[] | null = null
-function loadFonts() {
+export function loadFonts() {
   if (!fonts) {
     const dir = join(process.cwd(), 'server', 'fonts')
     fonts = [

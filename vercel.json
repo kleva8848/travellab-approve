@@ -12,7 +12,7 @@
   ],
   "functions": {
     "api/review.ts": {
-      "includeFiles": "server/fonts/**",
+      "includeFiles": "server/**",
       "maxDuration": 60
     }
   }
