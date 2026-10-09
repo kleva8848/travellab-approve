@@ -6,6 +6,7 @@ import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { Carousel } from './Carousel'
 import { DataQuestions } from './DataQuestions'
 import { whenLabel } from './CalendarScreen'
+import { Inquiries } from './Inquiries'
 import { Center, Label, Spinner } from './ui'
 
 export const PLATFORM: Record<string, { name: string; cls: string }> = {
@@ -391,6 +392,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           <span className={`chip ${plat.cls}`}>{plat.name}</span>
           <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
           {approved && <span className="chip okc">{published ? 'викладено' : 'затверджено'}</span>}
+          {published && post.inquiries !== undefined && <Inquiries id={post.plan.id} versionNo={post.plan.version_no} count={post.inquiries} onChanged={onChanged} />}
           {cur.version_no > 1 && <span className="chip">версія {cur.version_no}</span>}
           {!regenerating && cur.text && (
             <button className={`chip ${cur.is_golden ? 'okc' : ''}`} disabled={busy} onClick={() => void toggleGolden()}>

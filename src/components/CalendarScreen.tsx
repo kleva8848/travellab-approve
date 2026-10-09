@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { reviewAction, type QueueItem } from '../lib/api'
 import { haptic } from '../lib/tg'
+import { Inquiries } from './Inquiries'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Label } from './ui'
 
@@ -120,6 +121,9 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
           </button>
         )}
       </div>
+      {isPublished && q.inquiries !== undefined && (
+        <div className="-mt-1 pb-2.5"><Inquiries id={q.id} versionNo={q.version_no} count={q.inquiries} onChanged={onChanged} /></div>
+      )}
       {editing && edit && (
         <div className="flex items-center gap-2 pb-3">
           <input type="date" className="in" style={{ flex: 1, height: 38 }} value={edit.date} onChange={(e) => setEdit({ ...edit, date: e.target.value })} />

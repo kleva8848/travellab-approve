@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { previewUrls, sendStory, sendToChat, type PhotoEdit } from '../server/render.js'
-import { notifyN8n, openQuestions } from '../server/review.js'
+import { inquiryCounts, notifyN8n, openQuestions } from '../server/review.js'
 import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
 
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry'
   id?: string
   expected_version_no?: number
   text?: string
@@ -278,6 +278,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('id')
       if (r.error) throw r.error
       return r.data?.length ? void res.json({ ok: true }) : void conflict()
+    }
+
+    // «💬 Написали з цього поста»: on=true → +1 звернення (рядок post_inquiries), on=false → зняти останнє.
+    // Лише для викладених постів; без таблиці (SQL 014) — 503 schema_pending, апка кнопку й так не показує
+    if (b.action === 'inquiry') {
+      const p = await db().from('content_plan').select('review_status').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (p.data?.review_status !== 'published') return void conflict()
+      if (b.on !== false) {
+        const r = await db().from('post_inquiries').insert({ content_plan_id: b.id, author_tg_id: user.id })
+        if (r.error) throw r.error
+      } else {
+        const last = await db().from('post_inquiries').select('id').eq('content_plan_id', b.id).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1)
+        if (last.error) throw last.error
+        if (last.data?.length) {
+          const d = await db().from('post_inquiries').delete().eq('id', last.data[0].id)
+          if (d.error) throw d.error
+        }
+      }
+      const counts = await inquiryCounts([b.id])
+      return void res.json({ ok: true, inquiries: counts?.get(b.id) ?? 0 })
     }
 
     // Іра пропускає пост: зникає з черги й календаря (статус skipped — кінцевий)

@@ -110,6 +110,17 @@ async function namesFor(rows: Pick<PlanRow, 'hotel_id' | 'tour_id'>[]) {
 
 const PUBLISHED_DAYS = 30
 
+// «💬 Написали з цього поста»: скільки звернень Іра відмітила по кожному опублікованому посту.
+// null — таблиці ще нема (SQL 014) → кнопку в апці не показуємо
+export async function inquiryCounts(ids: string[]): Promise<Map<string, number> | null> {
+  if (!ids.length) return new Map()
+  const r = await db().from('post_inquiries').select('content_plan_id').in('content_plan_id', ids)
+  if (r.error) return null
+  const m = new Map<string, number>(ids.map((id) => [id, 0]))
+  for (const x of (r.data ?? []) as { content_plan_id: string }[]) m.set(x.content_plan_id, (m.get(x.content_plan_id) ?? 0) + 1)
+  return m
+}
+
 export async function loadQueue() {
   // + опубліковані за останні 30 днів — для календаря
   const since = new Date(Date.now() - PUBLISHED_DAYS * 864e5).toISOString()
@@ -134,6 +145,7 @@ export async function loadQueue() {
   const versions = new Map((v.data ?? []).map((x) => [x.id as string, x]))
   const { hotels, tours } = await namesFor(rows)
   const questions = rows.some((p) => p.review_status === 'needs_data') ? await openQuestions() : []
+  const inquiries = await inquiryCounts(rows.filter((p) => p.review_status === 'published').map((p) => p.id))
   return rows.map((p) => {
     const ver = p.current_version_id ? versions.get(p.current_version_id) : undefined
     const mine = p.review_status === 'needs_data' ? questions.filter((q) => forPlan(q, p)) : []
@@ -143,6 +155,7 @@ export async function loadQueue() {
       tour_title: (p.tour_id && tours.get(p.tour_id)?.title) || null,
       preview: mine.length ? mine[0].question : (ver?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
       questions: mine.length,
+      ...(p.review_status === 'published' && inquiries ? { inquiries: inquiries.get(p.id) ?? 0 } : {}),
     }
   })
 }
@@ -177,12 +190,13 @@ export async function loadPost(id: string) {
   if (v.error) throw v.error
   if (c.error) throw c.error
   const versions = (v.data ?? []) as VersionRow[]
-  const [media, hotelPhotos, need, questions, voiceLink] = await Promise.all([
+  const [media, hotelPhotos, need, questions, voiceLink, inquiries] = await Promise.all([
     mediaViews(versions.flatMap((x) => x.media_ids ?? [])).catch(() => ({})),
     hotelPhotoCount(plan.hotel_id),
     db().rpc('tl_photo_count', { p_platform: plan.platform, p_slot_type: plan.slot_type, p_pillar: plan.pillar }),
     openQuestions(plan),
     voiceAnswerLink(plan.id).catch(() => null),
+    plan.review_status === 'published' ? inquiryCounts([plan.id]) : Promise.resolve(null),
   ])
   return {
     plan,
@@ -195,6 +209,7 @@ export async function loadPost(id: string) {
     hotel_photos: hotelPhotos,
     questions: questions.map(({ id, field, question, why_needed }) => ({ id, field, question, why_needed })),
     voice_link: voiceLink,
+    ...(inquiries ? { inquiries: inquiries.get(plan.id) ?? 0 } : {}),
   }
 }
 

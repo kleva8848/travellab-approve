@@ -66,7 +66,8 @@ export type Plan = {
   published_at: string | null
 }
 
-export type QueueItem = Plan & { hotel_name: string | null; tour_title: string | null; preview: string; questions?: number }
+// inquiries — «💬 Написали з цього поста» (лише викладені; нема поля — кнопку не показуємо)
+export type QueueItem = Plan & { hotel_name: string | null; tour_title: string | null; preview: string; questions?: number; inquiries?: number }
 
 export type Version = {
   id: string
@@ -114,12 +115,13 @@ export type PostDetail = {
   questions?: Question[]
   // посилання в бот «Відповісти голосом»; null — голос через бот ще не ввімкнено
   voice_link?: string | null
+  inquiries?: number
 }
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
 type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
-type ActionResult = { ok: true; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
+type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 export async function getQueue(): Promise<QueueItem[]> {
   if (isDemo) {
@@ -140,7 +142,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -159,7 +161,7 @@ const demo = (() => {
   const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string, photos: string[] = []): PostDetail => ({
     plan: {
       id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
-      review_status: status, version_no: texts.length, current_version_id: texts.length ? `${id}-v${texts.length}` : null, approved_at: null, published_at: null,
+      review_status: status, version_no: texts.length, current_version_id: texts.length ? `${id}-v${texts.length}` : null, approved_at: null, published_at: status === 'published' ? now : null,
     },
     hotel: hotel ? { hotel_id: 'HTL-000', name: hotel, country: '—' } : null,
     tour: null,
@@ -191,6 +193,9 @@ const demo = (() => {
     mk('d3', 'Пт', 'threads', 'personal_take', null, [
       'Є готель, за яким я зараз уважно спостерігаю. З висновками не поспішаю — хочу побачити, як він покаже себе в перший сезон.',
     ], 'approved'),
+    { ...mk('d5', 'Нд', 'telegram', 'hotel_place', 'Демо-готель на атолі', [
+      'Тут найцінніше — тиша після восьмої вечора. Ресторан закривається рано, і острів належить гостям.\n\nДеталі на ваші дати — пишіть у приват.',
+    ], 'published'), inquiries: 2 },
   ]
   const byId = (id: string) => {
     const p = posts.find((x) => x.plan.id === id)
@@ -203,6 +208,7 @@ const demo = (() => {
         ...p.plan, hotel_name: p.hotel?.name ?? null, tour_title: null,
         preview: p.plan.review_status === 'needs_data' && p.questions?.length ? p.questions[0].question : (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
         questions: p.plan.review_status === 'needs_data' ? p.questions?.length ?? 0 : 0,
+        ...(p.plan.review_status === 'published' ? { inquiries: p.inquiries ?? 0 } : {}),
       })),
     post: (id: string): PostDetail => structuredClone(byId(id)),
     act: (id: string, action: string, extra: Partial<CommentInput> & ActionExtra): ActionResult => {
@@ -275,6 +281,7 @@ const demo = (() => {
         }, 4000)
         return { ok: true as const, queued: true, remaining: 0 }
       }
+      if (action === 'inquiry') { p.inquiries = Math.max(0, (p.inquiries ?? 0) + (extra.on === false ? -1 : 1)); return { ok: true as const, inquiries: p.inquiries } }
       if (action === 'skip') p.plan.review_status = 'skipped'
       if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
