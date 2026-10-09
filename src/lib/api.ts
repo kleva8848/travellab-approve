@@ -104,7 +104,7 @@ export type PostDetail = {
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
 type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string }
-type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null }
+type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[] }
 
 export async function getQueue(): Promise<QueueItem[]> {
   if (isDemo) {
@@ -125,7 +125,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -195,6 +195,7 @@ const demo = (() => {
       }
       if (action === 'publish') { p.plan.review_status = 'published'; p.plan.published_at = new Date().toISOString() }
       if (action === 'unpublish') { p.plan.review_status = 'approved'; p.plan.published_at = null }
+      if (action === 'preview') return { ok: true as const, version_no: p.plan.version_no, urls: [] }
       if (action === 'send_to_chat') return { ok: true as const, photos: p.versions.at(-1)?.media_ids.length ?? 0 }
       if (action === 'add_photo') {
         const prev = p.versions.at(-1)!

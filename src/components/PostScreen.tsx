@@ -54,6 +54,9 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [ownMode, setOwnMode] = useState<'replace' | 'add'>('add')
   const [uploading, setUploading] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
+  // Готовий вигляд фото поточної версії (рамка + обробка + текст) — рендерить сервер
+  const [ready, setReady] = useState<{ version: string; urls: (string | null)[] } | null>(null)
+  const [rendering, setRendering] = useState(false)
 
   useBackButton(true, onBack)
 
@@ -96,6 +99,21 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   }, [post, cur])
   const askedFor = useMemo(() => post?.comments.filter((c) => cur?.comment_id && c.id === cur.comment_id) ?? [], [post, cur])
   const pending = useMemo(() => post?.comments.filter((c) => c.status === 'new' || c.status === 'processing') ?? [], [post])
+
+  const curId = cur?.id
+  const curPhotos = (cur?.media_ids ?? []).length
+  useEffect(() => {
+    if (!post || !curId || !curPhotos) return
+    let alive = true
+    setRendering(true)
+    reviewAction(post.plan.id, post.plan.version_no, 'preview')
+      .then((r) => { if (alive) setReady({ version: curId, urls: r.urls ?? [] }) })
+      .catch(() => { if (alive) setReady(null) }) // не вийшло — лишається сире фото, «Надіслати в чат» все одно оброблить
+      .finally(() => { if (alive) setRendering(false) })
+    return () => { alive = false }
+    // лише коли змінилась версія (нове фото / текст)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curId, curPhotos])
 
   if (error && !post) return <Center><p style={{ color: 'var(--hint)' }}>Не вдалося завантажити пост. {error}</p><button className="btn sec mt-4" onClick={() => void load()}>Спробувати ще</button></Center>
   if (!post || !cur) return <Center><Spinner /></Center>
@@ -189,7 +207,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
       const r = await act('add_photo', { path: u.path, mode: ownMode, slide_idx: slide, width: own.width, height: own.height, preview: own.preview })
       if (!r) return
       haptic('success')
-      setToast('Фото додано — опис агент допише сам')
+      setToast('Фото додано — зараз оброблю і покажу готове')
       setOwn(null)
       await load()
     } catch (e) {
@@ -322,7 +340,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
 
             {(shown.media_ids ?? []).length > 0 ? (
               <div className="mb-3">
-                <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} />
+                <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} ready={ready && ready.version === shown.id ? ready.urls : undefined} />
+                {rendering && shown.id === cur.id && !(ready && ready.version === cur.id) && (
+                  <div className="mt-1.5 text-[13px]" style={{ color: 'var(--hint)' }}>Готую фото: рамка, обробка, текст…</div>
+                )}
                 {view === 'new' && !approved && (
                   <div className="mt-2.5 flex gap-2">
                     <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => void swapPhoto()}>

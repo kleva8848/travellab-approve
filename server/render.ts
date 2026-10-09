@@ -114,6 +114,34 @@ async function render(planId: string): Promise<Rendered> {
   return { text, platform, files: files.filter((f) => f !== null), photo_text }
 }
 
+// Готовий вигляд поточної версії для апки: Іра одразу бачить фото так, як воно піде (рамка + обробка + текст).
+// Рендер кешується в exports/<plan>/v<N>_<i>.jpg — нова версія (інше фото / текст) = новий номер → новий рендер
+export async function previewUrls(planId: string): Promise<{ version_no: number; urls: (string | null)[] }> {
+  const p = await db().from('content_plan').select('version_no, current_version_id').eq('id', planId).maybeSingle()
+  if (p.error) throw p.error
+  if (!p.data?.current_version_id) return { version_no: 0, urls: [] }
+  const n = Number(p.data.version_no)
+  const v = await db().from('post_versions').select('media_ids').eq('id', p.data.current_version_id).maybeSingle()
+  if (v.error) throw v.error
+  const ids = ((v.data?.media_ids as string[] | null) ?? []).slice(0, 10)
+  if (!ids.length) return { version_no: n, urls: [] }
+  const m = await db().from('media').select('media_id, storage_path').in('media_id', ids)
+  if (m.error) throw m.error
+  const has = new Set((m.data ?? []).filter((x) => x.storage_path).map((x) => x.media_id as string))
+  const paths = ids.map((id, i) => (has.has(id) ? `exports/${planId}/v${n}_${i + 1}.jpg` : null))
+  const want = paths.filter((x): x is string => Boolean(x))
+  if (!want.length) return { version_no: n, urls: paths }
+
+  const list = await db().storage.from(BUCKET).list(`exports/${planId}`, { search: `v${n}_`, limit: 100 })
+  const ready = new Set((list.data ?? []).map((f) => `exports/${planId}/${f.name}`))
+  if (!want.every((x) => ready.has(x))) await render(planId)
+
+  const signed = await db().storage.from(BUCKET).createSignedUrls(want, 60 * 60)
+  if (signed.error) throw signed.error
+  const byPath = new Map((signed.data ?? []).map((s) => [s.path, s.signedUrl]))
+  return { version_no: n, urls: paths.map((x) => (x ? byPath.get(x) ?? null : null)) }
+}
+
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 // **жирний** з тексту агента → HTML Telegram (у чаті Іра скопіює вже з форматуванням)
 const toHtml = (text: string) => esc(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')

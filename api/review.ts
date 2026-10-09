@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
-import { sendToChat } from '../server/render.js'
+import { previewUrls, sendToChat } from '../server/render.js'
 import { notifyN8n } from '../server/review.js'
 import { failSchema } from '../server/schema.js'
 
@@ -10,7 +10,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview'
   id?: string
   expected_version_no?: number
   text?: string
@@ -61,6 +61,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const swapped = Boolean(r.data && (r.data as { id?: string }).id)
       return void res.json({ ok: true, swapped })
+    }
+
+    // Готовий вигляд фото (рамка + обробка + текст) — апка показує його замість сирого фото
+    if (b.action === 'preview') {
+      return void res.json({ ok: true, ...(await previewUrls(b.id)) })
     }
 
     // Готовий пост у чат бота: текст + фото з білою рамкою файлами — звідти Іра публікує
