@@ -22,7 +22,8 @@ function loadFonts() {
   return fonts
 }
 
-export type PhotoText = { kicker?: string; title: string }
+// small — підпис на фото 2–10 каруселі: лише один рядок, дрібніше за заголовок обкладинки
+export type PhotoText = { kicker?: string; title: string; small?: boolean }
 
 type El = { type: string; props: Record<string, unknown> }
 const el = (type: string, style: Record<string, unknown>, children?: unknown): El => ({ type, props: { style, children } })
@@ -32,7 +33,7 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
   const color = zone.text === 'light' ? CREAM : GRAPH
   const shadow = zone.text === 'light' ? '0 2px 18px rgba(0,0,0,0.35)' : 'none'
   const inner = w - 2 * frame
-  const titleSize = Math.round(inner * (t.title.length > 34 ? 0.058 : 0.068))
+  const titleSize = Math.round(inner * (t.small ? 0.05 : t.title.length > 34 ? 0.058 : 0.068))
   const kids: El[] = []
   if (t.kicker) {
     kids.push(el('div', {

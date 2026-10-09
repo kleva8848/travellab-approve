@@ -1,6 +1,7 @@
 // node n8n/build_photo_text.mjs [dump|create|update <id>]
-// «[TravelLab] Photo text (Mini App)»: Vercel (render.ts, «Надіслати в чат») → текст на перше фото поста.
-// Vision бачить фото (де люди / обличчя) + текст поста → {kicker, title, zone}. Синхронно: відповідь — JSON останнього вузла.
+// «[TravelLab] Photo text (Mini App)»: Vercel (render.ts) → текст на фото поста.
+// role=cover (перше фото): Vision бачить фото (де люди / обличчя) + текст поста → {kicker, title, zone}.
+// role=captions (фото 2–10 каруселі): усі фото одним запитом → {captions: [{title, zone}]} — підписи не повторюються. Синхронно: відповідь — JSON останнього вузла.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,22 +29,51 @@ kicker — дрібний рядок над заголовком (шрифт Ten
 
 zone — де на фото менше деталей і НЕМАЄ людей, облич, дітей: "top" або "bottom". Текст не має лягати на людей.`
 
+const CAPTIONS = `Ти пишеш короткі підписи НА ФОТО каруселі Іри Стойко (TravelLab — кураторка сімейного острівного відпочинку, Instagram / Telegram).
+Тобі дають текст поста і фото слайдів 2, 3, … по черзі (обкладинка вже має свій заголовок — його не повторюй).
+Поверни СТРОГО JSON: {"captions": [{"title": "...", "zone": "top" | "bottom"}, ...]} — рівно стільки елементів, скільки фото, у тому ж порядку.
+
+title — підпис саме до ЦЬОГО фото:
+- українською, з великої літери, 2–6 слів, до 32 знаків, без крапки в кінці;
+- що конкретно видно на фото і чим це корисно (напр. «Вілла з власним басейном», «Вечеря біля моря», «Дитячий клуб біля пляжу»);
+- деталі, яких не видно на фото, — лише якщо вони є в тексті поста; нічого не вигадуй (цифри, ціни, послуги);
+- підписи в каруселі різні між собою, без повторів слів-штампів;
+- спокійний тон Іри: без реклами, без «найкращий / рідкісний / мало де / унікальний / неймовірний», без знаків оклику, емодзі, хештегів і лапок.
+
+zone — де на цьому фото менше деталей і НЕМАЄ людей, облич, дітей: "top" або "bottom".`
+
 const prepare = `const b = $json.body || {};
+const head = 'Платформа: ' + (b.platform || '') + '\\nГотель / місце з бази: ' + (b.hotel || '—') + '\\n\\nТекст поста:\\n' + String(b.text || '').slice(0, 3000);
+if (b.role === 'captions') {
+  const urls = Array.isArray(b.image_urls) ? b.image_urls.slice(0, 9) : [];
+  if (!b.text || !urls.length) throw new Error('потрібні text і image_urls');
+  const content = [{ type: 'text', text: head + '\\n\\nФото слайдів (' + urls.length + ' шт.) — нижче по черзі.' }];
+  urls.forEach((u, i) => { content.push({ type: 'text', text: 'Фото ' + (i + 1) + ':' }); content.push({ type: 'image_url', image_url: { url: u, detail: 'low' } }); });
+  return [{ json: { body: {
+    model: 'gpt-4.1', temperature: 0.5, response_format: { type: 'json_object' },
+    messages: [ { role: 'system', content: ${JSON.stringify(CAPTIONS)} }, { role: 'user', content } ],
+  } } }];
+}
 if (!b.text || !b.image_url) throw new Error('потрібні text і image_url');
-const user = 'Платформа: ' + (b.platform || '') + '\\nГотель / місце з бази: ' + (b.hotel || '—') + '\\n\\nТекст поста:\\n' + String(b.text).slice(0, 3000);
 return [{ json: { body: {
   model: 'gpt-4.1',
   temperature: 0.5,
   response_format: { type: 'json_object' },
   messages: [
     { role: 'system', content: ${JSON.stringify(SYSTEM)} },
-    { role: 'user', content: [ { type: 'text', text: user }, { type: 'image_url', image_url: { url: b.image_url, detail: 'low' } } ] },
+    { role: 'user', content: [ { type: 'text', text: head }, { type: 'image_url', image_url: { url: b.image_url, detail: 'low' } } ] },
   ],
 } } }];`
 
 const parse = `let o = {};
 try { o = JSON.parse($json.choices[0].message.content); } catch (e) { o = {}; }
 const clean = (s, n) => String(s || '').replace(/[«»"#!]/g, '').replace(/\\s+/g, ' ').replace(/[.\\s]+$/, '').trim().slice(0, n);
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const zoneOf = (z) => (z === 'top' || z === 'bottom' ? z : null);
+if (($('Webhook').first().json.body || {}).role === 'captions') {
+  const list = Array.isArray(o.captions) ? o.captions : [];
+  return [{ json: { captions: list.map((c) => ({ title: cap(clean(c && c.title, 48)), zone: zoneOf(c && c.zone) })) } }];
+}
 let title = clean(o.title, 70);
 title = title.charAt(0).toUpperCase() + title.slice(1);
 let kicker = clean(o.kicker, 80);
@@ -58,7 +88,7 @@ const nodes = [
   node('HTTP - OpenAI Photo Text', 'n8n-nodes-base.httpRequest', 4.2, {
     method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
     authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
-    sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.body) }}', options: { timeout: 25000 },
+    sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.body) }}', options: { timeout: 45000 },
   }, { credentials: { openAiApi: CFG.openai } }),
   node('Code - Parse Text', 'n8n-nodes-base.code', 2, { jsCode: parse }),
 ]
