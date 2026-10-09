@@ -639,13 +639,94 @@
       }
     },
     {
-      "id": "http-pick-photos",
-      "name": "HTTP - Pick Photos",
+      "id": "http-pick-photos-ranked-",
+      "name": "HTTP - Pick Photos (ranked)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         5060,
         300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media_ranked",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0, p_text: ($json.rpc || {}).p_text || null }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-ranked-picked-",
+      "name": "IF - Ranked Picked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5170,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-ranked-picked-",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-pick-photos",
+      "name": "HTTP - Pick Photos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5170,
+        460
       ],
       "parameters": {
         "method": "POST",
@@ -667,7 +748,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0 }) }}",
+        "jsonBody": "={{ JSON.stringify({ p_plan_id: $('Code - Parse Generation').first().json.plan_id, p_count: $('Code - Parse Generation').first().json.photo_count || 0 }) }}",
         "options": {
           "response": {
             "response": {
@@ -714,7 +795,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'buffer_filler' };\n  const pick = $('HTTP - Pick Photos').first().json;\n  const ids = pick && pick.statusCode >= 200 && pick.statusCode < 300 && Array.isArray(pick.body) ? pick.body : [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'buffer_filler' };\n  const okIds = (j) => j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : null;\n  const ranked = okIds($('HTTP - Pick Photos (ranked)').first().json);\n  const ids = ranked || okIds($('HTTP - Pick Photos').first().json) || [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
         "options": {
           "response": {
             "response": {
@@ -795,7 +876,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'initial', p_prompt_version: 'PRMPT-011 v4 · buffer_filler' };\n  const pick = $('HTTP - Pick Photos').first().json;\n  const ids = pick && pick.statusCode >= 200 && pick.statusCode < 300 && Array.isArray(pick.body) ? pick.body : [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: 'initial', p_prompt_version: 'PRMPT-011 v4 · buffer_filler' };\n  const okIds = (j) => j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : null;\n  const ranked = okIds($('HTTP - Pick Photos (ranked)').first().json);\n  const ids = ranked || okIds($('HTTP - Pick Photos').first().json) || [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
         "options": {
           "response": {
             "response": {
@@ -1225,7 +1306,7 @@
       "main": [
         [
           {
-            "node": "HTTP - Pick Photos",
+            "node": "HTTP - Pick Photos (ranked)",
             "type": "main",
             "index": 0
           }
@@ -1233,6 +1314,35 @@
         [
           {
             "node": "Code - Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Pick Photos (ranked)": {
+      "main": [
+        [
+          {
+            "node": "IF - Ranked Picked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Ranked Picked?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Add Version",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Pick Photos",
             "type": "main",
             "index": 0
           }

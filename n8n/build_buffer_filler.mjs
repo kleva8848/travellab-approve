@@ -4,7 +4,7 @@
 //   офер → реальна ціна (tours.price_range або hotels.price_from_night) + дати (tours.dates_example);
 //   готель → key_detail + who_for; Threads «власна думка» без історії → тема від Іри.
 // Бракує → review_status 'needs_data' + питання Ірі в data_requests (без дублів відкритих).
-// Достатньо → по одному слоту: Post Generator (той самий, що в WF-046, ⭐ few-shot) → фото (tl_pick_media) →
+// Достатньо → по одному слоту: Post Generator (той самий, що в WF-046, ⭐ few-shot) → фото під текст (tl_pick_media_ranked, SQL 011; без нього tl_pick_media) →
 //   tl_add_version (trigger 'buffer_filler', без SQL 009 — 'initial') → 'ready_for_review'.
 // Наприкінці — підсумок лише admin (settings.admin_chat_id). Ірі нічого.
 // Ручний запуск: POST вебхук (Header Auth) {"dry_run": true, "days": 3} — dry_run за замовчуванням true:
@@ -243,11 +243,14 @@ return [{ json: {
   } : null
 } }];`
 
-// Версія: фото з tl_pick_media (як «підставити фото» в апці), якщо ні — порожньо (апка підставить при відкритті)
+// Версія: фото під текст (tl_pick_media_ranked, SQL 011); без 011 — tl_pick_media (як «підставити фото» в апці);
+// якщо ні — порожньо (апка підставить при відкритті). Ranked виконується в кожній ітерації, тож якщо він не вдався —
+// у цій же ітерації виконався й запасний.
 const versionBody = (trigger, promptVersion) => `={{ JSON.stringify((() => {
   const r = { ...$('Code - Parse Generation').first().json.rpc, p_trigger: '${trigger}'${promptVersion ? `, p_prompt_version: '${promptVersion}'` : ''} };
-  const pick = $('HTTP - Pick Photos').first().json;
-  const ids = pick && pick.statusCode >= 200 && pick.statusCode < 300 && Array.isArray(pick.body) ? pick.body : [];
+  const okIds = (j) => j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : null;
+  const ranked = okIds($('HTTP - Pick Photos (ranked)').first().json);
+  const ids = ranked || okIds($('HTTP - Pick Photos').first().json) || [];
   if (ids.length) r.p_media_ids = ids;
   return r;
 })()) }}`
@@ -327,8 +330,12 @@ const nodes = [
   }, { onError: 'continueRegularOutput', y: LOOP_Y }),
   node('Code - Parse Generation', 'n8n-nodes-base.code', 2, 4620, { jsCode: parseGen }, { y: LOOP_Y }),
   ifNode('IF - Generated?', 4840, '={{ $json._ok }}', 'true', { y: LOOP_Y }),
-  rest('HTTP - Pick Photos', 5060, 'POST', "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media",
-    "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0 }) }}", { prefer: 'return=representation', y: LOOP_Y }),
+  // Фото під текст поста: версії ще немає, тож текст передаємо явно (SQL 011). Нема функції (404) → запасний tl_pick_media
+  rest('HTTP - Pick Photos (ranked)', 5060, 'POST', "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media_ranked",
+    "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0, p_text: ($json.rpc || {}).p_text || null }) }}", { prefer: 'return=representation', y: LOOP_Y }),
+  ifNode('IF - Ranked Picked?', 5170, '={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) }}', 'true', { y: LOOP_Y }),
+  rest('HTTP - Pick Photos', 5170, 'POST', "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media",
+    "={{ JSON.stringify({ p_plan_id: $('Code - Parse Generation').first().json.plan_id, p_count: $('Code - Parse Generation').first().json.photo_count || 0 }) }}", { prefer: 'return=representation', y: LOOP_Y + 160 }),
   rest('HTTP - Add Version', 5280, 'POST', "={{ $('Loop - Slots').first().json.supabase_url }}/rest/v1/rpc/tl_add_version",
     versionBody('buffer_filler'), { prefer: 'return=representation', y: LOOP_Y }),
   // Без SQL 009 check-констрейнт не знає 'buffer_filler' (23514) → повтор з 'initial'
@@ -362,8 +369,11 @@ const connections = {
   'HTTP - Lock Slot': to('IF - Locked?'),
   'IF - Locked?': branches('Code - Generator Input', 'Code - Record Result'),
   ...chain('Code - Generator Input', 'Execute - Post Generator', 'Code - Parse Generation', 'IF - Generated?'),
-  'IF - Generated?': branches('HTTP - Pick Photos', 'Code - Record Result'),
-  ...chain('HTTP - Pick Photos', 'HTTP - Add Version', 'IF - Trigger Not Allowed?'),
+  'IF - Generated?': branches('HTTP - Pick Photos (ranked)', 'Code - Record Result'),
+  'HTTP - Pick Photos (ranked)': to('IF - Ranked Picked?'),
+  'IF - Ranked Picked?': branches('HTTP - Add Version', 'HTTP - Pick Photos'),
+  'HTTP - Pick Photos': to('HTTP - Add Version'),
+  ...chain('HTTP - Add Version', 'IF - Trigger Not Allowed?'),
   'IF - Trigger Not Allowed?': branches('HTTP - Add Version (initial)', 'Code - Record Result'),
   'HTTP - Add Version (initial)': to('Code - Record Result'),
   'Code - Record Result': to('IF - Revert?'),
