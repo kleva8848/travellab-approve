@@ -22,6 +22,7 @@ type WebApp = {
   }
   showConfirm?(msg: string, cb: (ok: boolean) => void): void
   openLink?(url: string): void
+  openTelegramLink?(url: string): void
 }
 
 declare global {
@@ -79,6 +80,12 @@ export function haptic(kind: 'tap' | 'select' | 'press' | 'success' | 'error' | 
 export function openExternal(url: string) {
   if (inTelegram && tg?.openLink) tg.openLink(url)
   else window.open(url, '_blank', 'noopener')
+}
+
+// t.me-посилання (чат з ботом) — всередині Telegram, без браузера
+export function openTelegram(url: string) {
+  if (atLeast('6.1') && tg?.openTelegramLink) tg.openTelegramLink(url)
+  else openExternal(url)
 }
 
 export function confirmAction(message: string): Promise<boolean> {

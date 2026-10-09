@@ -26,6 +26,9 @@ export function TodayScreen({ me, queue, queueError, onOpen, onRetry }: Props) {
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
   const waiting = (queue ?? []).filter((q) => WAITING.has(q.review_status))
+  // Пости, де агенту бракує фактів, — окремо: там не перегляд, а питання до Іри
+  const asking = waiting.filter((q) => q.review_status === 'needs_data' && q.questions)
+  const reviewing = waiting.filter((q) => !asking.includes(q))
   const working = (queue ?? []).filter((q) => q.review_status === 'regenerating')
   const approved = (queue ?? []).filter((q) => q.review_status === 'approved')
   const allDone = queue && !waiting.length && !working.length
@@ -73,7 +76,8 @@ export function TodayScreen({ me, queue, queueError, onOpen, onRetry }: Props) {
             </div>
           )}
 
-          <List title="Чекають тебе" items={waiting} onOpen={onOpen} />
+          <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
+          <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
           <List title="Агент переробляє" items={working} onOpen={onOpen} badge={<span className="chip warn">переробляю</span>} />
           <List title="Затверджено" items={approved} onOpen={onOpen} badge={<span className="chip okc">в календарі</span>} />
         </>

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { previewUrls, sendStory, sendToChat, type PhotoEdit } from '../server/render.js'
-import { notifyN8n } from '../server/review.js'
+import { notifyN8n, openQuestions } from '../server/review.js'
 import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
 
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data'
   id?: string
   expected_version_no?: number
   text?: string
@@ -29,8 +29,10 @@ type Body = {
   on?: boolean
   media_id?: string
   edit?: Record<string, unknown>
+  answers?: { id?: string; answer?: string }[]
 }
 
+const MAX_ANSWER = 1000
 const MAX_PHOTO_TEXT = 140
 // Чипи під фото: кожне поле — значення або null (= прибрати правку, як вирішив агент)
 function parseEdit(raw: Record<string, unknown>): Record<string, string | null> | null {
@@ -168,6 +170,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         throw r.error
       }
       return void res.json({ ok: true })
+    }
+
+    // «Бракує даних»: Іра відповідає текстом на питання агента → data_requests.answer → n8n Data Answer
+    // (факт у досьє готелю / туру + генерація поста). Не всі відповіді — зберігаємо, пост чекає решти
+    if (b.action === 'answer_data') {
+      const given = new Map<string, string>()
+      for (const a of Array.isArray(b.answers) ? b.answers.slice(0, 20) : []) {
+        const text = String(a?.answer ?? '').replace(/\r\n/g, '\n').trim().slice(0, MAX_ANSWER)
+        if (a?.id && UUID.test(a.id) && text) given.set(a.id, text)
+      }
+      if (!given.size) return void res.status(400).json({ error: 'порожні відповіді' })
+      const p = await db().from('content_plan').select('id, hotel_id, tour_id, review_status, version_no, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data || p.data.version_no !== expected || p.data.published_at || !['needs_data', 'ready_for_review', 'changes_requested'].includes(p.data.review_status)) return void conflict()
+      const open = await openQuestions(p.data)
+      const ids = open.map((q) => q.id).filter((x) => given.has(x))
+      if (!ids.length) return void conflict()
+      const remaining = open.length - ids.length
+      // Усі відповіді є → спершу «забираємо» пост у роботу (захист від подвійного тапу), потім пишемо відповіді
+      const regenerate = remaining === 0
+      const was = p.data.review_status as string
+      if (regenerate) {
+        const c = await db().from('content_plan')
+          .update({ review_status: 'regenerating', review_note: null, updated_at: new Date().toISOString() })
+          .eq('id', b.id).eq('version_no', expected).eq('review_status', was).is('published_at', null)
+          .select('id')
+        if (c.error) throw c.error
+        if (!c.data?.length) return void conflict()
+      }
+      const at = new Date().toISOString()
+      for (const id of ids) {
+        const r = await db().from('data_requests')
+          .update({ answer: given.get(id), status: 'answered', answered_via: 'text', answered_at: at })
+          .eq('id', id).eq('status', 'open')
+        if (r.error) {
+          if (regenerate) await db().from('content_plan').update({ review_status: was }).eq('id', b.id).eq('review_status', 'regenerating')
+          throw r.error
+        }
+      }
+      if (!regenerate) return void res.json({ ok: true, queued: false, remaining })
+      const queued = await notifyN8n({ content_plan_id: b.id, expected_version_no: expected, author_tg_id: user.id, via: 'text', prev_status: was }, 'travellab-data-answer')
+      if (!queued) {
+        // n8n недоступний — відповіді збережені, пост допише ранковий Buffer Filler (бере вже дані відповіді)
+        await db().from('content_plan').update({ review_status: was, review_note: 'Data Answer: n8n недоступний' }).eq('id', b.id).eq('review_status', 'regenerating')
+      }
+      return void res.json({ ok: true, queued, remaining: 0 })
     }
 
     if (b.action === 'upload_url') {

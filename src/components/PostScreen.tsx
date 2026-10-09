@@ -4,6 +4,7 @@ import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { Carousel } from './Carousel'
+import { DataQuestions } from './DataQuestions'
 import { whenLabel } from './CalendarScreen'
 import { Center, Label, Spinner } from './ui'
 
@@ -130,18 +131,13 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   }, [curId, curPhotos])
 
   if (error && !post) return <Center><p style={{ color: 'var(--hint)' }}>Не вдалося завантажити пост. {error}</p><button className="btn sec mt-4" onClick={() => void load()}>Спробувати ще</button></Center>
-  if (!post || !cur) return <Center><Spinner /></Center>
+  if (!post) return <Center><Spinner /></Center>
 
   const plat = PLATFORM[post.plan.platform] ?? { name: post.plan.platform, cls: '' }
   const status = post.plan.review_status
-  // Опублікований = затверджений + викладений: так само без правок
-  const published = status === 'published'
-  const approved = status === 'approved' || published
-  const shown: Version = view === 'old' && prev ? prev : cur
-  const hasComment = Boolean(cText.trim() || cPhoto.trim())
-  const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
+  const questions = status === 'published' || status === 'approved' ? [] : post.questions ?? []
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -157,6 +153,30 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
       setBusy(false)
     }
   }
+
+  // Відповіді на питання агента: всі → пост «переробляю», частина → збережено, решта чекає
+  const answer = async (answers: { id: string; answer: string }[]) => {
+    const r = await act('answer_data', { answers })
+    if (!r) return false
+    haptic('success')
+    if (r.remaining) setToast(`Збережено. Лишилось питань: ${r.remaining}`)
+    else if (r.queued) {
+      setPost((p) => (p ? { ...p, plan: { ...p.plan, review_status: 'regenerating' } } : p))
+      setToast('Дякую! Дописую пост — напишу в чат, коли буде готово')
+    } else setToast('Відповіді збережено — пост допишу трохи згодом')
+    await load()
+    onChanged()
+    return true
+  }
+
+  if (!cur) return <NoTextYet post={post} plat={plat} questions={questions} busy={busy} toast={toast} total={total} onAnswer={answer} onNext={onNext} />
+
+  // Опублікований = затверджений + викладений: так само без правок
+  const published = status === 'published'
+  const approved = status === 'approved' || published
+  const shown: Version = view === 'old' && prev ? prev : cur
+  const hasComment = Boolean(cText.trim() || cPhoto.trim())
+  const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
   const approve = async () => {
     const r = await act('approve')
@@ -403,6 +423,8 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
           </>
         ) : (
           <>
+            {questions.length > 0 && view === 'new' && <DataQuestions questions={questions} busy={busy} voiceLink={post.voice_link} onSubmit={answer} />}
+
             {askedFor.length > 0 && view === 'new' && (
               <>
                 <div className="text-[13px]" style={{ color: 'var(--hint)' }}>Ти просила</div>
@@ -638,6 +660,51 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
             <button className="btn" disabled={busy || draft !== null} onClick={() => void approve()}>{busy ? '…' : 'Затвердити'}</button>
           </>
         )}
+      </div>
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+// Пост ще без тексту: питання агента (needs_data), «дописую» (після відповідей) або «ще готується»
+function NoTextYet({ post, plat, questions, busy, toast, total, onAnswer, onNext }: {
+  post: PostDetail; plat: { name: string; cls: string }; questions: NonNullable<PostDetail['questions']>; busy: boolean; toast: string; total: number
+  onAnswer: (answers: { id: string; answer: string }[]) => Promise<boolean>; onNext: () => void
+}) {
+  const status = post.plan.review_status
+  const working = status === 'regenerating' || status === 'generating'
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 pt-3 pb-6">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={`chip ${plat.cls}`}>{plat.name}</span>
+          <span className="chip">{PILLAR[post.plan.pillar] ?? post.plan.pillar}</span>
+        </div>
+        <div className="mt-2 text-[13px]" style={{ color: 'var(--hint)' }}>
+          {post.plan.scheduled_for ? new Date(post.plan.scheduled_for).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'long' }) : `слот: ${post.plan.day}`}
+          {post.plan.slot_time ? ` · ${post.plan.slot_time.slice(0, 5)}` : ''}
+        </div>
+        {(post.hotel || post.tour) && <div className="serif mt-1 mb-3 text-[22px] leading-[1.15]">{post.hotel?.name ?? post.tour?.title}</div>}
+        {working ? (
+          <div className="card text-center" style={{ padding: '22px 16px' }}>
+            <div className="mb-2.5 flex justify-center"><Spinner /></div>
+            <b>Дописую пост</b>
+            <div className="mt-1 mb-3 text-[13px]" style={{ color: 'var(--hint)' }}>Зазвичай 1–2 хвилини. Можна закрити застосунок — напишу в чат, коли буде готово.</div>
+            <div className="shimmer" style={{ width: '92%' }} /><div className="shimmer" style={{ width: '76%' }} /><div className="shimmer" style={{ width: '84%' }} />
+          </div>
+        ) : questions.length > 0 ? (
+          <DataQuestions questions={questions} busy={busy} voiceLink={post.voice_link} onSubmit={onAnswer} />
+        ) : (
+          <div className="card text-center">
+            <b>{status === 'needs_data' ? 'Відповіді збережено' : 'Пост ще готується'}</b>
+            <div className="mt-1 text-[13.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+              {status === 'needs_data' ? 'Пост допишу трохи згодом і напишу в чат.' : 'Агент напише його сам і покаже тут.'}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="bbar">
+        <button className="btn sec" onClick={onNext}>{total > 1 ? (working ? 'Далі, поки чекаю' : 'Пізніше') : 'На головну'}</button>
       </div>
       {toast && <div className="toast">{toast}</div>}
     </div>

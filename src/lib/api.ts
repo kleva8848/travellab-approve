@@ -66,7 +66,7 @@ export type Plan = {
   published_at: string | null
 }
 
-export type QueueItem = Plan & { hotel_name: string | null; tour_title: string | null; preview: string }
+export type QueueItem = Plan & { hotel_name: string | null; tour_title: string | null; preview: string; questions?: number }
 
 export type Version = {
   id: string
@@ -99,6 +99,9 @@ export type Comment = { id: string; version_id: string | null; target: 'text' | 
 
 export type MediaView = { media_id: string; url: string | null; description: string | null; width: number | null; height: number | null }
 
+// «Бракує даних»: питання агента, на які чекаємо відповідь Іри
+export type Question = { id: string; field: string | null; question: string; why_needed: string | null }
+
 export type PostDetail = {
   plan: Plan
   hotel: { hotel_id: string; name: string; country: string } | null
@@ -108,12 +111,15 @@ export type PostDetail = {
   media: Record<string, MediaView>
   photo_need: number
   hotel_photos: number
+  questions?: Question[]
+  // посилання в бот «Відповісти голосом»; null — голос через бот ще не ввімкнено
+  voice_link?: string | null
 }
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
-type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
+type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
+type ActionResult = { ok: true; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 export async function getQueue(): Promise<QueueItem[]> {
   if (isDemo) {
@@ -134,7 +140,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -153,7 +159,7 @@ const demo = (() => {
   const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string, photos: string[] = []): PostDetail => ({
     plan: {
       id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
-      review_status: status, version_no: texts.length, current_version_id: `${id}-v${texts.length}`, approved_at: null, published_at: null,
+      review_status: status, version_no: texts.length, current_version_id: texts.length ? `${id}-v${texts.length}` : null, approved_at: null, published_at: null,
     },
     hotel: hotel ? { hotel_id: 'HTL-000', name: hotel, country: '—' } : null,
     tour: null,
@@ -176,6 +182,12 @@ const demo = (() => {
     mk('d2', 'Ср', 'telegram', 'insider', 'Демо-курорт у Греції', [
       '**Осінь — і басейн досі чекає на плавання.**\n\nВода підігріта, тож навіть у жовтні не виникає питання, чи вдасться поплавати. Для поїздок у shoulder season це сильна перевага.\n\n→ @demo',
     ], 'ready_for_review', undefined, []),
+    { ...mk('d4', 'Чт', 'instagram', 'hotel_place', 'Демо-вілла на Санторіні', [], 'needs_data'),
+      questions: [
+        { id: 'q1', field: 'key_detail', question: 'Чим Демо-вілла на Санторіні відрізняється від схожих готелів? Одна головна деталь', why_needed: 'Пост будується навколо однієї деталі — без неї вийдуть загальні слова' },
+        { id: 'q2', field: 'who_for', question: 'Кому Демо-вілла на Санторіні підходить найбільше? Наприклад: сімʼї з малюками, пари', why_needed: 'Щоб пост говорив до правильних людей' },
+      ],
+      voice_link: 'https://t.me/travellab_studio_bot?start=answer_d4' },
     mk('d3', 'Пт', 'threads', 'personal_take', null, [
       'Є готель, за яким я зараз уважно спостерігаю. З висновками не поспішаю — хочу побачити, як він покаже себе в перший сезон.',
     ], 'approved'),
@@ -189,7 +201,8 @@ const demo = (() => {
     queue: (): QueueItem[] =>
       posts.map((p) => ({
         ...p.plan, hotel_name: p.hotel?.name ?? null, tour_title: null,
-        preview: (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+        preview: p.plan.review_status === 'needs_data' && p.questions?.length ? p.questions[0].question : (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+        questions: p.plan.review_status === 'needs_data' ? p.questions?.length ?? 0 : 0,
       })),
     post: (id: string): PostDetail => structuredClone(byId(id)),
     act: (id: string, action: string, extra: Partial<CommentInput> & ActionExtra): ActionResult => {
@@ -244,6 +257,23 @@ const demo = (() => {
         const n = p.versions.length + 1
         p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, photo_edits: edits } })
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
+      }
+      if (action === 'answer_data') {
+        const got = new Set((extra.answers ?? []).map((a) => a.id))
+        p.questions = (p.questions ?? []).filter((q) => !got.has(q.id))
+        if (p.questions.length) return { ok: true as const, queued: false, remaining: p.questions.length }
+        p.plan.review_status = 'regenerating'
+        // Демо: «агент» дописує пост за 4 с
+        setTimeout(() => {
+          const v: Version = {
+            id: `${id}-v1`, version_no: 1, text_v: 1, image_v: 0, hooks: null, form: 'one_fact', key_idea: 'Демо: вілла над кальдерою', trigger: 'data_answer',
+            comment_id: null, media_ids: [], prompt_version: 'demo', lint: null, missing_facts: [], created_at: new Date().toISOString(),
+            text: 'На Санторіні всі дивляться на захід сонця. Тут його видно з власного басейну — без натовпу в Ії.\n\nДля пар, які хочуть тиші й краєвиду без поспіху.\n\nДеталі на ваші дати — пишіть у приват.',
+          }
+          p.versions.push(v)
+          Object.assign(p.plan, { version_no: 1, current_version_id: v.id, review_status: 'ready_for_review' })
+        }, 4000)
+        return { ok: true as const, queued: true, remaining: 0 }
       }
       if (action === 'skip') p.plan.review_status = 'skipped'
       if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }

@@ -1,0 +1,412 @@
+{
+  "name": "[TravelLab] Hotel Fact Write (sub)",
+  "nodes": [
+    {
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "key=eq.supabase_url"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-hotel",
+      "name": "Supabase - Get Hotel",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "=hotel_id=eq.{{ $('Execute Workflow Trigger').first().json.hotel_id || 'none' }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-last-insight",
+      "name": "Supabase - Get Last Insight",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotel_insights",
+        "limit": 1,
+        "orderBy": "insight_id.desc",
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-build-fact",
+      "name": "Code - Build Fact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Факт від Іри → оновлення досьє готелю + рядок hotel_insights (логіка злиття — як у WF-044)\nconst inp = $('Execute Workflow Trigger').first().json || {};\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst h = $('Supabase - Get Hotel').first().json || {};\nconst last = $('Supabase - Get Last Insight').first().json || {};\nconst clean = v => (v == null ? '' : String(v)).trim();\nconst norm = v => clean(v).toLowerCase().replace(/\\s+/g, ' ');\nconst text = clean(inp.text).slice(0, 2000);\nconst field = clean(inp.field_hint);\nconst mode = inp.mode === 'replace' ? 'replace' : 'append';\nif (!inp.hotel_id || !h.hotel_id || !text) return [{ json: { _skip: true, reason: !text ? 'порожній текст' : 'готель не знайдено', hotel_id: inp.hotel_id || null } }];\n\nconst mergeList = (o0, n0) => {\n  const o = clean(o0), n = clean(n0);\n  if (!n) return o || null;\n  if (!o) return n;\n  const on = norm(o), nn = norm(n);\n  if (on.includes(nn)) return o;\n  const add = n.split(/;\\s*/).map(clean).filter(x => x && !on.includes(norm(x)));\n  return add.length ? o + '; ' + add.join('; ') : o;\n};\nconst mergeNotes = (o0, n0) => {\n  const o = clean(o0), n = clean(n0);\n  if (!n) return o || null;\n  if (!o) return n;\n  if (norm(o).includes(norm(n))) return o;\n  if (norm(n).includes(norm(o))) return n;\n  return o + '\\n' + n;\n};\n\nconst LIST = ['key_detail', 'who_for', 'who_not_for', 'caveat'];\nconst patch = {};\nlet price = null;\nif (LIST.includes(field)) patch[field] = mode === 'replace' ? text : mergeList(h[field], text);\nelse if (field === 'ira_notes') patch.ira_notes = mode === 'replace' ? text : mergeNotes(h.ira_notes, text);\nelse if (field === 'price_from_night' || field === 'price_from') {\n  // «від 450 доларів», «1 200 €», «$850» → число + валюта; не вийшло — лише в нотатки інсайту\n  const m = text.replace(/(\\d)[\\s\\u00a0](?=\\d{3}\\b)/g, '$1').match(/(\\d+(?:[.,]\\d+)?)/);\n  const cur = /€|eur|євро/i.test(text) ? 'EUR' : /£|gbp|фунт/i.test(text) ? 'GBP' : /грн|uah|₴/i.test(text) ? 'UAH' : 'USD';\n  if (m) price = { price_from_night: Number(m[1].replace(',', '.')), price_currency: cur, price_source: 'ira', price_updated_at: new Date().toISOString() };\n}\n\nconst COL = { key_detail: 'differentiator', who_for: 'best_for', who_not_for: 'not_for', caveat: 'honest_con' };\nconst n = last.insight_id ? parseInt(String(last.insight_id).replace(/\\D/g, ''), 10) : 0;\nconst insight = {\n  insight_id: 'INS-' + String((n || 0) + 1).padStart(3, '0'),\n  hotel_id: h.hotel_id,\n  status: 'confirmed',\n  raw_transcript: (inp.question ? 'Питання агента: ' + clean(inp.question) + '\\n' : '') + 'Відповідь Іри (' + (inp.source || 'app') + '): ' + text,\n};\nif (COL[field]) insight[COL[field]] = text;\nelse insight.extra_notes = (field && field !== 'ira_notes' ? field + ': ' : '') + text;\n\nreturn [{ json: {\n  _skip: false,\n  supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''),\n  hotel_id: h.hotel_id, field, mode,\n  patch: Object.keys(patch).length ? { ...patch, updated_at: new Date().toISOString() } : null,\n  price, insight\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-write-",
+      "name": "IF - Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-write-",
+              "leftValue": "={{ !$json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-patch-hotel",
+      "name": "HTTP - Patch Hotel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/hotels?hotel_id=eq.{{ encodeURIComponent($json.patch ? $json.hotel_id : 'none') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Code - Build Fact').first().json.patch || {}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "http-patch-price",
+      "name": "HTTP - Patch Price",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Code - Build Fact').first().json.supabase_url }}/rest/v1/hotels?hotel_id=eq.{{ encodeURIComponent($('Code - Build Fact').first().json.price ? $('Code - Build Fact').first().json.hotel_id : 'none') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Code - Build Fact').first().json.price || { price_source: 'ira' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "http-insert-insight",
+      "name": "HTTP - Insert Insight",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Build Fact').first().json.supabase_url }}/rest/v1/hotel_insights",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Code - Build Fact').first().json.insight) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "code-result",
+      "name": "Code - Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Що записано (для того, хто кликав)\nconst b = $('Code - Build Fact').first().json;\nif (b._skip) return [{ json: { ok: false, ...b } }];\nconst st = (name) => { try { const j = $(name).first().json; return j && j.statusCode ? j.statusCode : null; } catch (e) { return null; } };\nconst ok = (c) => c == null || (c >= 200 && c < 300);\nreturn [{ json: {\n  ok: ok(st('HTTP - Patch Hotel')) && ok(st('HTTP - Insert Insight')),\n  hotel_id: b.hotel_id, field: b.field, mode: b.mode,\n  hotel_status: b.patch ? st('HTTP - Patch Hotel') : 'skip',\n  price_status: b.price ? st('HTTP - Patch Price') : 'skip',\n  insight_id: b.insight.insight_id, insight_status: st('HTTP - Insert Insight')\n} }];"
+      },
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotel": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Last Insight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Last Insight": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Fact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Fact": {
+      "main": [
+        [
+          {
+            "node": "IF - Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Write?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Patch Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Patch Hotel": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Patch Price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Patch Price": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Insert Insight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Insert Insight": {
+      "main": [
+        [
+          {
+            "node": "Code - Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

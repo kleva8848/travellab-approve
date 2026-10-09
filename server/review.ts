@@ -55,6 +55,28 @@ export type CommentRow = {
   created_at: string
 }
 
+// «Бракує даних»: відкриті питання агента до Іри (data_requests). Питання про готель / тур спільні для всіх постів про нього
+export type QuestionRow = { id: string; content_plan_id: string | null; hotel_id: string | null; tour_id: string | null; field: string | null; question: string; why_needed: string | null }
+
+const Q_COLS = 'id, content_plan_id, hotel_id, tour_id, field, question, why_needed, created_at'
+const forPlan = (q: QuestionRow, p: Pick<PlanRow, 'id' | 'hotel_id' | 'tour_id'>) =>
+  q.content_plan_id === p.id || Boolean(p.hotel_id && q.hotel_id === p.hotel_id) || Boolean(p.tour_id && q.tour_id === p.tour_id)
+
+// Без таблиці / при помилці — просто без питань (апка не падає)
+export async function openQuestions(plan?: Pick<PlanRow, 'id' | 'hotel_id' | 'tour_id'>): Promise<QuestionRow[]> {
+  let q = db().from('data_requests').select(Q_COLS).eq('status', 'open').order('created_at', { ascending: true })
+  if (plan) {
+    const ors = [`content_plan_id.eq.${plan.id}`]
+    if (plan.hotel_id) ors.push(`hotel_id.eq.${plan.hotel_id}`)
+    if (plan.tour_id) ors.push(`tour_id.eq.${plan.tour_id}`)
+    q = q.or(ors.join(','))
+  }
+  const r = await q
+  if (r.error) return []
+  const rows = (r.data ?? []) as QuestionRow[]
+  return plan ? rows.filter((x) => forPlan(x, plan)) : rows
+}
+
 const PLAN_COLS =
   'id, day, platform, slot_type, pillar, tour_id, hotel_id, scheduled_for, slot_time, review_status, version_no, current_version_id, approved_at, published_at'
 
@@ -111,13 +133,16 @@ export async function loadQueue() {
   if (v.error) throw v.error
   const versions = new Map((v.data ?? []).map((x) => [x.id as string, x]))
   const { hotels, tours } = await namesFor(rows)
+  const questions = rows.some((p) => p.review_status === 'needs_data') ? await openQuestions() : []
   return rows.map((p) => {
     const ver = p.current_version_id ? versions.get(p.current_version_id) : undefined
+    const mine = p.review_status === 'needs_data' ? questions.filter((q) => forPlan(q, p)) : []
     return {
       ...p,
       hotel_name: (p.hotel_id && hotels.get(p.hotel_id)?.name) || null,
       tour_title: (p.tour_id && tours.get(p.tour_id)?.title) || null,
-      preview: (ver?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+      preview: mine.length ? mine[0].question : (ver?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+      questions: mine.length,
     }
   })
 }
@@ -152,10 +177,12 @@ export async function loadPost(id: string) {
   if (v.error) throw v.error
   if (c.error) throw c.error
   const versions = (v.data ?? []) as VersionRow[]
-  const [media, hotelPhotos, need] = await Promise.all([
+  const [media, hotelPhotos, need, questions, voiceLink] = await Promise.all([
     mediaViews(versions.flatMap((x) => x.media_ids ?? [])).catch(() => ({})),
     hotelPhotoCount(plan.hotel_id),
     db().rpc('tl_photo_count', { p_platform: plan.platform, p_slot_type: plan.slot_type, p_pillar: plan.pillar }),
+    openQuestions(plan),
+    voiceAnswerLink(plan.id).catch(() => null),
   ])
   return {
     plan,
@@ -166,7 +193,18 @@ export async function loadPost(id: string) {
     media,
     photo_need: need.error ? 0 : Number(need.data ?? 0),
     hotel_photos: hotelPhotos,
+    questions: questions.map(({ id, field, question, why_needed }) => ({ id, field, question, why_needed })),
+    voice_link: voiceLink,
   }
+}
+
+// «Відповісти голосом» — deep link у бот (бот ставить ці питання й чекає голосове). Вмикається settings.voice_answers = "on",
+// коли бот Іри приймає повідомлення (n8n «Ira Bot» активний); до того кнопки в апці нема
+async function voiceAnswerLink(planId: string): Promise<string | null> {
+  const s = await getSettings(['voice_answers', 'bot_username'])
+  const on = s.voice_answers === 'on' || s.voice_answers === true
+  const bot = typeof s.bot_username === 'string' ? s.bot_username.replace(/^@/, '') : ''
+  return on && bot ? `https://t.me/${bot}?start=answer_${planId}` : null
 }
 
 // Повідомити n8n (Review Action). Без налаштованого вебхука правка лишається «changes_requested» — її підхопить Влад
