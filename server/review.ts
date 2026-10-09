@@ -1,5 +1,6 @@
 import { db, getSettings } from './http.js'
 import { hotelPhotoCount, mediaViews } from './media.js'
+import { scheduleIfNeeded } from './schedule.js'
 
 // Статуси, які показуємо Ірі в черзі «на перегляд» (backlog — старі чернетки Notion-епохи, не показуємо)
 export const QUEUE_STATUSES = ['ready_for_review', 'changes_requested', 'regenerating', 'needs_data'] as const
@@ -58,11 +59,12 @@ const PLAN_COLS =
 
 // Порядок у черзі: спершу з датою (найближчі), далі за днем тижня в плані
 const DAY_ORDER: Record<string, number> = { 'Пн': 1, 'Вт': 2, 'Ср': 3, 'Чт': 4, 'Пт': 5, 'Сб': 6, 'Нд': 7 }
-export function sortPlan<T extends Pick<PlanRow, 'scheduled_for' | 'day' | 'platform'>>(rows: T[]): T[] {
+export function sortPlan<T extends Pick<PlanRow, 'scheduled_for' | 'slot_time' | 'day' | 'platform'>>(rows: T[]): T[] {
   const plat: Record<string, number> = { telegram: 1, instagram: 2, threads: 3 }
   return [...rows].sort(
     (a, b) =>
       (a.scheduled_for ?? '9999').localeCompare(b.scheduled_for ?? '9999') ||
+      (a.slot_time ?? '').localeCompare(b.slot_time ?? '') ||
       (DAY_ORDER[a.day] ?? 9) - (DAY_ORDER[b.day] ?? 9) ||
       (plat[a.platform] ?? 9) - (plat[b.platform] ?? 9),
   )
@@ -94,6 +96,12 @@ export async function loadQueue() {
   ])
   if (r.error) throw r.error
   if (pub.error) throw pub.error
+  // Затверджені до появи дат (до 09.10) — ставимо в календар один раз, по черзі (щоб не зайняли один день)
+  for (const x of (r.data ?? []) as PlanRow[]) {
+    if (x.review_status !== 'approved' || x.scheduled_for) continue
+    const slot = await scheduleIfNeeded(x.id).catch(() => null)
+    if (slot) Object.assign(x, slot)
+  }
   const rows = sortPlan([...(r.data ?? []), ...(pub.data ?? [])] as PlanRow[])
   const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]
   const v = versionIds.length

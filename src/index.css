@@ -63,6 +63,8 @@ input, textarea, select, button { font: inherit; color: inherit; }
 .ptext del { background: var(--del); color: var(--hint); border-radius: 3px; padding: 0 2px; }
 textarea.in { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 10px 12px; font-size: 16px; resize: none; outline: none; }
 textarea.in:focus { border-color: var(--accent); }
+input.in { min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 0 10px; font-size: 16px; outline: none; }
+input.in:focus { border-color: var(--accent); }
 .qchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .qchips button { border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; font-size: 13px; background: var(--section); }
 .yourc { border-left: 3px solid var(--accent); padding: 6px 10px; font-size: 14px; background: var(--bg2); border-radius: 0 10px 10px 0; margin: 6px 0 12px; }

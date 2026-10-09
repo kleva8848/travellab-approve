@@ -3,6 +3,7 @@ import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { previewUrls, sendToChat } from '../server/render.js'
 import { notifyN8n } from '../server/review.js'
+import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -10,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule'
   id?: string
   expected_version_no?: number
   text?: string
@@ -23,6 +24,8 @@ type Body = {
   mode?: 'replace' | 'add'
   width?: number
   height?: number
+  date?: string
+  time?: string
 }
 
 // Дії Іри над постом. expected_version_no — захист від подвійного тапу і застарілого екрана (409 → апка перечитує пост)
@@ -48,7 +51,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!r.data?.length) return void conflict()
       // Фото затвердженого поста — «використані», щоб підбір наступного разу брав інші
       await db().rpc('tl_mark_media_used', { p_plan_id: b.id })
-      return void res.json({ ok: true, plan: r.data[0] })
+      // Одразу в календар: найближчий вільний день платформи (якщо дати ще нема)
+      const slot = await scheduleIfNeeded(b.id).catch(() => null)
+      return void res.json({ ok: true, plan: { ...r.data[0], ...(slot ?? {}) } })
+    }
+
+    // Іра міняє дату / час публікації в календарі
+    if (b.action === 'reschedule') {
+      const date = String(b.date ?? '')
+      const time = String(b.time ?? '')
+      if (!DATE_RE.test(date) || Number.isNaN(Date.parse(date))) return void res.status(400).json({ error: 'bad date' })
+      if (!TIME_RE.test(time)) return void res.status(400).json({ error: 'bad time' })
+      const r = await db()
+        .from('content_plan')
+        .update({ scheduled_for: date, slot_time: time, updated_at: new Date().toISOString() })
+        .eq('id', b.id)
+        .is('published_at', null)
+        .select('id, scheduled_for, slot_time')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true, plan: r.data[0] }) : void conflict()
     }
 
     if (b.action === 'swap_photo') {

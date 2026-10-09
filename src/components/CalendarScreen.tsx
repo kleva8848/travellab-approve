@@ -15,19 +15,31 @@ const FILTERS: { id: Filter; label: string }[] = [
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
-const when = (q: QueueItem) =>
-  q.scheduled_for
-    ? new Date(q.scheduled_for).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'short' }) + (q.slot_time ? ` · ${q.slot_time.slice(0, 5)}` : '')
-    : `слот: ${q.day}`
+// «сьогодні · 19:00», «завтра · 10:00», «пт, 17 жовт. · 13:00» (дата — день у Києві, без часового поясу)
+const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+export function whenLabel(date: string, time: string | null) {
+  const today = new Date()
+  const tomorrow = new Date(Date.now() + 864e5)
+  const day = date === ymd(today) ? 'сьогодні' : date === ymd(tomorrow) ? 'завтра'
+    : new Date(`${date}T12:00:00`).toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'short' })
+  return day + (time ? ` · ${time.slice(0, 5)}` : '')
+}
+
+const when = (q: QueueItem) => (q.scheduled_for ? whenLabel(q.scheduled_for, q.slot_time) : `слот: ${q.day}`)
+const overdue = (q: QueueItem) => Boolean(q.scheduled_for && `${q.scheduled_for}T${(q.slot_time ?? '23:59').slice(0, 5)}` < `${ymd(new Date())}T${new Date().toTimeString().slice(0, 5)}`)
 
 // Фаза 5: затверджені пости по платформах + ручна публікація. Текст і фото забирає з поста («Надіслати в чат»), тут — позначка «опубліковано»
 export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[] | null; onOpen: (id: string) => void; onChanged: () => void }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [toast, setToast] = useState('')
+  // Зміна дати: id поста, який зараз редагуємо, + чернетка дати/часу
+  const [edit, setEdit] = useState<{ id: string; date: string; time: string } | null>(null)
 
   const items = (queue ?? []).filter((q) => filter === 'all' || q.platform === filter)
-  const toPublish = items.filter((q) => q.review_status === 'approved')
+  const toPublish = items
+    .filter((q) => q.review_status === 'approved')
+    .sort((a, b) => `${a.scheduled_for ?? '9999'}${a.slot_time ?? ''}`.localeCompare(`${b.scheduled_for ?? '9999'}${b.slot_time ?? ''}`))
   const published = items
     .filter((q) => q.review_status === 'published')
     .sort((a, b) => (b.published_at ?? '').localeCompare(a.published_at ?? ''))
@@ -50,16 +62,52 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
     }
   }
 
+  const saveDate = async (q: QueueItem) => {
+    if (!edit) return
+    setBusyId(q.id)
+    try {
+      await reviewAction(q.id, q.version_no, 'reschedule', { date: edit.date, time: edit.time })
+      haptic('success')
+      setToast(`Перенесла на ${whenLabel(edit.date, edit.time)}`)
+      setTimeout(() => setToast(''), 2000)
+      setEdit(null)
+      onChanged()
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : 'Помилка')
+      setTimeout(() => setToast(''), 2500)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const row = (q: QueueItem, i: number, isPublished: boolean) => {
     const plat = PLATFORM[q.platform] ?? { name: q.platform, cls: '' }
+    const editing = edit?.id === q.id
     return (
-      <div key={q.id} className="flex items-center gap-2.5 py-2.5" style={{ borderTop: i ? '.5px solid var(--line)' : 0 }}>
+      <div key={q.id} style={{ borderTop: i ? '.5px solid var(--line)' : 0 }}>
+      <div className="flex items-center gap-2.5 py-2.5">
         <button className="min-w-0 flex-1 text-left" onClick={() => { haptic('tap'); onOpen(q.id) }}>
           <span className="flex items-center gap-1.5">
             <span className={`chip ${plat.cls}`}>{plat.name}</span>
-            <span className="text-[12.5px]" style={{ color: 'var(--hint)' }}>
-              {isPublished && q.published_at ? `виклала ${new Date(q.published_at).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}` : when(q)}
-            </span>
+            {isPublished && q.published_at ? (
+              <span className="text-[12.5px]" style={{ color: 'var(--hint)' }}>
+                виклала {new Date(q.published_at).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}
+              </span>
+            ) : (
+              <span
+                role="button"
+                className="text-[12.5px] underline decoration-dotted underline-offset-2"
+                style={{ color: overdue(q) ? 'var(--warn)' : 'var(--hint)' }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  haptic('tap')
+                  setEdit({ id: q.id, date: q.scheduled_for ?? ymd(new Date(Date.now() + 864e5)), time: (q.slot_time ?? '12:00').slice(0, 5) })
+                }}
+              >
+                {when(q)}{overdue(q) ? ' · час минув' : ''}
+              </span>
+            )}
           </span>
           <b className="mt-1 block truncate text-[14.5px]">{q.hotel_name ?? q.tour_title ?? cap(PILLAR[q.pillar] ?? q.pillar)}</b>
           <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>
@@ -71,6 +119,15 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
             {busyId === q.id ? '…' : 'Виклала'}
           </button>
         )}
+      </div>
+      {editing && edit && (
+        <div className="flex items-center gap-2 pb-3">
+          <input type="date" className="in" style={{ flex: 1, height: 38 }} value={edit.date} onChange={(e) => setEdit({ ...edit, date: e.target.value })} />
+          <input type="time" className="in" style={{ width: 96, height: 38 }} value={edit.time} onChange={(e) => setEdit({ ...edit, time: e.target.value })} />
+          <button className="btn" style={{ width: 'auto', height: 38, padding: '0 12px', fontSize: 13 }} disabled={busyId === q.id || !edit.date || !edit.time} onClick={() => void saveDate(q)}>OK</button>
+          <button className="btn sec" style={{ width: 'auto', height: 38, padding: '0 10px', fontSize: 13 }} onClick={() => setEdit(null)}>✕</button>
+        </div>
+      )}
       </div>
     )
   }
@@ -102,7 +159,7 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
               <div className="card" style={{ padding: '4px 14px' }}>{published.map((q, i) => row(q, i, true))}</div>
             </>
           )}
-          <div className="mx-2 mt-3 text-center text-[12.5px]" style={{ color: 'var(--hint)' }}>Текст і фото — у пості: «Копіювати текст» або «Надіслати в чат».</div>
+          <div className="mx-2 mt-3 text-center text-[12.5px]" style={{ color: 'var(--hint)' }}>Тапни дату, щоб перенести. Текст і фото — у пості: «Копіювати текст» або «Надіслати в чат».</div>
         </>
       )}
       {toast && <div className="toast">{toast}</div>}

@@ -4,6 +4,7 @@ import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { haptic, isDemo, useBackButton } from '../lib/tg'
 import { Carousel } from './Carousel'
+import { whenLabel } from './CalendarScreen'
 import { Center, Label, Spinner } from './ui'
 
 export const PLATFORM: Record<string, { name: string; cls: string }> = {
@@ -127,7 +128,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const hasComment = Boolean(cText.trim() || cPhoto.trim())
   const missing = (cur.missing_facts ?? []).filter((m) => m && (m.note || m.field))
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -145,9 +146,11 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   }
 
   const approve = async () => {
-    if (!(await act('approve'))) return
+    const r = await act('approve')
+    if (!r) return
     haptic('success')
-    setToast(`Затверджено · ${plat.name}`)
+    const at = r.plan?.scheduled_for ? ` → ${whenLabel(r.plan.scheduled_for, r.plan.slot_time ?? null)}` : ''
+    setToast(`Затверджено · ${plat.name}${at}`)
     onChanged()
     setTimeout(onNext, 450)
   }

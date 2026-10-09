@@ -103,8 +103,8 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string }
-type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[] }
+type ActionExtra = { version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string }
+type ActionResult = { ok: true; queued?: boolean; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 export async function getQueue(): Promise<QueueItem[]> {
   if (isDemo) {
@@ -125,7 +125,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -185,7 +185,13 @@ const demo = (() => {
     post: (id: string): PostDetail => structuredClone(byId(id)),
     act: (id: string, action: string, extra: Partial<CommentInput> & ActionExtra): ActionResult => {
       const p = byId(id)
-      if (action === 'approve') { p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString() }
+      if (action === 'approve') {
+        p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString()
+        p.plan.scheduled_for ??= new Date(Date.now() + 864e5).toISOString().slice(0, 10)
+        p.plan.slot_time ??= ({ telegram: '10:00', instagram: '19:00', threads: '13:00' } as Record<string, string>)[p.plan.platform] ?? '12:00'
+        return { ok: true as const, plan: { scheduled_for: p.plan.scheduled_for, slot_time: p.plan.slot_time } }
+      }
+      if (action === 'reschedule') { p.plan.scheduled_for = extra.date ?? null; p.plan.slot_time = extra.time ?? null; return { ok: true as const } }
       if (action === 'upload_url') return { ok: true as const, path: `uploads/${id}/demo.jpg`, signed_url: '' }
       if (action === 'edit_text') {
         const prev = p.versions.at(-1)!
