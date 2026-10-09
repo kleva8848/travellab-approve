@@ -1,0 +1,879 @@
+{
+  "name": "[TravelLab] Learn From Edits",
+  "nodes": [
+    {
+      "id": "schedule-hourly",
+      "name": "Schedule - Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "20 * * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-learn-edits",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "responseCode": 202,
+        "options": {}
+      },
+      "webhookId": "7d2e4a10-learn-edits",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "key=eq.supabase_url"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-params",
+      "name": "Code - Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Параметри запуску (розклад або ручний вебхук) + URL запитів\nlet body = {};\ntry { body = $('Webhook').first().json.body || {}; } catch (e) { body = {}; }\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst base = String(s.supabase_url || '').replace(/\\/$/, '') + '/rest/v1';\nconst UUID = /^[0-9a-f-]{36}$/i;\nconst ids = Array.isArray(body.comment_ids) ? body.comment_ids.filter(x => UUID.test(String(x))) : [];\nconst limit = Math.min(Math.max(Number(body.limit) || 20, 1), 40);\nconst cutoff = new Date(Date.now() - 15 * 60e3).toISOString();\nconst commentsUrl = base + '/review_comments?select=*&target=eq.text&kind=is.null&order=created_at.asc&limit=' + limit\n  + (ids.length ? '&id=in.(' + ids.join(',') + ')' : '&created_at=lt.' + encodeURIComponent(cutoff));\nconst withEdits = body.include_edits !== false && !ids.length;\nconst editsUrl = base + '/post_versions?select=id,content_plan_id,version_no,text&prompt_version=eq.ira_edit&learned_at=is.null&order=created_at.asc&limit=10'\n  + (withEdits ? '' : '&id=eq.00000000-0000-0000-0000-000000000000');\nreturn [{ json: { base, dry_run: body.dry_run === true, commentsUrl, editsUrl } }];"
+      }
+    },
+    {
+      "id": "http-get-comments",
+      "name": "HTTP - Get Comments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.commentsUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "http-get-edits",
+      "name": "HTTP - Get Edits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Code - Params').first().json.editsUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "http-get-versions",
+      "name": "HTTP - Get Versions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Code - Params').first().json.base }}/post_versions?select=id,content_plan_id,version_no,text&content_plan_id=in.({{ (() => {\n  const c = (() => { try { const j = $('HTTP - Get Comments').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\n  const e = (() => { try { const j = $('HTTP - Get Edits').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\n  const ids = [...new Set([...c, ...e].map(x => x.content_plan_id).filter(Boolean))];\n  return ids.length ? ids.join(',') : '00000000-0000-0000-0000-000000000000';\n})() }})",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "http-get-plans",
+      "name": "HTTP - Get Plans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Code - Params').first().json.base }}/content_plan?select=id,platform,pillar,slot_type,hotel_id&id=in.({{ (() => {\n  const c = (() => { try { const j = $('HTTP - Get Comments').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\n  const e = (() => { try { const j = $('HTTP - Get Edits').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\n  const ids = [...new Set([...c, ...e].map(x => x.content_plan_id).filter(Boolean))];\n  return ids.length ? ids.join(',') : '00000000-0000-0000-0000-000000000000';\n})() }})",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "supabase-get-rules",
+      "name": "Supabase - Get Rules",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ira_rules",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-build-prompts",
+      "name": "Code - Build Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Одна правка (коментар до тексту або власна правка тексту Іри) = один запит до класифікатора\nconst comments = (() => { try { const j = $('HTTP - Get Comments').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\nconst edits = (() => { try { const j = $('HTTP - Get Edits').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\nconst versions = (() => { try { const j = $('HTTP - Get Versions').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })();\nconst plans = Object.fromEntries((() => { try { const j = $('HTTP - Get Plans').first().json; return j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : []; } catch (e) { return []; } })().map(p => [p.id, p]));\nconst hotels = Object.fromEntries($('Supabase - Get Hotels').all().map(i => i.json).filter(h => h && h.hotel_id).map(h => [h.hotel_id, h]));\nconst rules = $('Supabase - Get Rules').all().map(i => i.json).filter(r => r && r.id && r.status !== 'rejected');\nconst PILLAR = { hotel_place: 'про готель', insider: 'інсайдер', tour_offer: 'офер туру', personal_take: 'думка', family: 'сімейний', unusual_hotels: 'незвичайні готелі', video: 'відео', template: 'шаблон' };\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst cut = (t, n) => { t = String(t || '').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };\nconst SYSTEM = \"Ти аналізуєш правку Ірини (TravelLab, вона пише пости про luxury-готелі для сімей і пар) до тексту поста і вирішуєш, чого з неї варто навчитись агенту-копірайтеру на майбутнє.\\nТипи правки (kind):\\n- one_off — стосується лише цього тексту: «постав мій текст», «прибери дужки», «заміни останню фразу на …», «прибери одне посилання», «коротше» / «тепліше» без ознак, що так треба завжди; конкретні перестановки й заміни. Більшість правок — one_off. НЕ роби правило з разової правки.\\n- style_rule — з правки видно стійку вимогу до того, ЯК писати, яка повториться в інших постах: тон, лексика, що не згадувати, як подавати мінуси, як починати пост, формат кінцівки на платформі. Ознаки: «завжди / ніколи / не пиши так», пояснення-принцип («бо я розповідаю експертну історію, а не даю довідку»), або вимога явно не лише про цей текст.\\n- fact_correction — Іра дає або виправляє ФАКТ про готель (що там є, кому підходить, нюанс, її особистий досвід: «я була», «мені запам'ятався…»). Факти — у facts.\\nОдна правка може дати і правило, і факт.\\nБудь стриманою: правило — лише коли вимога очевидно повториться в інших постах; не більше 2 правил з однієї правки. «Тепліше», «коротше», «більше мене», «природніше» без пояснення-принципу — one_off. Якщо Іра просто дала свій готовий текст / фразу для вставки — це one_off (+ факти з нього), правил з її тексту не виводь.\\nКонкретні відомості про готель (що де є, відстані, кому підходить, нюанси) — це facts, а не rules.\\nПравило НІКОЛИ не може вимагати: особистого досвіду, вражень чи «я була там» (досвід Іри — лише з її фактів у досьє, агент його не вигадує); порівняльних заяв («рідкісний», «унікальний», «один з небагатьох», «найкращий»); категоричних вироків клієнту; хештегів. Якщо правка до такого підштовхує — сформулюй безпечну суть (наприклад, «подавай як сильну сторону для міжсезоння» замість «як рідкісний») або не створюй правила.\\nrules[]: rule_text — ОДНЕ коротке речення-інструкція українською (до 160 символів), самодостатнє (зрозуміле без цього поста; для scope hotel — з назвою готелю), без цитування всього поста, без вигадок понад те, що вона сказала.\\nscope: hotel — як писати саме про цей готель (що підкреслювати, що не подавати як мінус); platform — формат цієї платформи (довжина, посилання, стрілки, емодзі, кінцівка з контактом); pillar — про цю рубрику; global — загальний тон і стиль для всіх постів. Сумніваєшся між вужчим і global — бери вужчий. Готелю нема — scope hotel не став.\\nНе створюй правило, яке суперечить її базовим заборонам (хештеги, вигаданий особистий досвід) або дублює наявне зі списку «Вже є правила» — тоді постав duplicate_of = id наявного.\\nfacts[] — лише НОВЕ, чого ще нема в блоці «Вже в досьє готелю» (не повторюй наявне іншими словами); не більше 3; одне поле — один факт (кілька деталей одного поля обʼєднуй через «; »). Дати бронювання, ціни, сезони продажу, контакти, побажання до тексту — НЕ факти про готель.\\nfacts[] (лише якщо пост про готель): field — key_detail (що в готелі є / чим він відрізняється: басейни, клуби, сервіс, вілли), who_for (кому підходить), who_not_for (кому варто порівняти інший формат), caveat (лише обмеження чи нюанс, про який варто знати заздалегідь), ira_notes (її особистий досвід / враження / інше); text — факт її словами, коротко, без вигадок і без оцінок від себе.\\nkind: style_rule — якщо є хоч одне нове правило (не дубль); інакше fact_correction — якщо є факти; інакше one_off.\\nВідповідь — СТРОГО JSON без іншого тексту: {\\\"kind\\\": \\\"one_off|style_rule|fact_correction\\\", \\\"rules\\\": [{\\\"scope\\\": \\\"hotel|platform|pillar|global\\\", \\\"rule_text\\\": \\\"…\\\", \\\"duplicate_of\\\": null}], \\\"facts\\\": [{\\\"field\\\": \\\"…\\\", \\\"text\\\": \\\"…\\\"}], \\\"why\\\": \\\"коротко українською, чому так\\\"}\";\n\nfunction ctx(plan) {\n  const h = plan && plan.hotel_id ? hotels[plan.hotel_id] : null;\n  const mine = rules.filter(r => r.scope === 'global' || (plan && ((r.scope === 'platform' && r.scope_value === plan.platform) || (r.scope === 'pillar' && r.scope_value === plan.pillar) || (r.scope === 'hotel' && r.scope_value === plan.hotel_id))))\n    .slice(0, 40).map(r => r.id + ' [' + r.scope + (r.scope_value ? ':' + r.scope_value : '') + (r.status === 'pending' ? ', чекає' : '') + '] ' + r.rule_text);\n  const dossier = h ? ['key_detail', 'who_for', 'who_not_for', 'caveat', 'ira_notes'].filter(k => h[k]).map(k => k + ': ' + cut(h[k], 600)).join('\\n') : '';\n  return { h, head: 'Пост: ' + (plan ? (PLAT[plan.platform] || plan.platform) + ' · рубрика ' + (PILLAR[plan.pillar] || plan.pillar) : 'невідомо')\n    + ' · готель: ' + (h ? h.name : '—') + '\\n\\nВже є правила:\\n' + (mine.length ? mine.join('\\n') : '—')\n    + (h ? '\\n\\nВже в досьє готелю:\\n' + (dossier || '—') : '') };\n}\n\nconst out = [];\nfor (const c of comments) {\n  const plan = plans[c.content_plan_id] || null;\n  const v = versions.find(x => x.id === c.version_id);\n  const { h, head } = ctx(plan);\n  const user = head + '\\n\\nТЕКСТ, ДО ЯКОГО ПРАВКА:\\n<<<\\n' + cut(v && v.text, 1500) + '\\n>>>\\n\\nПРАВКА ІРИНИ:\\n<<<\\n' + cut(c.body, 1500) + '\\n>>>'\n    + ((c.chips || []).length ? '\\n(швидкі кнопки: ' + c.chips.join(', ') + ')' : '');\n  out.push({ json: { unit: 'comment', id: c.id, parsed: c.parsed || null, plan, hotel_id: h ? h.hotel_id : null, body: cut(c.body, 300), chips: c.chips || [], systemPrompt: SYSTEM, userPrompt: user } });\n}\nfor (const e of edits) {\n  const plan = plans[e.content_plan_id] || null;\n  const prev = versions.filter(x => x.content_plan_id === e.content_plan_id && x.version_no < e.version_no && x.text).sort((a, b) => b.version_no - a.version_no)[0];\n  // текст не змінився / нема попередньої версії — позначаємо без розбору (запит-заглушка, щоб пари «правка ↔ відповідь» не з'їхали)\n  if (!prev || !e.text || prev.text === e.text) { out.push({ json: { unit: 'edit', id: e.id, plan, skip: true, systemPrompt: 'Відповідай рівно: {}', userPrompt: '{}' } }); continue; }\n  const { h, head } = ctx(plan);\n  const user = head + '\\n\\nІра САМА переписала текст поста в апці (це і є її правка).\\nБУЛО:\\n<<<\\n' + cut(prev.text, 1500) + '\\n>>>\\n\\nСТАЛО:\\n<<<\\n' + cut(e.text, 1500) + '\\n>>>';\n  out.push({ json: { unit: 'edit', id: e.id, plan, hotel_id: h ? h.hotel_id : null, body: 'власна правка тексту', systemPrompt: SYSTEM, userPrompt: user } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "openai-classify",
+      "name": "OpenAI - Classify",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "content": "={{ $json.userPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-decide",
+      "name": "Code - Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Відповіді класифікатора → що записати (правила, факти, позначки). Нічого не пише сам\nconst units = $('Code - Build Prompts').all().map(i => i.json);\nconst answers = $input.all().map(i => i.json);\nconst p = $('Code - Params').first().json;\nconst existing = $('Supabase - Get Rules').all().map(i => i.json).filter(r => r && r.id && r.status !== 'rejected');\nconst norm = t => String(t || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, ' ').trim();\nconst seen = new Set(existing.map(r => r.scope + '|' + (r.scope_value || '') + '|' + norm(r.rule_text)));\nconst stems = t => new Set(norm(t).split(' ').filter(w => w.length > 3).map(w => w.slice(0, 5)));\nconst similar = (a, b) => { const A = stems(a), B = stems(b); if (!A.size || !B.size) return false; let n = 0; for (const w of A) if (B.has(w)) n++; return n / Math.min(A.size, B.size) >= 0.6; };\n// факт уже є в досьє (будь-яке поле) або доданий цим прогоном: ≥70% основ його слів там трапляються\nconst contained = (t, have) => { const A = stems(t), B = stems(have); if (!A.size) return true; let n = 0; for (const w of A) if (B.has(w)) n++; return n / A.size >= 0.7; };\nconst hotels = Object.fromEntries($('Supabase - Get Hotels').all().map(i => i.json).filter(h => h && h.hotel_id).map(h => [h.hotel_id, h]));\nconst factsSeen = {};\nconst SCOPES = ['hotel', 'platform', 'pillar', 'global'];\nconst FIELDS = ['key_detail', 'who_for', 'who_not_for', 'caveat', 'ira_notes'];\nconst parse = (j) => {\n  try {\n    const m = Array.isArray(j.output) ? j.output[0] : j;\n    const b = m && Array.isArray(m.content) ? m.content[0] : null;\n    const raw = String((b && b.text) || j.text || '').trim().replace(/^\\`\\`\\`json\\s*|\\`\\`\\`$/g, '');\n    return JSON.parse(raw);\n  } catch (e) { return null; }\n};\nconst ruleRows = [], facts = [], commentPatches = [], learned = [], report = [];\nlet ai = 0; // відповіді моделі йдуть 1:1 за правками\nfor (const u of units) {\n  const a = answers[ai++] || {};\n  if (u.skip) { learned.push(u.id); report.push({ unit: u.unit, id: u.id, kind: 'skip' }); continue; }\n  const r = parse(a);\n  // лише швидкі кнопки без своїх слів («Тепліше, більше мене») — разова правка, правил не робимо\n  const chipOnly = u.unit === 'comment' && (u.chips || []).length && norm(u.body) === norm(u.chips.join(' '));\n  if (!r) { report.push({ unit: u.unit, id: u.id, error: 'не розібрано — спробую наступного разу' }); continue; }\n  const plan = u.plan || {};\n  const newRules = [];\n  for (const x of chipOnly ? [] : (Array.isArray(r.rules) ? r.rules : []).slice(0, 2)) {\n    let scope = SCOPES.includes(x && x.scope) ? x.scope : null;\n    const text = String((x && x.rule_text) || '').replace(/\\s+/g, ' ').trim().slice(0, 240);\n    if (!scope || !text || (x.duplicate_of && existing.some(e => e.id === x.duplicate_of))) continue;\n    if (scope === 'hotel' && !plan.hotel_id) scope = 'pillar';\n    const value = scope === 'global' ? null : scope === 'hotel' ? plan.hotel_id : scope === 'platform' ? plan.platform : plan.pillar;\n    if (scope !== 'global' && !value) continue;\n    const key = scope + '|' + (value || '') + '|' + norm(text);\n    // дубль за змістом (той самий scope, ≥60% спільних основ слів) — не пишемо\n    if (seen.has(key) || [...seen].some(k => k.startsWith(scope + '|' + (value || '') + '|') && similar(k.split('|')[2], norm(text)))) continue;\n    seen.add(key);\n    // рішення #9: global — лише після ✅ Влада\n    const row = { rule_text: text, scope, scope_value: value, source_comment_id: u.unit === 'comment' ? u.id : null, status: scope === 'global' ? 'pending' : 'active' };\n    newRules.push(row); ruleRows.push(row);\n  }\n  // Факти: лише нове (чого нема в досьє чи вже додано цим прогоном), одне поле — один запис, не більше 3\n  const byField = {};\n  for (const f of chipOnly ? [] : Array.isArray(r.facts) ? r.facts : []) {\n    const text = String((f && f.text) || '').replace(/\\s+/g, ' ').trim().slice(0, 400);\n    if (!u.hotel_id || !text) continue;\n    const field = FIELDS.includes(f.field) ? f.field : 'ira_notes';\n    const h = hotels[u.hotel_id] || {};\n    const have = FIELDS.map(k => String(h[k] || '')).join(' ') + ' ' + (factsSeen[u.hotel_id] || '');\n    if (contained(text, have)) continue;\n    byField[field] = byField[field] ? byField[field] + '; ' + text : text;\n    factsSeen[u.hotel_id] = (factsSeen[u.hotel_id] || '') + ' ' + text;\n  }\n  const myFacts = Object.entries(byField).slice(0, 3).map(([field, text]) => ({ hotel_id: u.hotel_id, text, field_hint: field, mode: 'append', source: 'правка в апці' }));\n  facts.push(...myFacts);\n  // правило-дубль наявного — теж style_rule (просто нового рядка не пишемо)\n  const kind = chipOnly ? 'one_off' : newRules.length || (r.kind === 'style_rule' && Array.isArray(r.rules) && r.rules.length) ? 'style_rule' : myFacts.length ? 'fact_correction' : 'one_off';\n  const learn = { kind, model: 'gpt-4.1', at: new Date().toISOString(), why: String(r.why || '').slice(0, 300), rules: newRules.map(x => ({ scope: x.scope, rule_text: x.rule_text, status: x.status })), facts: myFacts.map(f => ({ field: f.field_hint, text: f.text })) };\n  if (u.unit === 'comment') commentPatches.push({ id: u.id, patch: { kind, parsed: { ...((u.parsed && typeof u.parsed === 'object') ? u.parsed : {}), learn } } });\n  else learned.push(u.id);\n  report.push({ unit: u.unit, id: u.id, kind, rules: learn.rules, facts: learn.facts, why: learn.why, model_kind: r.kind });\n}\nreturn [{ json: { dry_run: p.dry_run, base: p.base, ruleRows, facts, commentPatches, learned, report } }];"
+      }
+    },
+    {
+      "id": "if-write-",
+      "name": "IF - Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-write-",
+              "leftValue": "={{ !$json.dry_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-rules",
+      "name": "HTTP - Insert Rules",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Decide').first().json.base }}/ira_rules",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Code - Decide').first().json.ruleRows) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-fact-items",
+      "name": "Code - Fact Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const d = $('Code - Decide').first().json;\nreturn d.facts.length ? d.facts.map(f => ({ json: f })) : [{ json: { _none: true } }];"
+      }
+    },
+    {
+      "id": "if-fact-",
+      "name": "IF - Fact?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-fact-",
+              "leftValue": "={{ !$json._none }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "execute-hotel-fact-write",
+      "name": "Execute - Hotel Fact Write",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3740,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "T8sUNWHQXxaztw7f",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "http-mark-edits-learned",
+      "name": "HTTP - Mark Edits Learned",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3960,
+        0
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Code - Decide').first().json.base }}/post_versions?id=in.({{ $('Code - Decide').first().json.learned.join(',') || '00000000-0000-0000-0000-000000000000' }})",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ learned_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "code-comment-patches",
+      "name": "Code - Comment Patches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const d = $('Code - Decide').first().json;\nreturn d.commentPatches.map(c => ({ json: { ...c, base: d.base } }));"
+      }
+    },
+    {
+      "id": "http-patch-comment",
+      "name": "HTTP - Patch Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4400,
+        0
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.base }}/review_comments?id=eq.{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.patch) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Schedule - Hourly": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Code - Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Params": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Get Comments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Get Comments": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Get Edits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Get Edits": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Get Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Get Versions": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Get Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Get Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Rules": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Prompts": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Classify": {
+      "main": [
+        [
+          {
+            "node": "Code - Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Decide": {
+      "main": [
+        [
+          {
+            "node": "IF - Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Write?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Insert Rules",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "HTTP - Insert Rules": {
+      "main": [
+        [
+          {
+            "node": "Code - Fact Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Fact Items": {
+      "main": [
+        [
+          {
+            "node": "IF - Fact?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Fact?": {
+      "main": [
+        [
+          {
+            "node": "Execute - Hotel Fact Write",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Mark Edits Learned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute - Hotel Fact Write": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Mark Edits Learned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Mark Edits Learned": {
+      "main": [
+        [
+          {
+            "node": "Code - Comment Patches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Comment Patches": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Patch Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

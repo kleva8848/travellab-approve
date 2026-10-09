@@ -1,6 +1,7 @@
 import type { Me, QueueItem } from '../lib/api'
 import { haptic } from '../lib/tg'
 import { PILLAR, PLATFORM } from './PostScreen'
+import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
 
 const DAYS = ['неділя', 'понеділок', 'вівторок', 'середа', 'четвер', 'пʼятниця', 'субота']
@@ -82,6 +83,7 @@ export function TodayScreen({ me, queue, queueError, onOpen, onRetry }: Props) {
           <List title="Затверджено" items={approved} onOpen={onOpen} badge={<span className="chip okc">в календарі</span>} />
         </>
       )}
+      {me.is_admin && <RulesAdmin />}
     </div>
   )
 }

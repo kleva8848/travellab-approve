@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { RULES_JS } from './ira_rules.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CFG = {
@@ -62,6 +63,7 @@ return [{ json: {
 
 // ───── Збирає: що писати в досьє, вхід генератора (як Buffer Filler pre-gate, але з відповідями Іри) ─────
 const build = `const inp = $('Code - Input').first().json;
+${RULES_JS}
 const all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };
 const s = {};
 for (const r of all('Supabase - Get Settings')) s[r.key] = r.value;
@@ -120,7 +122,7 @@ const golden = all('Supabase - Get Golden Versions').filter(v => v.text && v.con
   .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at))).slice(0, 3).map(v => ({ text: v.text }));
 const CUTOVER = new Date('2026-09-19T12:00:00Z');
 const legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
-const rules = all('Supabase - Get Rules').filter(r => r.scope === 'global' || (r.scope === 'platform' && r.scope_value === plan.platform) || (r.scope === 'pillar' && r.scope_value === plan.pillar) || (r.scope === 'hotel' && r.scope_value === plan.hotel_id)).map(r => r.rule_text);
+const rules = pickIraRules(all('Supabase - Get Rules'), plan);
 
 const qa = mine.map(r => '— ' + (r.question || r.field) + ': ' + String(r.answer).trim()).join('\\n');
 const note = [topic && 'Тема від Іри: ' + topic, subject && 'Що пропонуємо (від Іри): ' + subject, dates && 'Дати (від Іри): ' + dates, ...extra].filter(Boolean).join('\\n') || (plan.note || '');
@@ -161,7 +163,10 @@ return (b._facts || []).length ? b._facts.map(f => ({ json: f })) : [{ json: { _
 const tourItems = `const b = $('Code - Build').first().json;
 return (b._tour_patches || []).length ? b._tour_patches.map(t => ({ json: { ...t, supabase_url: b.supabase_url } })) : [{ json: { _none: true, tour_id: 'none', patch: {}, supabase_url: b.supabase_url } }];`
 
-const genInput = `return [{ json: $('Code - Build').first().json._gen }];`
+const genInput = `// Правила Іри → у поле, яке генератор читає (n8n/ira_rules.mjs)
+${RULES_JS}
+const inp = $('Code - Build').first().json._gen;
+return [{ json: applyIraRules(inp, inp.rules || []) }];`
 
 const parseGen = `// Відповідь генератора → RPC tl_add_version
 const g = $json || {};

@@ -1,0 +1,293 @@
+{
+  "name": "[TravelLab] Rules Digest (admin)",
+  "nodes": [
+    {
+      "id": "schedule-monday-09-00",
+      "name": "Schedule - Monday 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-rules-digest",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "9c41e7b2-rules-digest",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "supabase-get-settings",
+      "name": "Supabase - Get Settings",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "settings",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "supabase-get-rules",
+      "name": "Supabase - Get Rules",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ira_rules",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-hotels",
+      "name": "Supabase - Get Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "code-digest",
+      "name": "Code - Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Текст дайджесту Владу (або нічого)\nlet force = false;\ntry { force = $('Webhook').first().json.body.force === true; } catch (e) { force = false; }\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst rules = $('Supabase - Get Rules').all().map(i => i.json).filter(r => r && r.id);\nconst hotels = Object.fromEntries($('Supabase - Get Hotels').all().map(i => i.json).filter(h => h && h.hotel_id).map(h => [h.hotel_id, h.name]));\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst where = r => r.scope === 'hotel' ? (hotels[r.scope_value] || r.scope_value) : r.scope === 'platform' ? (PLAT[r.scope_value] || r.scope_value) : r.scope === 'pillar' ? 'рубрика ' + r.scope_value : 'усі пости';\nconst weekAgo = Date.now() - 7 * 864e5;\nconst pending = rules.filter(r => r.status === 'pending').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst fresh = rules.filter(r => r.status === 'active' && r.scope !== 'global' && new Date(r.created_at).getTime() >= weekAgo);\nconst chat = String(s.admin_chat_id || '');\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!chat || !base || (!pending.length && !fresh.length && !force)) return [{ json: { send: false, pending: pending.length, fresh: fresh.length } }];\nconst lines = ['🧠 Правила з правок Іри'];\nif (pending.length) {\n  lines.push('', 'Чекають твого ✅ (діятимуть на всі пости):');\n  pending.slice(0, 15).forEach((r, i) => lines.push((i + 1) + '. ' + r.rule_text));\n  if (pending.length > 15) lines.push('…і ще ' + (pending.length - 15));\n}\nif (fresh.length) {\n  lines.push('', 'За тиждень увімкнулись самі:');\n  fresh.slice(0, 15).forEach(r => lines.push('• ' + where(r) + ': ' + r.rule_text));\n  if (fresh.length > 15) lines.push('…і ще ' + (fresh.length - 15));\n}\nif (!pending.length && !fresh.length) lines.push('', 'Нових правил нема.');\nlines.push('', 'Схвалити, відхилити чи вимкнути — в апці, блок «Правила з правок» (бачиш лише ти).');\nreturn [{ json: { send: true, chat_id: chat, text: lines.join('\\n').slice(0, 3900), url: base + '/?startapp=rules' } }];"
+      }
+    },
+    {
+      "id": "if-send-",
+      "name": "IF - Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "send",
+              "leftValue": "={{ $json.send }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-to-admin",
+      "name": "Telegram - To Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Відкрити правила",
+                    "additionalFields": {
+                      "web_app": {
+                        "url": "={{ $json.url }}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule - Monday 09:00": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Settings": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Rules": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotels": {
+      "main": [
+        [
+          {
+            "node": "Code - Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Digest": {
+      "main": [
+        [
+          {
+            "node": "IF - Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Send?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - To Admin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

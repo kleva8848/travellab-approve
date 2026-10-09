@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { RULES_JS } from './ira_rules.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CFG = {
@@ -29,6 +30,7 @@ const getAll = (name, x, table, conditions, extra = {}) =>
 const eq = (keyName, keyValue) => ({ keyName, condition: 'eq', keyValue })
 
 const buildInput = `// Збирає вхід для Post Generator з плану, поточної версії і нових правок Іри
+${RULES_JS}
 const body = $('Webhook').first().json.body || {};
 const all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0); } catch (e) { return []; } };
 const plan = all('Supabase - Get Plan')[0];
@@ -61,10 +63,14 @@ const fewshot = [...golden, ...legacy];
 const REWRITE = /перепиш|інш(ий|у|е) варіант|з нуля|заново|по-новому|повністю переро/i;
 const editMode = !textNew.some(c => REWRITE.test(c.body));
 
+// Правила з попередніх правок Іри (ira_rules active; без таблиці — порожньо) → у вхід генератора (n8n/ira_rules.mjs)
+const iraRules = pickIraRules(all('Supabase - Get Rules'), plan);
+
 let feedback = textNew.map(c => c.body).join('\\n');
 if (feedback && earlier.length) feedback += '\\n\\nРаніше Іра вже просила по цьому посту (не повертай того, що вона прибрала):\\n' + earlier.join('\\n');
 
-return [{ json: {
+return [{ json: applyIraRules({
+  _ira_rules: iraRules,
   _skip_text: textNew.length === 0,
   _plan: plan,
   _cur: cur,
@@ -88,7 +94,7 @@ return [{ json: {
   ira_feedback: feedback,
   had_feedback: !!feedback,
   passthrough: { content_plan_id: plan.id }
-} }];`
+}, iraRules) }];`
 
 const parseResult = `// Результат генератора → рядок post_versions (або помилка)
 const g = $json;
@@ -157,7 +163,8 @@ const own = (ctx._earlier_raw || []).flatMap(b => String(b).split(/\\n+/)).map(x
 const user = 'ПОСТ ЗАРАЗ:\\n<<<\\n' + (ctx.old_text || '') + '\\n>>>\\n\\nПРАВКА ІРИНИ:\\n<<<\\n' + ctx._edit_request + '\\n>>>'
   + '\\n\\nЇї власні формулювання (не змінювати):\\n' + (own.length ? own.map(x => '— ' + x).join('\\n') : '—')
   + '\\n\\nФакти про готель (лише якщо правка просить додати деталі):\\n' + (facts || '—')
-  + '\\n\\nНотатки Ірини (єдине джерело особистого):\\n' + (h.ira_notes || '—');
+  + '\\n\\nНотатки Ірини (єдине джерело особистого):\\n' + (h.ira_notes || '—')
+  + ((ctx._ira_rules || []).length ? '\\n\\nЇї постійні правила з попередніх правок (зважай на них лише в тих реченнях, які змінюєш за цією правкою; решту тексту через них НЕ переписуй):\\n' + ctx._ira_rules.map(r => '— ' + r).join('\\n') : '');
 return [{ json: { systemPrompt: ${JSON.stringify(EDIT_SYSTEM)}, userPrompt: user } }];`
 
 const parseEdit = `// Відповідь редактора → у форматі виходу генератора (далі — спільний Code - Parse Result)
@@ -306,6 +313,8 @@ const nodes = [
     operation: 'getAll', tableId: 'content_plan', returnAll: true, filterType: 'string',
     filterString: "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})",
   }, { credentials: sb, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput' }),
+  // Правила Іри з правок (класифікатор «Learn From Edits»); помилка → без правил
+  getAll('Supabase - Get Rules', 1720, 'ira_rules', null, { onError: 'continueRegularOutput' }),
   node('Code - Build Generator Input', 'n8n-nodes-base.code', 2, 1760, { jsCode: buildInput }),
   ifTrue('IF - Photo Comments?', 1800, '={{ ($json._photo_comment_ids || []).length > 0 }}', -440),
   node('Code - Build Photo Prompt', 'n8n-nodes-base.code', 2, 1840, { jsCode: photoPrompt }, { y: -440 }),
@@ -399,7 +408,7 @@ nodes.push(
 
 const chain = (...names) => Object.fromEntries(names.slice(0, -1).map((n, i) => [n, { main: [[{ node: names[i + 1], type: 'main', index: 0 }]] }]))
 const connections = {
-  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans', 'Code - Build Generator Input', 'IF - Photo Comments?'),
+  ...chain('Webhook', 'Supabase - Get Plan', 'Supabase - Get Versions', 'Supabase - Get Comments', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans', 'Supabase - Get Rules', 'Code - Build Generator Input', 'IF - Photo Comments?'),
   'IF - Photo Comments?': { main: [[{ node: 'Code - Build Photo Prompt', type: 'main', index: 0 }], [{ node: 'Code - Photo Edits', type: 'main', index: 0 }]] },
   ...chain('Code - Build Photo Prompt', 'OpenAI - Parse Photo', 'Code - Photo Edits', 'IF - Text Comments?'),
   'IF - Text Comments?': { main: [[{ node: 'IF - Edit Mode?', type: 'main', index: 0 }], [{ node: 'IF - Photo Parsed?', type: 'main', index: 0 }]] },

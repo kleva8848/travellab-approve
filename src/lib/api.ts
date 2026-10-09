@@ -37,7 +37,9 @@ const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 export async function getMe(): Promise<Me> {
   if (isDemo) {
     await wait()
-    return { id: 1, first_name: 'Іра', is_admin: false }
+    // ?demo=1&admin=1 — подивитись адмінський блок «Правила з правок»
+    const admin = new URLSearchParams(location.search).has('admin')
+    return { id: 1, first_name: admin ? 'Влад' : 'Іра', is_admin: admin }
   }
   const r = await call<{ user: Me }>('/api/me')
   return r.user
@@ -150,6 +152,43 @@ export async function reviewAction(
     return demo.act(id, action, extra)
   }
   return call('/api/review', { method: 'POST', body: JSON.stringify({ id, expected_version_no, action, ...extra }) })
+}
+
+// ───────────── Фаза 7: правила з правок Іри (лише адмін) ─────────────
+
+export type Rule = { id: string; rule_text: string; scope: 'global' | 'platform' | 'pillar' | 'hotel'; where: string; created_at: string; source: string | null }
+export type RuleDecision = 'approve' | 'reject' | 'disable'
+
+const demoRules: { pending: Rule[]; active: Rule[] } = {
+  pending: [
+    { id: 'r1', rule_text: 'Пиши просто й природно, без складних зворотів.', scope: 'global', where: 'усі пости', created_at: new Date().toISOString(), source: 'Можна написати природніше, без складних заворотів' },
+  ],
+  active: [
+    { id: 'r2', rule_text: 'Не подавай кам\'янистий пляж Демо-готелю як мінус.', scope: 'hotel', where: 'Демо-готель на острові', created_at: new Date().toISOString(), source: null },
+    { id: 'r3', rule_text: 'У кінці поста без стрілки перед контактом.', scope: 'platform', where: 'Telegram', created_at: new Date().toISOString(), source: null },
+  ],
+}
+
+export async function getRules(): Promise<{ pending: Rule[]; active: Rule[] }> {
+  if (isDemo) {
+    await wait()
+    return structuredClone(demoRules)
+  }
+  return call('/api/rules')
+}
+
+export async function decideRule(id: string, decision: RuleDecision): Promise<void> {
+  if (isDemo) {
+    await wait(300)
+    const from = decision === 'disable' ? demoRules.active : demoRules.pending
+    const i = from.findIndex((r) => r.id === id)
+    if (i >= 0) {
+      const [r] = from.splice(i, 1)
+      if (decision === 'approve') demoRules.active.unshift(r)
+    }
+    return
+  }
+  await call('/api/rules', { method: 'POST', body: JSON.stringify({ id, decision }) })
 }
 
 // ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────

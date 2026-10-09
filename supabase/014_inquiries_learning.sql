@@ -17,3 +17,13 @@ create index if not exists post_inquiries_plan_idx on public.post_inquiries (con
 alter table public.post_inquiries enable row level security;
 
 notify pgrst, 'reload schema';
+
+-- ───────────────────────── навчання на правках (фаза 7) ─────────────────────────
+-- n8n «[TravelLab] Learn From Edits» розбирає й власні правки тексту Іри в апці (post_versions prompt_version='ira_edit').
+-- learned_at — позначка «вже розібрано». Без колонки WF просто пропускає цей шматок (коментарі розбирає як завжди).
+alter table public.post_versions add column if not exists learned_at timestamptz;
+
+-- Швидкий пошук нерозібраних правок (review_comments.kind is null)
+create index if not exists review_comments_unlearned_idx on public.review_comments (created_at) where kind is null;
+
+notify pgrst, 'reload schema';

@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { RULES_JS } from './ira_rules.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CFG = {
@@ -48,6 +49,7 @@ const rest = (name, x, method, url, body, extra = {}) => {
 
 // ───────────────────────── Pre-gate: детермінований, без LLM ─────────────────────────
 const gate = `// Які слоти брати, чого бракує, вхід для генератора. Нічого не пише.
+${RULES_JS}
 const all = (n) => { try { return $(n).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };
 const s = {};
 for (const r of all('Supabase - Get Settings')) s[r.key] = r.value;
@@ -175,7 +177,7 @@ for (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.
   const golden = goldenAll
     .filter(v => v.content_plan_id !== p.id && (goldenPlans[v.content_plan_id] || {}).platform === p.platform)
     .slice(0, 3).map(v => ({ text: v.text }));
-  const myRules = rules.filter(r => r.scope === 'global' || (r.scope === 'platform' && r.scope_value === p.platform) || (r.scope === 'pillar' && r.scope_value === p.pillar) || (r.scope === 'hotel' && r.scope_value === p.hotel_id)).map(r => r.rule_text);
+  const myRules = pickIraRules(rules, p);
   const note = topic ? 'Тема від Іри: ' + topic : (p.note || '');
   gen.push({
     plan_id: p.id, orig_status: p.review_status, version_no: Number(p.version_no || 0), photo_count: p.hotel_id ? photoCount(p) : 0,
@@ -215,7 +217,10 @@ sd.bf = { exec: $execution.id, results: [] };
 const items = g._gen.map(x => ({ json: { ...x, supabase_url: g.supabase_url } }));
 return items.length ? items : [{ json: { _none: true, plan_id: '00000000-0000-0000-0000-000000000000', orig_status: 'planned', supabase_url: g.supabase_url } }];`
 
-const genInput = `return [{ json: $('Loop - Slots').first().json.input }];`
+const genInput = `// Правила Іри → у поле, яке генератор читає (n8n/ira_rules.mjs)
+${RULES_JS}
+const inp = $('Loop - Slots').first().json.input;
+return [{ json: applyIraRules(inp, inp.rules || []) }];`
 
 const parseGen = `// Відповідь генератора → що писати у версію
 const g = $json || {};
