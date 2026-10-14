@@ -17,8 +17,14 @@ export type WmKind = 'wm1' | 'wm2' | 'wm3'
 
 const GOLD = '#C9B27C'
 // Ширина знака від меншої сторони кадру
-const SIZE: Record<WmKind, number> = { wm1: 0.42, wm2: 0.2, wm3: 0.18 }
-const STUB_REV = 's1' // змінили вигляд заглушки → новий кеш
+const SIZE: Record<WmKind, number> = { wm1: 0.46, wm2: 0.26, wm3: 0.27 }
+const STUB_REV = 's2' // змінили вигляд заглушки / накладання → новий кеш
+// Колір знака під фон (сірий 0..255 під знаком): світлий → темна бронза, інакше світле золото
+const LIGHT_BG = 150
+const INK_ON_LIGHT = [112, 82, 38] as const
+const INK_ON_DARK = [222, 192, 128] as const
+// Строкатість (busy) вище порогу → м'яка підкладка під знаком
+const BUSY_BG = 60
 
 const dir = () => join(process.cwd(), 'server', 'watermarks')
 const fileOf = (k: WmKind) => join(dir(), `${k}.png`)
@@ -181,22 +187,47 @@ export async function addWatermark(img: Buffer, k: WmKind, textZone: 'top' | 'bo
     const dist = xs.map((x) => Math.abs((x + mw / 2) / w - focus))
     if (Math.min(...dist) < 0.3) best.x = dist[0] > dist[1] ? xs[0] : xs[1]
   }
-  // тінь: альфа знака, розмита, чорна ~55%
-  const blur = Math.max(1, Math.round(mw * 0.015))
-  const e = blur * 3
+  // Фон під знаком: світлий → знак темною бронзою, темний → світле золото; строкатий → м'яка підкладка
+  const gx = Math.floor(best.x / S), gy = Math.floor(best.y / S), gmw = Math.max(1, Math.floor(mw / S)), gmh = Math.max(1, Math.floor(mh / S))
+  let lum = 0
+  for (let y = gy; y < Math.min(gh, gy + gmh); y++) for (let x = gx; x < Math.min(gw, gx + gmw); x++) lum += grey[y * gw + x]
+  lum /= gmw * gmh
+  const light = lum > LIGHT_BG
+  const noisy = busy(grey, gw, gx, gy, gmw, gmh) > BUSY_BG
   const alpha = await sharp(m.data).extractChannel(3).raw().toBuffer()
-  const rgba = Buffer.alloc(mw * mh * 4)
-  for (let i = 0; i < mw * mh; i++) rgba[i * 4 + 3] = Math.round(alpha[i] * 0.55)
-  const shadow = await sharp(rgba, { raw: { width: mw, height: mh, channels: 4 } })
-    .extend({ top: e, bottom: e, left: e, right: e, background: { r: 0, g: 0, b: 0, alpha: 0 } })
-    .blur(blur)
-    .png()
-    .toBuffer()
-  return sharp(img)
-    .composite([
-      { input: shadow, left: Math.max(0, best.x - e), top: Math.max(0, best.y - e + 1) },
-      { input: m.data, left: best.x, top: best.y },
-    ])
-    .png()
-    .toBuffer()
+  const ink = light ? INK_ON_LIGHT : INK_ON_DARK
+  const tinted = Buffer.alloc(mw * mh * 4)
+  for (let i = 0; i < mw * mh; i++) {
+    tinted[i * 4] = ink[0]; tinted[i * 4 + 1] = ink[1]; tinted[i * 4 + 2] = ink[2]
+    tinted[i * 4 + 3] = Math.min(255, Math.round(alpha[i] * 1.15))
+  }
+  const markPng = await sharp(tinted, { raw: { width: mw, height: mh, channels: 4 } }).png().toBuffer()
+  const layers: sharp.OverlayOptions[] = []
+  // підкладка: розмита пляма під усім знаком (на світлому — біла, на темному — чорна)
+  if (noisy) {
+    const vp = Math.round(Math.max(mw, mh) * 0.3)
+    const vw = mw + vp * 2, vh = mh + vp * 2
+    const v = light ? 255 : 0
+    const veil = await sharp({ create: { width: vw, height: vh, channels: 4, background: { r: v, g: v, b: v, alpha: 0 } } })
+      .composite([{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}"><ellipse cx="${vw / 2}" cy="${vh / 2}" rx="${mw / 2 + vp * 0.25}" ry="${mh / 2 + vp * 0.25}" fill="rgb(${v},${v},${v})" fill-opacity="${light ? 0.4 : 0.3}"/></svg>`) }])
+      .blur(Math.max(1, vp * 0.6))
+      .png()
+      .toBuffer()
+    layers.push({ input: veil, left: Math.max(0, best.x - vp), top: Math.max(0, best.y - vp) })
+  }
+  // тінь лише на темному/середньому фоні: альфа знака, розмита, чорна ~70%
+  if (!light) {
+    const blur = Math.max(1, Math.round(mw * 0.012))
+    const e = blur * 3
+    const rgba = Buffer.alloc(mw * mh * 4)
+    for (let i = 0; i < mw * mh; i++) rgba[i * 4 + 3] = Math.round(alpha[i] * 0.7)
+    const shadow = await sharp(rgba, { raw: { width: mw, height: mh, channels: 4 } })
+      .extend({ top: e, bottom: e, left: e, right: e, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .blur(blur)
+      .png()
+      .toBuffer()
+    layers.push({ input: shadow, left: Math.max(0, best.x - e), top: Math.max(0, best.y - e + 1) })
+  }
+  layers.push({ input: markPng, left: best.x, top: best.y })
+  return sharp(img).composite(layers).png().toBuffer()
 }
