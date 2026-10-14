@@ -6,7 +6,9 @@
 // #7 роадмапу (§27): (а) ліміт оферів, (б) рубрика «Незвичайні готелі» (unusual_hotels, карусель TG+IG).
 // Ліміт — з Audience_Strategy_v2 §2.3: TG ~70% користь / ~20% м'яка рекомендація / ~10% прямий офер.
 // 5 TG-постів на тиждень → прямий офер ≤ 1 (=20%, найближче ціле до 10%); IG — той самий тур ≤ 1 (Чт).
-// Іра ще відповідає на «скільки прямих пропозицій на тиждень комфортно (1? 2?)» → OFFERS_PER_WEEK.
+// 14.10 відповіді Іри (Ira_Voice_Answers_2026-10-14, Audience_Strategy_v3): «у TG можна більше, в IG менше, але не
+// розкидатися пропозиціями» → Влад: TG 1 прямий + 1 м'яка рекомендація, IG 1 прямий. Портрети P1–P4 + банк питань:
+// тиждень = один портрет (ротація за ISO-тижнем), кожен слот — відповідь на одне питання; persona+питання → note слоту.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,7 +17,50 @@ const here = dirname(fileURLToPath(import.meta.url))
 const PLAN_NODE = 'Code - Build Weekly Slot Plan'
 
 export const PLAN_CODE = String.raw`// WF-018 — план тижня. Джерело правди: n8n/build_weekly_plan.mjs (репо travellab-approve)
-const OFFERS_PER_WEEK = 1; // прямих оферів на платформу (TG, IG); Threads — без продажу
+// Офери (рішення Влада 14.10 за відповіддю Іри): прямий = тур/ціна + дати + CTA; м'який = «якщо для вас важливо X —
+// я б дивилась цей готель», без ціни й CTA. Threads — без продажу.
+const OFFERS_PER_WEEK = { telegram: 1, instagram: 1 };
+const SOFT_PER_WEEK = { telegram: 1, instagram: 0 };
+
+// ── Портрети (Audience_Strategy_v3, зі слів Іри 14.10). match — теги/who_for готелів, які пасують портрету.
+const PERSONAS = [
+  { id: 'P1', name: 'Пара з приводом', who: 'пара 35–45, ювілей / подарунок / романтика, без дітей; хочуть цікаво, активно і гарно',
+    match: /couple|adults|romant|honeymoon|пар|двох|романт|ювіл/i },
+  { id: 'P2', name: 'Багатодітна сім\'я', who: 'сім\'я з 2–4 дітьми; потрібна сімейна інфраструктура, вілли / connecting rooms, щоб кожен був зайнятий',
+    match: /family|kids|сім|діт|вілл|villa|connect/i },
+  { id: 'P3', name: 'Жінки в подорожі', who: 'дві подруги або мама з дочкою; короткі поїздки, комфорт, spa, гарні місця, безпека',
+    match: /spa|wellness|women|girls|подруг|жін|релакс/i },
+  { id: 'P4', name: 'Європу бачили — далеко ще ні', who: 'активні 35–45 з коштами, об\'їздили Європу, але не були на Індійському океані; бояться перельоту й не знають, як організувати',
+    match: /maldiv|мальдів|seychel|сейшел|mauri|маврик|madagas|мадагас|island|остр/i },
+];
+// Банк питань — справжні питання клієнтів Іри (голосові 14.10). hotel: true — відповідь на прикладі готелю слоту;
+// false — загальна експертна тема (Threads, сторіз). Про росіян у постах НЕ пишемо (рішення Влада 14.10).
+const TOPIC_BANK = [
+  { p: 'P1', hotel: true, q: 'Куди поїхати вдвох на ювілей, щоб було і красиво, і не нудно?' },
+  { p: 'P1', hotel: true, q: 'Який готель обрати для сюрпризу-подарунка, щоб вразити, а не просто «гарно»?' },
+  { p: 'P1', hotel: true, q: 'Де на островах і активно (снорклінг, спорт), і романтично ввечері?' },
+  { p: 'P1', hotel: true, q: 'Як обрати віллу, щоб фото були як у журналі, а не як у всіх?' },
+  { p: 'P1', hotel: false, q: 'Чи страшно плавати з акулами й скатами — і чому це найкраща частина поїздки?' },
+  { p: 'P1', hotel: false, q: 'За скільки планувати подорож-подарунок на дату, щоб встигнути все добре?' },
+  { p: 'P2', hotel: true, q: 'Чим будуть зайняті діти різного віку, поки батьки відпочивають?' },
+  { p: 'P2', hotel: true, q: 'Вілла чи connecting rooms — як розселити велику сім\'ю, щоб діти спали окремо від дорослих?' },
+  { p: 'P2', hotel: true, q: 'Який пляж і вхід у воду безпечні для малих дітей?' },
+  { p: 'P2', hotel: true, q: 'Що в сімейному готелі має бути обов\'язково, коли дітей троє-четверо?' },
+  { p: 'P2', hotel: false, q: 'Як довго летіти з дітьми з України і як зробити дорогу легшою?' },
+  { p: 'P2', hotel: false, q: 'Близько (Греція, Іспанія) чи далеко — коли з дітьми варто летіти на океан?' },
+  { p: 'P3', hotel: true, q: 'Куди поїхати з подругою на 5 днів, щоб відпочити по-справжньому?' },
+  { p: 'P3', hotel: true, q: 'Куди поїхати мамі з дочкою, щоб обом було цікаво?' },
+  { p: 'P3', hotel: true, q: 'Де гарне spa і спокійна атмосфера без «тусовки»?' },
+  { p: 'P3', hotel: false, q: 'Як Іра супроводжує в поїздці: що робити, якщо щось пішло не так?' },
+  { p: 'P3', hotel: false, q: 'Як можна оплатити поїздку і що входить у ціну?' },
+  { p: 'P4', hotel: true, q: 'Чим острівний готель відрізняється від «шаблонного» резорту, де ви вже були тисячу разів?' },
+  { p: 'P4', hotel: true, q: 'Новий нішевий готель чи перевірений відомий — що обрати вперше?' },
+  { p: 'P4', hotel: true, q: 'Що побачити на Індійському океані, чого не буде в хорошому готелі в Єгипті?' },
+  { p: 'P4', hotel: false, q: 'Чи довго добиратися на Мальдіви з України і як це виглядає насправді?' },
+  { p: 'P4', hotel: false, q: 'Сезони на Мальдівах: коли шторми, хвилі й мусони, і чому ціни різні?' },
+  { p: 'P4', hotel: false, q: 'Чому ціни на відпочинок стали втричі вищі і з чого складається вартість?' },
+  { p: 'P4', hotel: false, q: 'Як організувати першу далеку подорож, якщо ніколи не летіли так далеко?' },
+];
 
 const rows = (n) => $(n).all().map(i => i.json).filter(j => Object.keys(j).length > 0);
 const tours = rows('Supabase - Get Ready Tours');
@@ -38,8 +83,20 @@ const dateOf = (day) => ymd(new Date(weekStart.getTime() + DAYS.indexOf(day) * 8
 const thu = new Date(weekStart.getTime() + 3 * 86400000);
 const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));
 
+// ── Фокус тижня: один портрет; питання з банку по колу (кожне коло портретів — наступні питання)
+const FOCUS = PERSONAS[WEEK % PERSONAS.length];
+const ROUND = Math.floor(WEEK / PERSONAS.length);
+const qOf = (hotel) => TOPIC_BANK.filter(t => t.p === FOCUS.id && t.hotel === hotel).map(t => t.q);
+const qHotel = qOf(true), qGeneral = qOf(false);
+let iH = ROUND * 3, iG = ROUND * 2;
+const nextQ = (hotel) => { const a = hotel ? qHotel : qGeneral; if (!a.length) return null; return a[(hotel ? iH++ : iG++) % a.length]; };
+// Іра: бронюють за 1–3 міс. (або «треба вже») → говоримо про поїздки найближчих 1–3 місяців, раннє бронювання не рекламуємо
+const MONTHS = ['січень', 'лютий', 'березень', 'квітень', 'травень', 'червень', 'липень', 'серпень', 'вересень', 'жовтень', 'листопад', 'грудень'];
+const m0 = weekStart.getUTCMonth();
+const HORIZON = MONTHS[(m0 + 1) % 12] + '–' + MONTHS[(m0 + 3) % 12];
+
 // ── Офер: лише найстаріший готовий тур (≤ OFFERS_PER_WEEK). Решта турів чекає наступних тижнів.
-const offerTours = tours.slice(0, OFFERS_PER_WEEK);
+const offerTours = tours.slice(0, Math.max(OFFERS_PER_WEEK.telegram, OFFERS_PER_WEEK.instagram));
 const offerTour = offerTours[0] || null;
 const used = new Set(offerTours.map(t => t.hotel_id).filter(Boolean));
 
@@ -65,7 +122,10 @@ const unusualHotel = unusualPool.length ? unusualPool[WEEK % unusualPool.length]
 if (unusualHotel) used.add(unusualHotel.hotel_id);
 
 // ── Готелі для контент-слотів (замість зайвих оферів): вільні, з ротацією за тижнем
-let pool = rotate(hotels.filter(h => h.hotel_id && !used.has(h.hotel_id)).sort(byId));
+// Спершу готелі, що пасують портрету тижня (теги / who_for / тип / локація), далі решта — ротація зберігається
+const fits = (h) => FOCUS.match.test([(h.tags || []).join(' '), h.who_for, h.type, h.country, h.region, h.name].join(' '));
+const rotated = rotate(hotels.filter(h => h.hotel_id && !used.has(h.hotel_id)).sort(byId));
+let pool = rotated.filter(fits).concat(rotated.filter(h => !fits(h)));
 const nextHotel = () => { const h = pool.shift() || null; if (h) used.add(h.hotel_id); return h ? h.hotel_id : null; };
 
 const pickedStory = stories.length > 0 ? stories[0] : null;
@@ -74,8 +134,9 @@ const S = (o) => slots.push(Object.assign({ tour_id: null, hotel_id: null, story
 
 // Пара A (Пн): був тур-офер → тепер м'яка рекомендація «про готель», без ціни
 const hA = nextHotel();
-S({ day: 'Пн', platform: 'telegram', slot_type: 'content', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A' });
-S({ day: 'Пн', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A' });
+const SOFT = "м'яка рекомендація: «якщо для вас важливо X — я б дивилась цей готель», без ціни й без CTA";
+S({ day: 'Пн', platform: 'telegram', slot_type: 'content', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A', soft: SOFT_PER_WEEK.telegram > 0, note: SOFT_PER_WEEK.telegram > 0 ? SOFT : null });
+S({ day: 'Пн', platform: 'instagram', slot_type: 'feed_carousel', pillar: 'hotel_place', hotel_id: hA, pair_key: 'A', soft: SOFT_PER_WEEK.instagram > 0, note: SOFT_PER_WEEK.instagram > 0 ? SOFT : null });
 S({ day: 'Пн', platform: 'threads', slot_type: 'expert_take', pillar: 'tour_expert', hotel_id: hA, pair_key: 'A', note: "мінімальна прив'язка до готелю, авторитетний тон, не продаж" });
 
 // Ср: інсайдер (самостійний готель) + IG сторіз + Threads думка
@@ -124,6 +185,33 @@ if (unusualHotel) {
 S({ day: 'Вт', platform: 'instagram', slot_type: 'reel', pillar: 'video', note: 'джерело — відео з media, тур не потрібен' });
 S({ day: 'Сб', platform: 'instagram', slot_type: 'stories', pillar: 'template', note: 'шаблон агента, тема тижня' });
 
+// IG-офер вимкнено налаштуванням → IG-пара B стає звичайним постом про готель
+if (!OFFERS_PER_WEEK.instagram) slots.filter(s => s.platform === 'instagram' && s.pillar === 'tour_offer')
+  .forEach(s => Object.assign(s, { pillar: 'hotel_place', tour_id: null, note: null }));
+
+// ── Портрет + питання клієнта → note (генератор отримує slot.note). Пара (pair_key) — одне питання на всі платформи.
+// Без питання: відео, «за кадром», особиста історія з черги (не перебиваємо її), прямий офер (висновок тижня)
+// «Незвичайні готелі» (своя рубрика — кут уже заданий) і сторіз-шаблон (досить фокусу тижня).
+const persona = FOCUS.id + ' ' + FOCUS.name + ' (' + FOCUS.who + ')';
+const pairQ = {};
+for (const s of slots) {
+  if (s.pillar === 'video' || s.pillar === 'behind_scenes') continue;
+  const offer = s.pillar === 'tour_offer';
+  let q = null;
+  if (!offer && !s.story_id && !['unusual_hotels', 'template'].includes(s.pillar)) {
+    const hotelQ = !!s.hotel_id;
+    const key = s.pair_key ? s.pair_key + (hotelQ ? 'h' : 'g') : null;
+    q = key && pairQ[key] !== undefined ? pairQ[key] : nextQ(hotelQ);
+    if (key) pairQ[key] = q;
+  }
+  const parts = ['Для кого: ' + persona + '.'];
+  if (q) parts.push('Питання клієнта: «' + q + '» — відповідай цій людині' + (s.hotel_id ? ' на прикладі цього готелю.' : '.'));
+  if (offer) parts.push('Офер — логічний висновок тижня для цього портрета.');
+  parts.push('Поїздки на ' + HORIZON + '; раннє бронювання не рекламувати.');
+  if (s.note) parts.push(s.note);
+  Object.assign(s, { note: parts.join(' '), question: q, persona_id: FOCUS.id });
+}
+
 // Дата слоту для апки / Buffer Filler (WF-051) і стан огляду
 // + назви готелю/туру — лише для звіту в TG (у content_plan не пишуться)
 const hotelName = (id) => { const h = hotels.find(x => x.hotel_id === id); return h ? (h.name || id) : null; };
@@ -151,11 +239,13 @@ const what = (s) => {
   if (s.tour_title) about = ' — тур «' + s.tour_title + '»' + (s.hotel_name ? ', ' + s.hotel_name : '');
   else if (s.hotel_name) about = ' — ' + s.hotel_name;
   else if (s.story_id) about = ' — історія з черги';
-  return PLAT[s.platform] + ': ' + kind + ', ' + topic + about;
+  return PLAT[s.platform] + ': ' + kind + ', ' + (s.soft ? "🤝 м'яка рекомендація" : topic) + about + (s.question ? '\n   ❓ ' + s.question : '');
 };
 const ws = items[0] && items[0].week_start;
 const we = ws ? new Date(new Date(ws + 'T00:00:00Z').getTime() + 6 * 86400000).toISOString().slice(0, 10) : null;
+const focus = items.find(s => s.persona_id);
 let text = '📅 План TravelLab на тиждень ' + fmt(ws) + '–' + fmt(we) + '\n';
+if (focus) text += '🎯 Фокус тижня: ' + (focus.note || '').replace(/^Для кого: /, '').split(').')[0] + ')\n';
 for (const d of DAYS) {
   const day = items.filter(s => s.day === d).sort((a, b) => PORDER.indexOf(a.platform) - PORDER.indexOf(b.platform));
   if (!day.length) continue;
