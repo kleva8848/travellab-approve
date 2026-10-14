@@ -25,7 +25,7 @@ const stories = rows('Supabase - Get New Stories');
 tours.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 stories.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-// Дата — за Києвом. Тиждень плану: у понеділок (запуск за розкладом) — поточний, в інші дні (ручний запуск) — наступний.
+// Дата — за Києвом. Тиждень плану: у понеділок — поточний, в інші дні (розклад у неділю, ручний запуск) — наступний.
 const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const today = new Date(kyiv + 'T00:00:00Z');
 const dow = (today.getUTCDay() + 6) % 7; // 0 = Пн
@@ -125,7 +125,46 @@ S({ day: 'Вт', platform: 'instagram', slot_type: 'reel', pillar: 'video', note
 S({ day: 'Сб', platform: 'instagram', slot_type: 'stories', pillar: 'template', note: 'шаблон агента, тема тижня' });
 
 // Дата слоту для апки / Buffer Filler (WF-051) і стан огляду
-return slots.map(s => ({ json: Object.assign(s, { week_start: WEEK_START, scheduled_for: dateOf(s.day), review_status: 'planned' }) }));`
+// + назви готелю/туру — лише для звіту в TG (у content_plan не пишуться)
+const hotelName = (id) => { const h = hotels.find(x => x.hotel_id === id); return h ? (h.name || id) : null; };
+const tourTitle = (id) => { const t = tours.find(x => x.tour_id === id); return t ? (t.title || id) : null; };
+return slots.map(s => ({ json: Object.assign(s, {
+  week_start: WEEK_START, scheduled_for: dateOf(s.day), review_status: 'planned',
+  hotel_name: s.hotel_id ? hotelName(s.hotel_id) : null, tour_title: s.tour_id ? tourTitle(s.tour_id) : null,
+}) }));`
+
+// Звіт Владу в TG: по днях, з датами і назвами готелів, людською мовою
+export const REPORT_CODE = String.raw`const items = $input.all().map(i => i.json);
+const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
+const PLAT = { telegram: 'TG', instagram: 'IG', threads: 'Threads' };
+const PORDER = ['telegram', 'instagram', 'threads'];
+const KIND = { content: 'пост', feed: 'пост', feed_carousel: 'карусель', offer: 'пост з ціною', reel: 'рілс', stories: 'сторіз',
+  reel_or_feed: 'рілс або пост', expert_take: 'думка експерта', personal_thought: 'думка Іри' };
+const TOPIC = { hotel_place: 'про готель', insider: 'інсайд про готель', tour_offer: '💰 пропозиція тижня', unusual_hotels: '✨ Незвичайні готелі',
+  atmosphere: 'атмосфера', behind_scenes: 'за кадром, знімає Іра', template: 'шаблон, тема тижня', video: 'відео з бази',
+  personal: 'особисте', personal_take: 'власна думка Іри', tour_expert: 'експертна думка' };
+const fmt = (ymd) => ymd ? ymd.slice(8, 10) + '.' + ymd.slice(5, 7) : '';
+const what = (s) => {
+  const kind = KIND[s.slot_type] || s.slot_type;
+  const topic = TOPIC[s.pillar] || String(s.pillar || '').replace(/_/g, ' ');
+  let about = '';
+  if (s.tour_title) about = ' — тур «' + s.tour_title + '»' + (s.hotel_name ? ', ' + s.hotel_name : '');
+  else if (s.hotel_name) about = ' — ' + s.hotel_name;
+  else if (s.story_id) about = ' — історія з черги';
+  return PLAT[s.platform] + ': ' + kind + ', ' + topic + about;
+};
+const ws = items[0] && items[0].week_start;
+const we = ws ? new Date(new Date(ws + 'T00:00:00Z').getTime() + 6 * 86400000).toISOString().slice(0, 10) : null;
+let text = '📅 План TravelLab на тиждень ' + fmt(ws) + '–' + fmt(we) + '\n';
+for (const d of DAYS) {
+  const day = items.filter(s => s.day === d).sort((a, b) => PORDER.indexOf(a.platform) - PORDER.indexOf(b.platform));
+  if (!day.length) continue;
+  text += '\n' + d + ' ' + fmt(day[0].scheduled_for) + '\n' + day.map(s => '• ' + what(s)).join('\n') + '\n';
+}
+const offer = items.find(s => s.pillar === 'tour_offer');
+text += '\n' + (offer ? '💰 Пропозиція тижня: ' + (offer.tour_title ? 'тур «' + offer.tour_title + '»' : 'ціна готелю ' + (offer.hotel_name || '')) : '💰 Пропозиції тижня нема — турів і цін у черзі нема');
+text += '\nТексти й фото з\'являться в апці TravelLab на перегляд.';
+return [{ json: { text } }];`
 
 const wf = JSON.parse(readFileSync(join(here, 'weekly_plan.json'), 'utf8'))
 const plan = wf.nodes.find((n) => n.name === PLAN_NODE)
@@ -151,6 +190,14 @@ return slots.map(s => ({ json: {
 } }));`
 const prep = wf.nodes.find((n) => n.name === 'Code - Prepare Content Plan Rows')
 prep.parameters.jsCode = PREPARE_CODE
+const rep = wf.nodes.find((n) => n.name === 'Code - Format Weekly Report')
+rep.parameters.jsCode = REPORT_CODE
+// Розклад: неділя 19:00 (Київ) → план наступного тижня готовий до понеділка, Buffer Filler (щодня 07:00) уже бачить слоти
+const SCHED_OLD = 'Schedule - Weekly Mon 7:30', SCHED = 'Schedule - Weekly Sun 19:00'
+const sched = wf.nodes.find((n) => n.name === SCHED_OLD || n.name === SCHED)
+sched.name = SCHED
+sched.parameters.rule = { interval: [{ field: 'weeks', triggerAtDay: [0], triggerAtHour: 19, triggerAtMinute: 0 }] }
+if (wf.connections[SCHED_OLD]) { wf.connections[SCHED] = wf.connections[SCHED_OLD]; delete wf.connections[SCHED_OLD] }
 const ins = wf.nodes.find((n) => n.name === 'Supabase - Insert Content Plan Rows')
 const fv = ins.parameters.fieldsUi.fieldValues
 for (const f of ['week_start', 'scheduled_for', 'review_status']) {
@@ -158,7 +205,7 @@ for (const f of ['week_start', 'scheduled_for', 'review_status']) {
 }
 // Падіння одного рядка (напр. невідомий CHECK на pillar) не зупиняє вставку решти тижня
 ins.onError = 'continueRegularOutput'
-// Розклад «Пн 07:30» — за Києвом (раніше часовий пояс інстансу)
+// Розклад — за Києвом (раніше часовий пояс інстансу)
 wf.settings = { ...wf.settings, timezone: 'Europe/Kyiv' }
 const out = { name: wf.name, nodes: wf.nodes, connections: wf.connections, settings: wf.settings }
 
