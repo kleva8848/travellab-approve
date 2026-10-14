@@ -18,7 +18,7 @@ export const PLATFORM: Record<string, { name: string; cls: string }> = {
 export const PILLAR: Record<string, string> = {
   tour_offer: 'тур-пропозиція', tour_offer_fallback: 'тур', tour_offer_seasonal: 'сезонний тур', tour_expert: 'експертна думка',
   hotel_place: 'про готель', insider: 'інсайдер', atmosphere: 'атмосфера', personal: 'особисте', personal_take: 'думка',
-  behind_scenes: 'закулісся', video: 'відео', template: 'шаблон', unusual_hotels: 'незвичайні готелі',
+  behind_scenes: 'закулісся', video: 'відео', template: 'шаблон', unusual_hotels: 'незвичайні готелі', personal_experience: 'історія Іри',
 }
 
 const FORM: Record<string, string> = { one_fact: 'один факт', list: 'перелік', story: 'історія', question: 'питання', comparison: 'порівняння' }

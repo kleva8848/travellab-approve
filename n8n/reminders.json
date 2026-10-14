@@ -159,18 +159,133 @@
       "alwaysOutputData": true
     },
     {
-      "id": "code-build-messages",
-      "name": "Code - Build Messages",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "supabase-get-new-stories",
+      "name": "Supabase - Get New Stories",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
       "position": [
         1760,
         0
       ],
       "parameters": {
-        "jsCode": "// Що слати: дайджест (10:00 або вебхук mode=digest) чи нагадування (кожні 5 хв або mode=remind)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst fromHook = $('Webhook - Manual Run').isExecuted ? String(($('Webhook - Manual Run').first().json.body || {}).mode || 'digest') : '';\nconst mode = fromHook || ($('Schedule - Digest 10:00').isExecuted ? 'digest' : 'remind');\n\nconst target = String(s.notify_target || 'admin');\nconst chats = [...new Set([\n  target !== 'ira' ? String(s.admin_chat_id || '') : '',\n  target !== 'admin' ? String(s.ira_chat_id || '') : '',\n].filter(Boolean))];\nif (!chats.length) throw new Error('немає отримувача: заповни settings.admin_chat_id / ira_chat_id (notify_target=' + target + ')');\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\n\nconst hotels = {}, tours = {};\nfor (const h of $('Supabase - Get Hotels').all()) if (h.json.hotel_id) hotels[h.json.hotel_id] = h.json.name;\nfor (const t of $('Supabase - Get Tours').all()) if (t.json.tour_id) tours[t.json.tour_id] = t.json.title;\nconst plans = $('Supabase - Get Open Plans').all().map(i => i.json).filter(p => p.id);\n\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst title = p => hotels[p.hotel_id] || tours[p.tour_id] || p.pillar || 'пост';\nconst hhmm = p => String(p.slot_time || '').slice(0, 5);\nconst slotKey = p => p.scheduled_for + ' ' + hhmm(p);\nconst zone = 'Europe/Kyiv';\nconst now = DateTime.now().setZone(zone);\nconst slotAt = p => (p.scheduled_for && p.slot_time) ? DateTime.fromISO(p.scheduled_for + 'T' + hhmm(p), { zone }) : null;\nconst postUrl = p => base + '/?startapp=post_' + p.id;\nconst out = [];\n\nif (mode === 'remind') {\n  const before = Number(s.remind_before_min) || 30;\n  for (const p of plans) {\n    if (p.review_status !== 'approved' || p.published_at) continue;\n    const at = slotAt(p);\n    if (!at) continue;\n    const mins = at.diff(now, 'minutes').minutes;\n    if (mins <= 0 || mins > before || p.reminded_slot === slotKey(p)) continue;\n    const text = '⏰ Через ' + Math.ceil(mins) + ' хв публікація\\n' + hhmm(p) + ' · ' + (PLAT[p.platform] || p.platform) + '\\n' + title(p) + '\\n\\nТекст і фото готові — відкрий, скопіюй і виклади. Після публікації тисни «Виклала».';\n    for (const chat_id of chats) out.push({ json: { kind: 'remind', chat_id, text, url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, slot: slotKey(p) } });\n  }\n  return out;\n}\n\n// Дайджест\nconst today = now.toFormat('yyyy-MM-dd');\nconst line = p => '• ' + (hhmm(p) || '—') + ' ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p);\nconst bySlot = (a, b) => slotKey(a).localeCompare(slotKey(b));\nconst todayPosts = plans.filter(p => p.review_status === 'approved' && !p.published_at && p.scheduled_for === today && (slotAt(p) || now) >= now).sort(bySlot);\nconst missed = plans.filter(p => p.review_status === 'approved' && !p.published_at && slotAt(p) && slotAt(p) < now).sort(bySlot);\nconst review = plans.filter(p => p.review_status === 'ready_for_review');\nconst needData = plans.filter(p => p.review_status === 'needs_data');\nconst inWork = plans.filter(p => ['changes_requested', 'regenerating', 'generating'].includes(p.review_status));\n\nconst parts = ['☀️ Доброго ранку! ' + now.setLocale('uk').toFormat('cccc, d MMMM')];\nparts.push(todayPosts.length ? '\\n📅 Сьогодні виходить:\\n' + todayPosts.map(line).join('\\n') : '\\n📅 Сьогодні публікацій немає');\nif (missed.length) parts.push('\\n⚠️ Час минув, ще не викладено:\\n' + missed.slice(0, 5).map(p => line(p) + ' (' + DateTime.fromISO(p.scheduled_for).toFormat('dd.MM') + ')').join('\\n'));\nif (review.length) parts.push('\\n📝 Чекають твого перегляду: ' + review.length + '\\n' + review.slice(0, 5).map(p => '• ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p)).join('\\n') + (review.length > 5 ? '\\n…' : ''));\nif (needData.length) parts.push('\\n❓ Бракує даних: ' + needData.length);\nif (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWork.length);\nif (!todayPosts.length && !missed.length && !review.length && !needData.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');\nfor (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок' } });\nreturn out;"
+        "operation": "getAll",
+        "tableId": "story_queue",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "status=eq.new"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-build-messages",
+      "name": "Code - Build Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Що слати: дайджест (10:00 або вебхук mode=digest) чи нагадування (кожні 5 хв або mode=remind)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nconst fromHook = $('Webhook - Manual Run').isExecuted ? String(($('Webhook - Manual Run').first().json.body || {}).mode || 'digest') : '';\nconst mode = fromHook || ($('Schedule - Digest 10:00').isExecuted ? 'digest' : 'remind');\n\nconst target = String(s.notify_target || 'admin');\nconst chats = [...new Set([\n  target !== 'ira' ? String(s.admin_chat_id || '') : '',\n  target !== 'admin' ? String(s.ira_chat_id || '') : '',\n].filter(Boolean))];\nif (!chats.length) throw new Error('немає отримувача: заповни settings.admin_chat_id / ira_chat_id (notify_target=' + target + ')');\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\n\nconst hotels = {}, tours = {};\nfor (const h of $('Supabase - Get Hotels').all()) if (h.json.hotel_id) hotels[h.json.hotel_id] = h.json.name;\nfor (const t of $('Supabase - Get Tours').all()) if (t.json.tour_id) tours[t.json.tour_id] = t.json.title;\nconst plans = $('Supabase - Get Open Plans').all().map(i => i.json).filter(p => p.id);\n\nconst PLAT = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' };\nconst title = p => hotels[p.hotel_id] || tours[p.tour_id] || p.pillar || 'пост';\nconst hhmm = p => String(p.slot_time || '').slice(0, 5);\nconst slotKey = p => p.scheduled_for + ' ' + hhmm(p);\nconst zone = 'Europe/Kyiv';\nconst now = DateTime.now().setZone(zone);\nconst slotAt = p => (p.scheduled_for && p.slot_time) ? DateTime.fromISO(p.scheduled_for + 'T' + hhmm(p), { zone }) : null;\nconst postUrl = p => base + '/?startapp=post_' + p.id;\nconst out = [];\n\nif (mode === 'remind') {\n  const before = Number(s.remind_before_min) || 30;\n  for (const p of plans) {\n    if (p.review_status !== 'approved' || p.published_at) continue;\n    const at = slotAt(p);\n    if (!at) continue;\n    const mins = at.diff(now, 'minutes').minutes;\n    if (mins <= 0 || mins > before || p.reminded_slot === slotKey(p)) continue;\n    const text = '⏰ Через ' + Math.ceil(mins) + ' хв публікація\\n' + hhmm(p) + ' · ' + (PLAT[p.platform] || p.platform) + '\\n' + title(p) + '\\n\\nТекст і фото готові — відкрий, скопіюй і виклади. Після публікації тисни «Виклала».';\n    for (const chat_id of chats) out.push({ json: { kind: 'remind', chat_id, text, url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, slot: slotKey(p) } });\n  }\n  return out;\n}\n\n// Дайджест\nconst today = now.toFormat('yyyy-MM-dd');\nconst line = p => '• ' + (hhmm(p) || '—') + ' ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p);\nconst bySlot = (a, b) => slotKey(a).localeCompare(slotKey(b));\nconst todayPosts = plans.filter(p => p.review_status === 'approved' && !p.published_at && p.scheduled_for === today && (slotAt(p) || now) >= now).sort(bySlot);\nconst missed = plans.filter(p => p.review_status === 'approved' && !p.published_at && slotAt(p) && slotAt(p) < now).sort(bySlot);\nconst review = plans.filter(p => p.review_status === 'ready_for_review');\nconst needData = plans.filter(p => p.review_status === 'needs_data');\nconst inWork = plans.filter(p => ['changes_requested', 'regenerating', 'generating'].includes(p.review_status));\n\nconst parts = ['☀️ Доброго ранку! ' + now.setLocale('uk').toFormat('cccc, d MMMM')];\nparts.push(todayPosts.length ? '\\n📅 Сьогодні виходить:\\n' + todayPosts.map(line).join('\\n') : '\\n📅 Сьогодні публікацій немає');\nif (missed.length) parts.push('\\n⚠️ Час минув, ще не викладено:\\n' + missed.slice(0, 5).map(p => line(p) + ' (' + DateTime.fromISO(p.scheduled_for).toFormat('dd.MM') + ')').join('\\n'));\nif (review.length) parts.push('\\n📝 Чекають твого перегляду: ' + review.length + '\\n' + review.slice(0, 5).map(p => '• ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p)).join('\\n') + (review.length > 5 ? '\\n…' : ''));\nif (needData.length) parts.push('\\n❓ Бракує даних: ' + needData.length);\nif (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWork.length);\n// Історія тижня — у свій день; у черзі вже є нова → не просимо ще\nconst storyHint = () => {\n  const PERSONAS = ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && (!x.p || x.p === persona));\n  const hint = mine.length ? mine[Math.floor(WEEK / PERSONAS.length) % mine.length].q : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst storyDow = s.story_remind_dow === undefined || s.story_remind_dow === null ? 4 : Number(s.story_remind_dow);\nconst storiesNew = $('Supabase - Get New Stories').all().map(i => i.json).filter(j => j && j.id).length;\nlet story_url = '';\nif (storyDow && now.weekday === storyDow) {\n  if (storiesNew) parts.push('\\n🎙 Історія на суботу вже є ✅' + (storiesNew > 1 ? ' (у черзі ' + storiesNew + ')' : ''));\n  else {\n    parts.push('\\n🎙 Історія тижня — для суботнього поста. Підказка:\\n«' + storyHint().hint + '»\\nАбо будь-яка інша, 1–3 хв голосом.');\n    story_url = 'https://t.me/' + String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '') + '?start=story';\n  }\n}\nif (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url) parts.push('\\nВсе чисто — можна відпочивати 🌴');\nfor (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок', story_url } });\nreturn out;"
       },
       "executeOnce": true
+    },
+    {
+      "id": "if-story-button-",
+      "name": "IF - Story Button?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "story",
+              "leftValue": "={{ !!$json.story_url }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-send-with-story",
+      "name": "Telegram - Send With Story",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🎙 Розповісти історію",
+                    "additionalFields": {
+                      "url": "={{ $json.story_url }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "={{ $json.button }}",
+                    "additionalFields": {
+                      "web_app": {
+                        "url": "={{ $json.url }}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "telegram-send",
@@ -178,7 +293,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1980,
+        2640,
         0
       ],
       "parameters": {
@@ -221,7 +336,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2200,
+        2860,
         0
       ],
       "parameters": {
@@ -264,7 +379,7 @@
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
       "position": [
-        2420,
+        3080,
         0
       ],
       "parameters": {
@@ -370,6 +485,17 @@
       "main": [
         [
           {
+            "node": "Supabase - Get New Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get New Stories": {
+      "main": [
+        [
+          {
             "node": "Code - Build Messages",
             "type": "main",
             "index": 0
@@ -379,6 +505,24 @@
     },
     "Code - Build Messages": {
       "main": [
+        [
+          {
+            "node": "IF - Story Button?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Button?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send With Story",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Telegram - Send",

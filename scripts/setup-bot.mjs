@@ -30,7 +30,10 @@ console.log(`   бот: @${me.username} (${me.first_name})`)
 
 // Кнопка зліва від поля вводу в чаті з ботом → відкриває апку
 await tg('setChatMenuButton', { menu_button: { type: 'web_app', text: 'TravelLab', web_app: { url: appUrl } } })
-await tg('setMyCommands', { commands: [{ command: 'start', description: 'Відкрити TravelLab' }] })
+await tg('setMyCommands', { commands: [
+  { command: 'start', description: 'Відкрити TravelLab' },
+  { command: 'story', description: '🎙 Розповісти історію для постів' },
+] })
 await tg('setMyShortDescription', { short_description: 'Пости TravelLab: перегляд, правки, календар' })
 await tg('setMyDescription', {
   description: 'Робочий бот TravelLab. Тут з’являються пости на перегляд, питання про готелі й нагадування про публікацію. Натисни «TravelLab» внизу, щоб відкрити застосунок.',

@@ -3,7 +3,7 @@ import { CalendarScreen } from './components/CalendarScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
 import { Center, IconCalendar, IconSun, Spinner } from './components/ui'
-import { ApiError, getMe, getQueue, type Me, type QueueItem } from './lib/api'
+import { ApiError, getMe, getQueue, type Me, type QueueItem, type StoryInfo } from './lib/api'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
 
 type Tab = 'today' | 'calendar'
@@ -20,6 +20,7 @@ export default function App() {
   const [auth, setAuth] = useState<Auth>({ state: 'loading' })
   const [queue, setQueue] = useState<QueueItem[] | null>(null)
   const [queueError, setQueueError] = useState('')
+  const [story, setStory] = useState<StoryInfo | null>(null)
   // Відкритий пост: з черги або з кнопки бота (startapp=post_<uuid>)
   const [openId, setOpenId] = useState<string | null>(() => {
     const m = /^post_([0-9a-f-]{36})$/i.exec(startParam())
@@ -30,7 +31,9 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      setQueue(await getQueue())
+      const q = await getQueue()
+      setQueue(q.items)
+      setStory(q.story)
       setQueueError('')
     } catch (e) {
       setQueueError(e instanceof ApiError && e.status === 503 ? 'schema_pending' : e instanceof Error ? e.message : String(e))
@@ -102,7 +105,7 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
-        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
+        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>

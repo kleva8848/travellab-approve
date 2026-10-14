@@ -99,6 +99,8 @@ const HORIZON = MONTHS[(m0 + 1) % 12] + '–' + MONTHS[(m0 + 3) % 12];
 const offerTours = tours.slice(0, Math.max(OFFERS_PER_WEEK.telegram, OFFERS_PER_WEEK.instagram));
 const offerTour = offerTours[0] || null;
 const used = new Set(offerTours.map(t => t.hotel_id).filter(Boolean));
+// готель історії Іри (суботній слот) — не повторюємо в інших парах тижня
+if (stories[0] && stories[0].hotel_id) used.add(stories[0].hotel_id);
 
 const byId = (a, b) => String(a.hotel_id).localeCompare(String(b.hotel_id));
 const rotate = (arr) => arr.length ? arr.slice(WEEK % arr.length).concat(arr.slice(0, WEEK % arr.length)) : arr;
@@ -216,7 +218,10 @@ for (const s of slots) {
 // + назви готелю/туру — лише для звіту в TG (у content_plan не пишуться)
 const hotelName = (id) => { const h = hotels.find(x => x.hotel_id === id); return h ? (h.name || id) : null; };
 const tourTitle = (id) => { const t = tours.find(x => x.tour_id === id); return t ? (t.title || id) : null; };
+// початок історії Іри (story_queue, бот «🎙 Розповісти історію») — лише для звіту
+const storySnip = pickedStory ? String(pickedStory.transcript_clean || pickedStory.transcript_raw || '').replace(/\s+/g, ' ').slice(0, 70) : null;
 return slots.map(s => ({ json: Object.assign(s, {
+  story_snip: s.story_id ? storySnip : null,
   week_start: WEEK_START, scheduled_for: dateOf(s.day), review_status: 'planned',
   hotel_name: s.hotel_id ? hotelName(s.hotel_id) : null, tour_title: s.tour_id ? tourTitle(s.tour_id) : null,
 }) }));`
@@ -230,7 +235,7 @@ const KIND = { content: 'пост', feed: 'пост', feed_carousel: 'карус
   reel_or_feed: 'рілс або пост', expert_take: 'думка експерта', personal_thought: 'думка Іри' };
 const TOPIC = { hotel_place: 'про готель', insider: 'інсайд про готель', tour_offer: '💰 пропозиція тижня', unusual_hotels: '✨ Незвичайні готелі',
   atmosphere: 'атмосфера', behind_scenes: 'за кадром, знімає Іра', template: 'шаблон, тема тижня', video: 'відео з бази',
-  personal: 'особисте', personal_take: 'власна думка Іри', tour_expert: 'експертна думка' };
+  personal: 'особисте', personal_take: 'власна думка Іри', tour_expert: 'експертна думка', personal_experience: '🎙 історія Іри' };
 const fmt = (ymd) => ymd ? ymd.slice(8, 10) + '.' + ymd.slice(5, 7) : '';
 const what = (s) => {
   const kind = KIND[s.slot_type] || s.slot_type;
@@ -238,7 +243,8 @@ const what = (s) => {
   let about = '';
   if (s.tour_title) about = ' — тур «' + s.tour_title + '»' + (s.hotel_name ? ', ' + s.hotel_name : '');
   else if (s.hotel_name) about = ' — ' + s.hotel_name;
-  else if (s.story_id) about = ' — історія з черги';
+  else if (s.story_id) about = s.story_snip ? ' — «' + s.story_snip + '…»' : ' — історія з черги';
+  if (s.story_id && s.story_snip && (s.tour_title || s.hotel_name)) about += ' — «' + s.story_snip + '…»';
   return PLAT[s.platform] + ': ' + kind + ', ' + (s.soft ? "🤝 м'яка рекомендація" : topic) + about + (s.question ? '\n   ❓ ' + s.question : '');
 };
 const ws = items[0] && items[0].week_start;

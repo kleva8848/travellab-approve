@@ -48,7 +48,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.update_id) ? $json.body : $json;\nconst m = b.message || {};\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nlet planId = null, how = 'none';\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const mm = String(e.url || '').match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (st) route = 'ask';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file } }];"
+        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.update_id) ? $json.body : $json;\nconst m = b.message || {};\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nlet planId = null, how = 'none';\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\n// «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст\nconst storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const u = String(e.url || '');\n    const mm = u.match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n    if (/[?&]start(?:app)?=story\\b/i.test(u)) { how = 'story'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (st) route = 'ask';\nelse if (storyCmd && !file) route = 'story_ask';\nelse if (how === 'story' && (file || text)) route = 'story';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file } }];"
       }
     },
     {
@@ -215,7 +215,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, '') };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
+        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst storyHint = () => {\n  const PERSONAS = ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && (!x.p || x.p === persona));\n  const hint = mine.length ? mine[Math.floor(WEEK / PERSONAS.length) % mine.length].q : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story' };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
       },
       "executeOnce": true
     },
@@ -350,6 +350,54 @@
               },
               "renameOutput": true,
               "outputKey": "gone"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-story_ask",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "story_ask",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "story_ask"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-story",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "story",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "story"
             }
           ]
         },
@@ -379,7 +427,7 @@
         520
       ],
       "parameters": {
-        "jsCode": "// help / unresolved / gone / нема питань — коротко + кнопка в апку\nconst r = $json;\nconst T = {\n  help: 'Пости на перегляд — у TravelLab (кнопка нижче). Щоб відповісти голосом на питання агента, відкрий пост і натисни «Відповісти голосом».',\n  unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.',\n  gone: 'Цього поста вже немає в роботі 🙌',\n  none: 'По цьому посту питань уже немає 🙌'\n};\nconst k = r.route === 'answer' ? 'none' : r.route;\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];"
+        "jsCode": "// help / unresolved / gone / нема питань — коротко + кнопка в апку\nconst r = $json;\nconst T = {\n  help: 'Пости на перегляд — у TravelLab (кнопка нижче). Щоб відповісти голосом на питання агента, відкрий пост і натисни «Відповісти голосом».\\n\\n🎙 Розповісти історію для постів — /story',\n  unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.\\n\\nЯкщо це історія для постів — надішли /story і запиши її у відповідь.',\n  gone: 'Цього поста вже немає в роботі 🙌',\n  none: 'По цьому посту питань уже немає 🙌'\n};\nconst k = r.route === 'answer' ? 'none' : r.route;\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];"
       }
     },
     {
@@ -999,6 +1047,290 @@
       "executeOnce": true
     },
     {
+      "id": "code-story-ask",
+      "name": "Code - Story Ask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        1040
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// /story: питання-підказка тижня + force_reply з прихованим маркером ?start=story (відповідь на нього = історія)\nconst r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.story_url) + '🎙 <b>Історія для постів</b>\\n\\nПідказка цього тижня:\\n<i>' + esc(r.hint) + '</i>\\n\\n'\n    + 'Або будь-яка інша історія — твоя чи клієнтів. Запиши голосове на 1–3 хв у відповідь на це повідомлення (можна й текстом). '\n    + 'Імена клієнтів не обовʼязково — я їх не пишу. Історія піде в найближчий суботній пост, текст побачиш в апці до публікації.'\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-voice-",
+      "name": "IF - Story Voice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        1300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-voice-",
+              "leftValue": "={{ !!$json.file_id }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-get-story-file",
+      "name": "Telegram - Get Story File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2420,
+        1300
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $json.file_id }}",
+        "download": true
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-transcribe-story",
+      "name": "OpenAI - Transcribe Story",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        2640,
+        1300
+      ],
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "data",
+        "options": {
+          "language": "uk"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-text",
+      "name": "Code - Story Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "// Текст історії: розшифровка голосового або текст як є\nconst r = $('Code - Resolve').first().json;\nlet text = r.text || '';\nif (r.file_id) { try { text = String($('OpenAI - Transcribe Story').first().json.text || '').trim(); } catch (e) { text = ''; } }\ntext = text.replace(/^\\/story(@\\w+)?\\s*/i, '').trim();\nconst words = text ? text.split(/\\s+/).length : 0;\nreturn [{ json: { ...r, story_raw: text, words, long_enough: words >= 12 } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-long-enough-",
+      "name": "IF - Story Long Enough?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        1300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-long-enough-",
+              "leftValue": "={{ $json.long_enough }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-story-too-short",
+      "name": "Code - Story Too Short",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        1560
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.story_url) + (r.story_raw ? 'Здається, історія обірвалась — розчув лише: «' + esc(r.story_raw) + '» 🙈' : 'Не вдалось розібрати голосове 🙈')\n    + '\\n\\nЗапиши ще раз у відповідь на це повідомлення, будь ласка — хоча б кілька речень.'\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-story-prompt",
+      "name": "Code - Story Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const r = $json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && j.hotel_id); } catch (e) { return []; } };\nconst hotels = all('Supabase - Get Hotels').map(h => h.hotel_id + ' — ' + (h.name || '') + (h.country ? ' (' + h.country + ')' : '')).join('\\n');\nconst user = 'ГОТЕЛІ БАЗИ:\\n' + (hotels || '—') + '\\n\\nРОЗШИФРОВКА ІСТОРІЇ ІРИНИ:\\n<<<\\n' + r.story_raw + '\\n>>>';\nreturn [{ json: { ...r, systemPrompt: \"Ти готуєш голосову історію Ірини (TravelLab, luxury travel агентка) для черги постів. Дано розшифровку голосового — можуть бути помилки розпізнавання, слова-паразити, повтори — і список готелів бази.\\nclean: та сама історія її словами, від першої особи, як вона розповіла. Прибери «ну», «ееее», «коротше», повтори й обірвані фрази, виправ очевидні помилки розпізнавання (назви готелів і місць — за списком). НЕ скорочуй суть, НЕ додавай подробиць, оцінок і висновків, яких вона не казала. Імена клієнтів заміни на «клієнти», «пара», «мама з донькою» тощо.\\ntitle: 3–6 слів, про що історія (для звіту Владу).\\nhotel_id: id готелю зі списку, якщо історія саме про нього; інакше null. destination: країна або острів, якщо названо; інакше null.\\nis_story: false, якщо це не історія з поїздок/роботи (тест мікрофона, випадкове повідомлення, питання до бота).\\nВідповідь — СТРОГО JSON без іншого тексту: {\\\"clean\\\": \\\"...\\\", \\\"title\\\": \\\"...\\\", \\\"hotel_id\\\": \\\"HTL-…\\\" або null, \\\"destination\\\": \\\"...\\\" або null, \\\"is_story\\\": true}\", userPrompt: user } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "openai-clean-story",
+      "name": "OpenAI - Clean Story",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        3520,
+        1300
+      ],
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "content": "={{ $json.userPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-row",
+      "name": "Code - Story Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "// Відповідь моделі → рядок story_queue. Модель не відповіла — пишемо сиру розшифровку (історія не губиться)\nconst r = $('Code - Story Text').first().json;\nlet o = null;\ntry {\n  const j = $json;\n  const message = Array.isArray(j.output) ? j.output[0] : j;\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = String((block && block.text) || j.text || '').trim().replace(/^\\`\\`\\`json\\s*|\\`\\`\\`$/g, '');\n  o = JSON.parse(raw);\n} catch (e) { o = null; }\nconst ids = new Set($('Supabase - Get Hotels').all().map(i => i.json.hotel_id).filter(Boolean));\nconst clean = o && typeof o.clean === 'string' && o.clean.trim().length > 20 ? o.clean.trim() : r.story_raw;\nconst row = {\n  pillar: 'personal_experience',\n  hotel_id: o && ids.has(o.hotel_id) ? o.hotel_id : null,\n  destination: o && typeof o.destination === 'string' && o.destination.trim() ? o.destination.trim().slice(0, 120) : null,\n  transcript_raw: r.story_raw,\n  transcript_clean: clean,\n  status: 'new',\n};\nconst title = o && typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 80) : clean.split(/\\s+/).slice(0, 6).join(' ') + '…';\nreturn [{ json: { ...r, row, title, is_story: !(o && o.is_story === false) } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "http-insert-story",
+      "name": "HTTP - Insert Story",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3960,
+        1300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/story_queue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.row) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-saved",
+      "name": "Code - Story Saved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst r = $('Code - Story Row').first().json;\nconst res = $json;\nconst ok = res.statusCode >= 200 && res.statusCode < 300;\nif (!ok) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'Не вдалось записати історію 🙈 Перешли це голосове ще раз трохи згодом — або Владу.', url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nreturn [{ json: { chat_id: r.chat_id, kind: 'button',\n  text: 'Дякую! Записав історію ✅\\n«' + r.title + '»'\n    + (r.is_story ? '' : '\\n\\n(Схоже, це не історія з поїздок — якщо випадково, скажи Владу, він прибере.)')\n    + '\\n\\nВона піде в найближчий суботній пост — план тижня складаю в неділю ввечері. Текст побачиш в апці до публікації.',\n  url: r.mini_app_url, button: 'Відкрити TravelLab' } }];"
+      },
+      "executeOnce": true
+    },
+    {
       "id": "execute-data-answer",
       "name": "Execute - Data Answer",
       "type": "n8n-nodes-base.executeWorkflow",
@@ -1167,6 +1499,166 @@
         [
           {
             "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Ask",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Story Voice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Voice?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Get Story File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Get Story File": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Transcribe Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Transcribe Story": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Text": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Long Enough?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Long Enough?": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Too Short",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Clean Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Clean Story": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Row": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Insert Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Insert Story": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Saved": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Ask": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Too Short": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
             "type": "main",
             "index": 0
           }

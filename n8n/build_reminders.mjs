@@ -3,7 +3,11 @@
 // щодня о 10:00 — дайджест: що сьогодні виходить, що чекає перегляду, де бракує даних, що прострочено.
 // Кому — settings.notify_target: admin | ira | both (на час тестів admin). Ручний запуск: POST вебхук {"mode":"digest"|"remind"}.
 // Потрібен supabase/005_reminders.sql (колонка content_plan.reminded_slot).
+// «🎙 Історія тижня» (14.10): раз на тиждень (settings.story_remind_dow, дефолт 4 = Чт) у дайджесті — питання-підказка
+// (n8n/story_prompt.mjs) і друга кнопка «🎙 Розповісти історію» → бот (?start=story). Якщо в story_queue уже є нова
+// історія — лише «історія на суботу вже є», без питання.
 import { readFileSync, writeFileSync } from 'node:fs'
+import { STORY_HINT_JS } from './story_prompt.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -77,8 +81,20 @@ if (missed.length) parts.push('\\n⚠️ Час минув, ще не викла
 if (review.length) parts.push('\\n📝 Чекають твого перегляду: ' + review.length + '\\n' + review.slice(0, 5).map(p => '• ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p)).join('\\n') + (review.length > 5 ? '\\n…' : ''));
 if (needData.length) parts.push('\\n❓ Бракує даних: ' + needData.length);
 if (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWork.length);
-if (!todayPosts.length && !missed.length && !review.length && !needData.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');
-for (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок' } });
+// Історія тижня — у свій день; у черзі вже є нова → не просимо ще
+${STORY_HINT_JS}
+const storyDow = s.story_remind_dow === undefined || s.story_remind_dow === null ? 4 : Number(s.story_remind_dow);
+const storiesNew = $('Supabase - Get New Stories').all().map(i => i.json).filter(j => j && j.id).length;
+let story_url = '';
+if (storyDow && now.weekday === storyDow) {
+  if (storiesNew) parts.push('\\n🎙 Історія на суботу вже є ✅' + (storiesNew > 1 ? ' (у черзі ' + storiesNew + ')' : ''));
+  else {
+    parts.push('\\n🎙 Історія тижня — для суботнього поста. Підказка:\\n«' + storyHint().hint + '»\\nАбо будь-яка інша, 1–3 хв голосом.');
+    story_url = 'https://t.me/' + String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '') + '?start=story';
+  }
+}
+if (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url) parts.push('\\nВсе чисто — можна відпочивати 🌴');
+for (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок', story_url } });
 return out;`
 
 const tgCreds = { credentials: { telegramApi: CFG.telegram } }
@@ -95,7 +111,24 @@ const nodes = [
   }, { credentials: sb, ...always }),
   node('Supabase - Get Hotels', 'n8n-nodes-base.supabase', 1, { operation: 'getAll', tableId: 'hotels', returnAll: true }, { credentials: sb, ...always }),
   node('Supabase - Get Tours', 'n8n-nodes-base.supabase', 1, { operation: 'getAll', tableId: 'tours', returnAll: true }, { credentials: sb, ...always }),
+  node('Supabase - Get New Stories', 'n8n-nodes-base.supabase', 1, {
+    operation: 'getAll', tableId: 'story_queue', returnAll: true, filterType: 'string', filterString: 'status=eq.new',
+  }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Code - Build Messages', 'n8n-nodes-base.code', 2, { jsCode: build }, { executeOnce: true }),
+  node('IF - Story Button?', 'n8n-nodes-base.if', 2.2, {
+    conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
+      conditions: [{ id: 'story', leftValue: '={{ !!$json.story_url }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }] },
+    options: {},
+  }),
+  // дайджест з другою кнопкою: url-кнопка в чат з ботом (/start story), не web_app
+  node('Telegram - Send With Story', 'n8n-nodes-base.telegram', 1.2, {
+    chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+    inlineKeyboard: { rows: [
+      { row: { buttons: [{ text: '🎙 Розповісти історію', additionalFields: { url: '={{ $json.story_url }}' } }] } },
+      { row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } },
+    ] },
+    additionalFields: { appendAttribution: false },
+  }, { ...tgCreds, onError: 'continueRegularOutput' }),
   node('Telegram - Send', 'n8n-nodes-base.telegram', 1.2, {
     chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
     inlineKeyboard: { rows: [{ row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } }] },
@@ -124,8 +157,10 @@ const connections = {
   'Supabase - Get Settings': to('Supabase - Get Open Plans'),
   'Supabase - Get Open Plans': to('Supabase - Get Hotels'),
   'Supabase - Get Hotels': to('Supabase - Get Tours'),
-  'Supabase - Get Tours': to('Code - Build Messages'),
-  'Code - Build Messages': to('Telegram - Send'),
+  'Supabase - Get Tours': to('Supabase - Get New Stories'),
+  'Supabase - Get New Stories': to('Code - Build Messages'),
+  'Code - Build Messages': to('IF - Story Button?'),
+  'IF - Story Button?': { main: [[{ node: 'Telegram - Send With Story', type: 'main', index: 0 }], [{ node: 'Telegram - Send', type: 'main', index: 0 }]] },
   'Telegram - Send': to('IF - Reminder Sent?'),
   'IF - Reminder Sent?': to('Supabase - Mark Reminded'),
 }

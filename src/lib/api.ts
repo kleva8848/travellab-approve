@@ -125,12 +125,16 @@ export type CommentInput = { text: string; photo: string; chips_text: string[]; 
 type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
 type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
-export async function getQueue(): Promise<QueueItem[]> {
+// «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
+export type StoryInfo = { link: string; hint: string; queued: number }
+
+export async function getQueue(): Promise<{ items: QueueItem[]; story: StoryInfo | null }> {
   if (isDemo) {
     await wait()
-    return demo.queue()
+    return { items: demo.queue(), story: { link: 'https://t.me/travellab_studio_bot?start=story', hint: 'Розкажи про клієнтів, які вперше летіли так далеко. Чого боялись до поїздки — і що сказали після?', queued: 0 } }
   }
-  return (await call<{ items: QueueItem[] }>('/api/queue')).items
+  const r = await call<{ items: QueueItem[]; story?: StoryInfo | null }>('/api/queue')
+  return { items: r.items, story: r.story ?? null }
 }
 
 export async function getPost(id: string): Promise<PostDetail> {

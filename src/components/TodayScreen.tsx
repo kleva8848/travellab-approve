@@ -1,5 +1,5 @@
-import type { Me, QueueItem } from '../lib/api'
-import { haptic } from '../lib/tg'
+import type { Me, QueueItem, StoryInfo } from '../lib/api'
+import { haptic, openTelegram } from '../lib/tg'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
@@ -17,12 +17,12 @@ function greeting(h: number) {
 // Звертання в кличному відмінку для відомих імен, інакше як є
 const VOCATIVE: Record<string, string> = { 'Іра': 'Іро', 'Ira': 'Іро', 'Ірина': 'Ірино', 'Влад': 'Владе', 'Vlad': 'Владе' }
 
-type Props = { me: Me; queue: QueueItem[] | null; queueError: string; onOpen: (id: string) => void; onRetry: () => void }
+type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; queueError: string; onOpen: (id: string) => void; onRetry: () => void }
 
 const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
-export function TodayScreen({ me, queue, queueError, onOpen, onRetry }: Props) {
+export function TodayScreen({ me, queue, story, queueError, onOpen, onRetry }: Props) {
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
@@ -81,10 +81,30 @@ export function TodayScreen({ me, queue, queueError, onOpen, onRetry }: Props) {
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
           <List title="Агент переробляє" items={working} onOpen={onOpen} badge={<span className="chip warn">переробляю</span>} />
           <List title="Затверджено" items={approved} onOpen={onOpen} badge={<span className="chip okc">в календарі</span>} />
+          {story && <StoryCard story={story} />}
         </>
       )}
       {me.is_admin && <RulesAdmin />}
     </div>
+  )
+}
+
+// «🎙 Розповісти історію»: відкриває чат з ботом (/start story) — там підказка і голосове у відповідь → черга історій
+function StoryCard({ story }: { story: StoryInfo }) {
+  return (
+    <>
+      <Label>Історія для постів</Label>
+      <div className="card">
+        <div className="text-[13.5px] leading-snug" style={{ color: 'var(--hint)' }}>Підказка цього тижня</div>
+        <div className="mt-1 text-[15px] leading-snug">{story.hint}</div>
+        <button className="btn sec mt-3" onClick={() => { haptic('tap'); openTelegram(story.link) }}>🎙 Розповісти історію</button>
+        <div className="mt-1.5 text-center text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+          {story.queued
+            ? `У черзі ${story.queued} ${plural(story.queued, 'історія', 'історії', 'історій')} — піде в суботній пост`
+            : 'Відкриється чат з ботом — одне голосове на 1–3 хв, піде в суботній пост'}
+        </div>
+      </div>
+    </>
   )
 }
 
