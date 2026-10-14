@@ -18,7 +18,7 @@ const CFG = {
   supabase: { id: 'oj5JHcgmtpi0FPHx', name: 'Travel Lab Test' },
   webhookAuth: { id: 'mO62EQmnKHlk93GW', name: 'TravelLab Approve Webhook' },
   telegram: { id: process.env.TL_TG_CRED_ID || 'n0IdHhMlzZgnnc7K', name: 'TravelLab Ira Bot' },
-  // як у WF-046 / Buffer Filler; після апруву Іри → TL_GENERATOR_ID=rmfe3WbNRAOGUfqS (WF-043)
+  // Основний генератор (PRMPT-011 v5) з 14.10; WF-043 rmfe3WbNRAOGUfqS — архів (v3, вимкнено)
   generatorId: process.env.TL_GENERATOR_ID || 'VZk3w2jPwXFexId2',
   // [TravelLab] Hotel Fact Write (sub) — n8n/build_hotel_fact.mjs
   hotelFactId: process.env.TL_HOTEL_FACT_ID || 'T8sUNWHQXxaztw7f',

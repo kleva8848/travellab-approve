@@ -13,7 +13,7 @@ const CFG = {
   webhookAuth: { id: 'mO62EQmnKHlk93GW', name: 'TravelLab Approve Webhook' },
   // Telegram credential бота Іри (@travellab_studio_bot), створено 08.10
   telegram: { id: process.env.TL_TG_CRED_ID || 'n0IdHhMlzZgnnc7K', name: 'TravelLab Ira Bot' },
-  // Тестовий генератор з PRMPT-011 v4; після апруву Іри → WF-043 rmfe3WbNRAOGUfqS
+  // Основний генератор (PRMPT-011 v5) з 14.10; WF-043 rmfe3WbNRAOGUfqS — архів (v3, вимкнено)
   generatorId: process.env.TL_GENERATOR_ID || 'VZk3w2jPwXFexId2',
   openai: { id: 'W0SZsbrcQTP4Dcjx', name: 'n8n_easypanel_p2p_mira' },
   // TL_TEST=1 → тестова копія з іншим шляхом вебхука (прод не чіпаємо)
