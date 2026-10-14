@@ -2,7 +2,7 @@
 // «[TravelLab] Buffer Filler D+3 (Mini App)»: щодня о 07:00 (Київ) бере слоти content_plan на сьогодні…+3 дні
 // (review_status 'planned', або 'needs_data' без тексту — раптом дані вже є), перевіряє дані БЕЗ LLM (pre-gate):
 //   офер → реальна ціна (tours.price_range або hotels.price_from_night) + дати (tours.dates_example);
-//   готель → key_detail + who_for; Threads «власна думка» без історії → тема від Іри.
+//   готель → key_detail + who_for; без готелю/туру/історії → тема від Іри (крім слотів з «Питання клієнта» в note).
 // Бракує → review_status 'needs_data' + питання Ірі в data_requests (без дублів відкритих).
 // Достатньо → по одному слоту: Post Generator (той самий, що в WF-046, ⭐ few-shot) → фото під текст (tl_pick_media_ranked, SQL 011; без нього tl_pick_media) →
 //   tl_add_version (trigger 'buffer_filler', без SQL 009 — 'initial') → 'ready_for_review'.
@@ -19,7 +19,7 @@ const CFG = {
   supabase: { id: 'oj5JHcgmtpi0FPHx', name: 'Travel Lab Test' },
   webhookAuth: { id: 'mO62EQmnKHlk93GW', name: 'TravelLab Approve Webhook' },
   telegram: { id: process.env.TL_TG_CRED_ID || 'n0IdHhMlzZgnnc7K', name: 'TravelLab Ira Bot' },
-  // Тестовий генератор з PRMPT-011 v4 (як у WF-046); після апруву Іри → TL_GENERATOR_ID=rmfe3WbNRAOGUfqS (WF-043)
+  // Тестовий генератор з PRMPT-011 v5 (як у WF-046); після апруву Іри → TL_GENERATOR_ID=rmfe3WbNRAOGUfqS (WF-043)
   generatorId: process.env.TL_GENERATOR_ID || 'VZk3w2jPwXFexId2',
 }
 const sb = { supabaseApi: CFG.supabase }
@@ -150,10 +150,12 @@ for (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.
     if (!hotel.key_detail) { const a = need({ hotel_id: hotel.hotel_id, field: 'key_detail', question: 'Чим ' + name + ' відрізняється від схожих готелів? Одна головна деталь', why: 'Пост будується навколо однієї деталі — без неї вийдуть загальні слова' }); if (a) hotel.key_detail = a; }
     if (!hotel.who_for) { const a = need({ hotel_id: hotel.hotel_id, field: 'who_for', question: 'Кому ' + name + ' підходить найбільше? Наприклад: сімʼї з малюками, пари', why: 'Щоб пост говорив до правильних людей' }); if (a) hotel.who_for = a; }
   }
-  // Без готелю, туру й історії генератор пише «ні про що» → питаємо тему (особисте) або про що пост (решта)
+  // Без готелю, туру й історії генератор пише «ні про що» → питаємо тему (особисте) або про що пост (решта).
+  // Питання клієнта в note (WF-018, Strategy v3) уже і є тема — генератор (PRMPT-011 v5) відповідає на нього, Іру не питаємо.
   let topic = null;
   const personal = ['personal_take', 'personal'].includes(p.pillar) || p.slot_type === 'personal_thought';
-  if (!isOffer && !story && !hotel && !tour) {
+  const hasClientQ = /Питання клієнта/.test(p.note || '');
+  if (!isOffer && !story && !hotel && !tour && !hasClientQ) {
     const where = (PLAT[p.platform] || p.platform) + ' на ' + dm(p.scheduled_for);
     topic = personal
       ? need({ field: 'topic', question: 'Про що твоя думка в ' + where + '? Одне речення-тема', why: 'Це твої думки — тему агент сам не вигадує' })
