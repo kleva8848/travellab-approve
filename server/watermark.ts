@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import satori from 'satori'
-import sharp from 'sharp'
+import sharp, { type OverlayOptions } from 'sharp'
 import { getSettings } from './http.js'
 import { loadFonts } from './overlay.js'
 
@@ -202,7 +202,7 @@ export async function addWatermark(img: Buffer, k: WmKind, textZone: 'top' | 'bo
     tinted[i * 4 + 3] = Math.min(255, Math.round(alpha[i] * 1.15))
   }
   const markPng = await sharp(tinted, { raw: { width: mw, height: mh, channels: 4 } }).png().toBuffer()
-  const layers: sharp.OverlayOptions[] = []
+  const layers: OverlayOptions[] = []
   // підкладка: розмита пляма під усім знаком (на світлому — біла, на темному — чорна)
   if (noisy) {
     const vp = Math.round(Math.max(mw, mh) * 0.3)
