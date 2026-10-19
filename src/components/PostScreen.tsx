@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, getPost, reviewAction, type PhotoEdit, type PostDetail, type Version } from '../lib/api'
+import { ApiError, getPost, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
 import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
+import { AudienceCard } from './AudienceCard'
 import { Carousel } from './Carousel'
 import { DataQuestions } from './DataQuestions'
 import { whenLabel } from './CalendarScreen'
@@ -29,6 +30,9 @@ const CHIPS_PHOTO = ['Прибери текст з фото', 'Текст вни
 
 // «Інший кроп» по колу: як вирішив агент → центр → верх → низ → знову агент
 const CROPS: (PhotoEdit['crop'] | undefined)[] = [undefined, 'centre', 'north', 'south']
+// Водяні знаки Іри для фото поста (сторіз — завжди коло)
+const WM_NAME: Record<PostWm, string> = { wm1: 'Довгий', wm3: 'Рукописний', off: 'Без знака' }
+const WM_DONE: Record<PostWm, string> = { wm1: 'Знак: довгий горизонтальний', wm3: 'Знак: рукописний', off: 'Без водяного знака' }
 const CROP_NAME: Record<string, string> = { centre: 'центр', north: 'верх', south: 'низ' }
 
 const POLL_MS = 5000
@@ -138,7 +142,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const status = post.plan.review_status
   const questions = status === 'published' || status === 'approved' ? [] : post.questions ?? []
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'watermark', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -347,6 +351,16 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     await load()
   }
 
+  // Водяний знак — один на весь пост (усі фото каруселі), без агента
+  const curWm: PostWm = cur.render_params?.wm ?? 'wm1'
+  const setWm = async (wm: PostWm) => {
+    if (wm === curWm) return
+    if (!(await act('watermark', { wm }))) return
+    haptic('success')
+    setToast(WM_DONE[wm])
+    await load()
+  }
+
   const nextCrop = () => {
     const i = CROPS.indexOf(curEdit.crop)
     const c = CROPS[(i + 1) % CROPS.length]
@@ -407,6 +421,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
         </div>
         {post.hotel && <div className="tn mt-2.5 text-[13px]">{post.hotel.name}</div>}
         {cur.key_idea && <div className="serif mt-0.5 mb-3 text-[22px] leading-[1.15]">{cur.key_idea}</div>}
+        <AudienceCard plan={post.plan} />
 
         {regenerating ? (
           <>
@@ -480,6 +495,12 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                         Інший кроп{curEdit.crop ? ` · ${CROP_NAME[curEdit.crop]}` : ''}
                       </button>
                       <button disabled={busy} onClick={() => { haptic('tap'); setPhotoDraft(photoTextNow()) }}>✎ Текст на фото</button>
+                    </div>
+                    <div className="qchips">
+                      <span className="self-center text-[13px]" style={{ color: 'var(--hint)' }}>Знак:</span>
+                      {(['wm1', 'wm3', 'off'] as const).map((k) => (
+                        <button key={k} className={curWm === k ? 'on' : ''} disabled={busy} onClick={() => void setWm(k)}>{WM_NAME[k]}</button>
+                      ))}
                     </div>
                     {photoDraft && (
                       <div className="card mt-2.5">

@@ -10,14 +10,14 @@ export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 // «Зараз» у Києві: { date: 'YYYY-MM-DD', time: 'HH:MM' }
-function kyivNow() {
+export function kyivNow() {
   const [date, time] = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
     .format(new Date())
     .split(' ')
   return { date, time }
 }
 
-const addDays = (date: string, n: number) => {
+export const addDays = (date: string, n: number) => {
   const d = new Date(`${date}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + n)
   return d.toISOString().slice(0, 10)

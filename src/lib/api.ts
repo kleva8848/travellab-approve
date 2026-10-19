@@ -66,6 +66,8 @@ export type Plan = {
   current_version_id: string | null
   approved_at: string | null
   published_at: string | null
+  // WF-018: «Для кого: P3 Жінки… (хто). Питання клієнта: «…» — …» + службові вказівки агенту (розбір — lib/audience.ts)
+  note?: string | null
 }
 
 // inquiries — «💬 Написали з цього поста» (лише викладені; нема поля — кнопку не показуємо)
@@ -92,10 +94,13 @@ export type Version = {
 }
 
 export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+// Водяний знак на фото поста: wm1 — горизонтальний (дефолт), wm3 — рукописний, off — без
+export type PostWm = 'wm1' | 'wm3' | 'off'
 export type RenderParams = {
   photo_text?: { title?: string; kicker?: string }
   photo_captions?: { items?: ({ title?: string } | null)[] }
   photo_edits?: Record<string, PhotoEdit>
+  wm?: PostWm
 }
 
 export type Comment = { id: string; version_id: string | null; target: 'text' | 'photo'; body: string; status: string; created_at: string }
@@ -122,7 +127,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null } }
+type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm }
 type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 // «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
@@ -137,6 +142,18 @@ export async function getQueue(): Promise<{ items: QueueItem[]; story: StoryInfo
   return { items: r.items, story: r.story ?? null }
 }
 
+// Вкладка «План»: усі слоти тижня з будь-яким статусом; photos — скільки фото в поточній версії
+export type PlanItem = QueueItem & { photos: number }
+export type WeekPlan = { from: string; to: string; today: string; items: PlanItem[] }
+
+export async function getPlan(week: number): Promise<WeekPlan> {
+  if (isDemo) {
+    await wait()
+    return demo.plan(week)
+  }
+  return call<WeekPlan>(`/api/plan?week=${week}`)
+}
+
 export async function getPost(id: string): Promise<PostDetail> {
   if (isDemo) {
     await wait()
@@ -148,7 +165,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -196,6 +213,10 @@ export async function decideRule(id: string, decision: RuleDecision): Promise<vo
 }
 
 // ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────
+const DEMO_NOTE: Record<string, string> = {
+  d1: 'Для кого: P2 Багатодітна сім\'я (сім\'я з 2–4 дітьми; потрібна сімейна інфраструктура, вілли / connecting rooms). Питання клієнта: «Чим будуть зайняті діти різного віку, поки батьки відпочивають?» — відповідай цій людині на прикладі цього готелю. Поїздки на 1–3 міс.',
+  d2: 'Для кого: P3 Жінки в подорожі (дві подруги або мама з дочкою; короткі поїздки, комфорт, spa). Питання клієнта: «Куди поїхати з подругою на 5 днів, щоб відпочити по-справжньому?» — відповідай цій людині на прикладі цього готелю.',
+}
 const demo = (() => {
   const now = new Date().toISOString()
   // Демо-фото: градієнти замість справжніх (url null → плейсхолдер у каруселі)
@@ -204,7 +225,7 @@ const demo = (() => {
   const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string, photos: string[] = []): PostDetail => ({
     plan: {
       id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
-      review_status: status, version_no: texts.length, current_version_id: texts.length ? `${id}-v${texts.length}` : null, approved_at: null, published_at: status === 'published' ? now : null,
+      review_status: status, version_no: texts.length, current_version_id: texts.length ? `${id}-v${texts.length}` : null, approved_at: null, published_at: status === 'published' ? now : null, note: DEMO_NOTE[id] ?? null,
     },
     hotel: hotel ? { hotel_id: 'HTL-000', name: hotel, country: '—' } : null,
     tour: null,
@@ -254,6 +275,28 @@ const demo = (() => {
         ...(p.plan.review_status === 'published' ? { inquiries: p.inquiries ?? 0 } : {}),
       })),
     post: (id: string): PostDetail => structuredClone(byId(id)),
+    // Демо-план: пости розкладено по днях поточного тижня + 2 слоти, які агент ще не написав
+    plan: (week: number): WeekPlan => {
+      const d0 = new Date()
+      const dow = (d0.getDay() + 6) % 7
+      const day = (n: number) => { const d = new Date(d0); d.setDate(d0.getDate() - dow + 7 * week + n); return d.toISOString().slice(0, 10) }
+      const DOW: Record<string, number> = { 'Пн': 0, 'Вт': 1, 'Ср': 2, 'Чт': 3, 'Пт': 4, 'Сб': 5, 'Нд': 6 }
+      const TIME: Record<string, string> = { telegram: '10:00', instagram: '19:00', threads: '13:00' }
+      const items: PlanItem[] = posts.map((p) => ({
+        ...p.plan, scheduled_for: day(DOW[p.plan.day] ?? 0), slot_time: TIME[p.plan.platform] ?? '12:00', slot_type: p.plan.platform === 'instagram' ? 'feed_carousel' : 'content',
+        hotel_name: p.hotel?.name ?? null, tour_title: null, preview: (p.versions.at(-1)?.text ?? '').replace(/\*\*/g, '').slice(0, 140), photos: p.versions.at(-1)?.media_ids.length ?? 0,
+      }))
+      const empty = (id: string, d: string, platform: string, slot_type: string, pillar: string, hotel: string | null, note: string | null): PlanItem => ({
+        id, day: d, platform, slot_type, pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: day(DOW[d]), slot_time: TIME[platform], review_status: 'planned',
+        version_no: 0, current_version_id: null, approved_at: null, published_at: null, note, hotel_name: hotel, tour_title: null, preview: '', photos: 0,
+      })
+      items.push(
+        empty('p1', 'Вт', 'instagram', 'reel', 'video', null, null),
+        empty('p2', 'Сб', 'telegram', 'feed_carousel', 'unusual_hotels', 'Демо-готель на дереві', 'Для кого: P2 Багатодітна сім\'я (сім\'я з 2–4 дітьми). рубрика «Незвичайні готелі», карусель'),
+      )
+      items.sort((a, b) => `${a.scheduled_for}${a.slot_time}`.localeCompare(`${b.scheduled_for}${b.slot_time}`))
+      return { from: day(0), to: day(6), today: new Date().toISOString().slice(0, 10), items }
+    },
     act: (id: string, action: string, extra: Partial<CommentInput> & ActionExtra): ActionResult => {
       const p = byId(id)
       if (action === 'approve') {
@@ -305,6 +348,12 @@ const demo = (() => {
         edits[extra.media_id] = next as PhotoEdit
         const n = p.versions.length + 1
         p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, photo_edits: edits } })
+        Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
+      }
+      if (action === 'watermark' && extra.wm) {
+        const prev = p.versions.at(-1)!
+        const n = p.versions.length + 1
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, wm: extra.wm } })
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
       }
       if (action === 'answer_data') {

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { reviewAction, type QueueItem } from '../lib/api'
 import { haptic } from '../lib/tg'
+import { AudienceCard } from './AudienceCard'
 import { Inquiries } from './Inquiries'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Label } from './ui'
@@ -112,6 +113,7 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
           </span>
           <b className="mt-1 block truncate text-[14.5px]">{q.hotel_name ?? q.tour_title ?? cap(PILLAR[q.pillar] ?? q.pillar)}</b>
           <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>
+          <AudienceCard plan={q} compact />
         </button>
         {isPublished ? (
           <button className="chip okc" disabled={busyId === q.id} onClick={() => void mark(q, 'unpublish')} title="Повернути">✓ викладено</button>

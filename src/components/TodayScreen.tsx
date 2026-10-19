@@ -1,3 +1,4 @@
+import { AudienceCard } from './AudienceCard'
 import type { Me, QueueItem, StoryInfo } from '../lib/api'
 import { haptic, openTelegram } from '../lib/tg'
 import { PILLAR, PLATFORM } from './PostScreen'
@@ -125,6 +126,7 @@ function List({ title, items, onOpen, badge }: { title: string; items: QueueItem
                 </span>
                 <b className="mt-1 block truncate text-[14.5px]">{q.hotel_name ?? q.tour_title ?? cap(PILLAR[q.pillar] ?? q.pillar)}</b>
                 <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>
+                <AudienceCard plan={q} compact />
               </span>
               {badge ?? <span style={{ color: 'var(--hint)' }}>›</span>}
             </button>

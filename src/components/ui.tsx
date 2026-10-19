@@ -30,3 +30,10 @@ export const IconCalendar = () => (
     <path d="M3.5 10h17M8 3v4M16 3v4" />
   </svg>
 )
+
+export const IconList = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <circle cx="4.5" cy="6" r="1.2" /><circle cx="4.5" cy="12" r="1.2" /><circle cx="4.5" cy="18" r="1.2" />
+  </svg>
+)

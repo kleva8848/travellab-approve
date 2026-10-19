@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
-import { previewUrls, sendStory, sendToChat, type PhotoEdit } from '../server/render.js'
+import { POST_WM, previewUrls, sendStory, sendToChat, type PhotoEdit, type PostWm } from '../server/render.js'
 import { inquiryCounts, notifyN8n, openQuestions } from '../server/review.js'
 import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
   id?: string
   expected_version_no?: number
   text?: string
@@ -29,6 +29,7 @@ type Body = {
   on?: boolean
   media_id?: string
   edit?: Record<string, unknown>
+  wm?: string
   answers?: { id?: string; answer?: string }[]
 }
 
@@ -164,6 +165,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const r = await db().rpc('tl_add_version', {
         p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
         p_render_params: { ...params, photo_edits: edits }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
+      })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      return void res.json({ ok: true })
+    }
+
+    // Водяний знак на всіх фото поста (горизонтальний / рукописний / без) — нова версія з тим самим текстом,
+    // лише render_params.wm; агент не задіяний (раніше «заміни знак» у «До фото» йшло в генератор і переписувало текст)
+    if (b.action === 'watermark') {
+      if (!POST_WM.includes(b.wm as PostWm)) return void res.status(400).json({ error: 'bad wm' })
+      const p = await db().from('content_plan').select('review_status, version_no, current_version_id, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data?.current_version_id || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
+      const v = await db().from('post_versions').select('render_params').eq('id', p.data.current_version_id).maybeSingle()
+      if (v.error) throw v.error
+      const params = (v.data?.render_params as Record<string, unknown> | null) ?? {}
+      if ((params.wm ?? 'wm1') === b.wm) return void res.json({ ok: true })
+      const r = await db().rpc('tl_add_version', {
+        p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
+        p_render_params: { ...params, wm: b.wm }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
       })
       if (r.error) {
         if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()

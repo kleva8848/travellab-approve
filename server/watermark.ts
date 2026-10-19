@@ -16,9 +16,9 @@ import { loadFonts } from './overlay.js'
 export type WmKind = 'wm1' | 'wm2' | 'wm3'
 
 const GOLD = '#C9B27C'
-// Ширина знака від меншої сторони кадру
-const SIZE: Record<WmKind, number> = { wm1: 0.46, wm2: 0.26, wm3: 0.27 }
-const STUB_REV = 's2' // змінили вигляд заглушки / накладання → новий кеш
+// Ширина знака від меншої сторони кадру (wm1 0.46 → 0.34 19.10: Іра хоче дрібний)
+const SIZE: Record<WmKind, number> = { wm1: 0.34, wm2: 0.26, wm3: 0.27 }
+const STUB_REV = 's3' // змінили вигляд заглушки / накладання → новий кеш
 // Колір знака під фон (сірий 0..255 під знаком): світлий → темна бронза, інакше світле золото
 const LIGHT_BG = 150
 const INK_ON_LIGHT = [112, 82, 38] as const

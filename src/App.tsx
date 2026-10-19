@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CalendarScreen } from './components/CalendarScreen'
+import { PlanScreen } from './components/PlanScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
-import { Center, IconCalendar, IconSun, Spinner } from './components/ui'
+import { Center, IconCalendar, IconList, IconSun, Spinner } from './components/ui'
 import { ApiError, getMe, getQueue, type Me, type QueueItem, type StoryInfo } from './lib/api'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
 
-type Tab = 'today' | 'calendar'
+type Tab = 'today' | 'plan' | 'calendar'
 
 const TABS: { id: Tab; label: string; icon: () => React.JSX.Element }[] = [
   { id: 'today', label: 'Сьогодні', icon: IconSun },
+  { id: 'plan', label: 'План', icon: IconList },
   { id: 'calendar', label: 'Календар', icon: IconCalendar },
 ]
 
@@ -106,6 +108,7 @@ export default function App() {
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
         {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
+        {tab === 'plan' && <PlanScreen onOpen={open} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>

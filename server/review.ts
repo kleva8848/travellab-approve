@@ -1,6 +1,6 @@
 import { db, getSettings } from './http.js'
 import { hotelPhotoCount, mediaViews } from './media.js'
-import { scheduleIfNeeded } from './schedule.js'
+import { addDays, kyivNow, scheduleIfNeeded } from './schedule.js'
 
 // Статуси, які показуємо Ірі в черзі «на перегляд» (backlog — старі чернетки Notion-епохи, не показуємо)
 export const QUEUE_STATUSES = ['ready_for_review', 'changes_requested', 'regenerating', 'needs_data'] as const
@@ -21,6 +21,7 @@ export type PlanRow = {
   current_version_id: string | null
   approved_at: string | null
   published_at: string | null
+  note: string | null
 }
 
 export type VersionRow = {
@@ -78,7 +79,7 @@ export async function openQuestions(plan?: Pick<PlanRow, 'id' | 'hotel_id' | 'to
 }
 
 const PLAN_COLS =
-  'id, day, platform, slot_type, pillar, tour_id, hotel_id, scheduled_for, slot_time, review_status, version_no, current_version_id, approved_at, published_at'
+  'id, day, platform, slot_type, pillar, tour_id, hotel_id, scheduled_for, slot_time, review_status, version_no, current_version_id, approved_at, published_at, note'
 
 // Порядок у черзі: спершу з датою (найближчі), далі за днем тижня в плані
 const DAY_ORDER: Record<string, number> = { 'Пн': 1, 'Вт': 2, 'Ср': 3, 'Чт': 4, 'Пт': 5, 'Сб': 6, 'Нд': 7 }
@@ -243,4 +244,32 @@ export async function notifyN8n(payload: Record<string, unknown>, hook = 'travel
   } finally {
     clearTimeout(timer)
   }
+}
+
+// Вкладка «План»: усі слоти тижня (Пн–Нд за Києвом) у будь-якому стані — що, де, коли, у якому форматі й для кого.
+// week: 0 — поточний, 1 — наступний, -1 — минулий. backlog (старі чернетки Notion) не показуємо
+export async function loadWeekPlan(week: number) {
+  const today = kyivNow().date
+  const dow = (new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7
+  const from = addDays(today, -dow + 7 * week)
+  const to = addDays(from, 6)
+  const r = await db().from('content_plan').select(PLAN_COLS).gte('scheduled_for', from).lte('scheduled_for', to).neq('review_status', 'backlog')
+  if (r.error) throw r.error
+  const rows = sortPlan((r.data ?? []) as PlanRow[])
+  const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]
+  const v = versionIds.length ? await db().from('post_versions').select('id, text, media_ids').in('id', versionIds) : { data: [], error: null }
+  if (v.error) throw v.error
+  const versions = new Map((v.data ?? []).map((x) => [x.id as string, x]))
+  const { hotels, tours } = await namesFor(rows)
+  const items = rows.map((p) => {
+    const ver = p.current_version_id ? versions.get(p.current_version_id) : undefined
+    return {
+      ...p,
+      hotel_name: (p.hotel_id && hotels.get(p.hotel_id)?.name) || null,
+      tour_title: (p.tour_id && tours.get(p.tour_id)?.title) || null,
+      preview: (ver?.text ?? '').replace(/\*\*/g, '').slice(0, 140),
+      photos: ((ver?.media_ids as string[] | null) ?? []).length,
+    }
+  })
+  return { from, to, today, items }
 }

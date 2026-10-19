@@ -25,6 +25,11 @@ const exportPath = (planId: string, versionNo: number, i: number, tag = '') => `
 
 // Ручні правки Іри до конкретного фото (чипи під фото) — render_params.photo_edits[media_id]
 export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+// Знак на фото поста — вибір Іри на весь пост (render_params.wm). Дефолт — горизонтальний wm1:
+// рукописний wm3 Іра 19.10 назвала громіздким. 'off' — без знака
+export type PostWm = 'wm1' | 'wm3' | 'off'
+export const POST_WM: PostWm[] = ['wm1', 'wm3', 'off']
+const postWm = (v: unknown): WmKind | null => (v === 'off' ? null : v === 'wm3' ? 'wm3' : 'wm1')
 const CROP = { centre: sharp.gravity.centre, north: sharp.gravity.north, south: sharp.gravity.south } as const
 
 export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null): Promise<Buffer> {
@@ -171,7 +176,7 @@ export async function render(planId: string, story?: number): Promise<Rendered> 
   }
   const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
   const tag = await watermarkTag()
-  const wm: WmKind | null = tag ? (story !== undefined ? 'wm2' : 'wm3') : null
+  const wm: WmKind | null = !tag ? null : story !== undefined ? 'wm2' : postWm(params.wm)
   // Текст Іри на фото має пріоритет над текстом агента
   const textFor = (id: string): (PhotoText & { zone_hint?: string | null }) | null => {
     const e = edits[id] ?? {}
