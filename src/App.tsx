@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AudiencesScreen } from './components/AudiencesScreen'
 import { CalendarScreen } from './components/CalendarScreen'
 import { PlanScreen } from './components/PlanScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
-import { Center, IconCalendar, IconList, IconSun, Spinner } from './components/ui'
+import { Center, IconCalendar, IconList, IconPeople, IconSun, Spinner } from './components/ui'
 import { ApiError, getMe, getQueue, type Me, type QueueItem, type StoryInfo } from './lib/api'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
 
-type Tab = 'today' | 'plan' | 'calendar'
+type Tab = 'today' | 'plan' | 'calendar' | 'audiences'
 
 const TABS: { id: Tab; label: string; icon: () => React.JSX.Element }[] = [
   { id: 'today', label: 'Сьогодні', icon: IconSun },
   { id: 'plan', label: 'План', icon: IconList },
   { id: 'calendar', label: 'Календар', icon: IconCalendar },
+  { id: 'audiences', label: 'Аудиторії', icon: IconPeople },
 ]
 
 type Auth = { state: 'loading' } | { state: 'ok'; me: Me } | { state: 'error'; status: number; message: string }
@@ -110,6 +112,7 @@ export default function App() {
         {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
         {tab === 'plan' && <PlanScreen onOpen={open} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
+        {tab === 'audiences' && <AudiencesScreen me={auth.me} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>
         {TABS.map((t) => (

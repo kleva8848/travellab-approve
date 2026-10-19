@@ -212,6 +212,65 @@ export async function decideRule(id: string, decision: RuleDecision): Promise<vo
   await call('/api/rules', { method: 'POST', body: JSON.stringify({ id, decision }) })
 }
 
+// ───────────── Аудиторії: портрети + питання клієнтів для плану тижня (WF-018) ─────────────
+
+export type AudienceQuestion = { id: string; audience_id: string; question: string; with_hotel: boolean; active: boolean; sort_order: number }
+export type AudienceItem = { id: string; code: string; name: string; who: string; match_words: string; active: boolean; sort_order: number; questions: AudienceQuestion[] }
+export type Audiences = { audiences: AudienceItem[]; next_focus_id: string | null }
+export type AudienceAction =
+  | { action: 'audience_save'; id?: string; name: string; who: string; match_words?: string }
+  | { action: 'audience_active'; id: string; active: boolean }
+  | { action: 'question_save'; id?: string; audience_id?: string; question: string; with_hotel: boolean }
+  | { action: 'question_active'; id: string; active: boolean }
+
+const demoAud: Audiences = {
+  audiences: [
+    { id: 'a1', code: 'P1', name: 'Пара з приводом', who: 'пара 35–45, ювілей / подарунок / романтика, без дітей', match_words: 'couple, romant, пар', active: true, sort_order: 1, questions: [
+      { id: 'q1', audience_id: 'a1', question: 'Куди поїхати вдвох на ювілей, щоб було і красиво, і не нудно?', with_hotel: true, active: true, sort_order: 1 },
+      { id: 'q2', audience_id: 'a1', question: 'За скільки планувати подорож-подарунок на дату?', with_hotel: false, active: true, sort_order: 2 },
+    ] },
+    { id: 'a2', code: 'P2', name: 'Багатодітна сім\'я', who: 'сім\'я з 2–4 дітьми; вілли / connecting rooms', match_words: 'family, kids', active: true, sort_order: 2, questions: [
+      { id: 'q3', audience_id: 'a2', question: 'Чим будуть зайняті діти різного віку, поки батьки відпочивають?', with_hotel: true, active: true, sort_order: 1 },
+    ] },
+  ],
+  next_focus_id: 'a2',
+}
+
+export async function getAudiences(): Promise<Audiences> {
+  if (isDemo) {
+    await wait()
+    return structuredClone(demoAud)
+  }
+  return call('/api/audiences')
+}
+
+export async function audienceAction(a: AudienceAction): Promise<Audiences> {
+  if (isDemo) {
+    await wait(300)
+    const all = demoAud.audiences
+    if (a.action === 'audience_save') {
+      const x = all.find((y) => y.id === a.id)
+      if (x) Object.assign(x, { name: a.name, who: a.who, match_words: a.match_words ?? x.match_words })
+      else all.push({ id: `a${Date.now()}`, code: `P${all.length + 1}`, name: a.name, who: a.who, match_words: '', active: true, sort_order: all.length + 1, questions: [] })
+    }
+    if (a.action === 'audience_active') {
+      const x = all.find((y) => y.id === a.id)
+      if (x) x.active = a.active
+    }
+    if (a.action === 'question_save') {
+      const x = all.flatMap((y) => y.questions).find((y) => y.id === a.id)
+      if (x) Object.assign(x, { question: a.question, with_hotel: a.with_hotel })
+      else all.find((y) => y.id === a.audience_id)?.questions.push({ id: `q${Date.now()}`, audience_id: a.audience_id ?? '', question: a.question, with_hotel: a.with_hotel, active: true, sort_order: 99 })
+    }
+    if (a.action === 'question_active') {
+      const x = all.flatMap((y) => y.questions).find((y) => y.id === a.id)
+      if (x) x.active = a.active
+    }
+    return structuredClone(demoAud)
+  }
+  return call('/api/audiences', { method: 'POST', body: JSON.stringify(a) })
+}
+
 // ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────
 const DEMO_NOTE: Record<string, string> = {
   d1: 'Для кого: P2 Багатодітна сім\'я (сім\'я з 2–4 дітьми; потрібна сімейна інфраструктура, вілли / connecting rooms). Питання клієнта: «Чим будуть зайняті діти різного віку, поки батьки відпочивають?» — відповідай цій людині на прикладі цього готелю. Поїздки на 1–3 міс.',

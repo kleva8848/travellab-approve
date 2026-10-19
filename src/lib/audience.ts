@@ -12,7 +12,7 @@ const TOPIC: Record<string, string> = {
 
 export function audienceOf(p: Pick<Plan, 'note' | 'pillar'>): Audience {
   const note = p.note ?? ''
-  const m = /Для кого:\s*(P\d)\s+([^(.]+?)\s*\(([^)]*)\)/.exec(note)
+  const m = /Для кого:\s*(P\d+)\s+([^(.]+?)\s*\(([^)]*)\)/.exec(note)
   const q = /Питання клієнта:\s*«([^»]+)»/.exec(note)
   return {
     persona: m ? m[2].trim() : null,

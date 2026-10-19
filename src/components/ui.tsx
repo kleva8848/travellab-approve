@@ -37,3 +37,10 @@ export const IconList = () => (
     <circle cx="4.5" cy="6" r="1.2" /><circle cx="4.5" cy="12" r="1.2" /><circle cx="4.5" cy="18" r="1.2" />
   </svg>
 )
+
+export const IconPeople = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 19.5c.6-3.3 3-5 6-5s5.4 1.7 6 5" />
+    <circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.3.2 3.9 1.6 4.5 4.4" />
+  </svg>
+)

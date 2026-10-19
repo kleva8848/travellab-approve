@@ -9,6 +9,8 @@
 // 14.10 відповіді Іри (Ira_Voice_Answers_2026-10-14, Audience_Strategy_v3): «у TG можна більше, в IG менше, але не
 // розкидатися пропозиціями» → Влад: TG 1 прямий + 1 м'яка рекомендація, IG 1 прямий. Портрети P1–P4 + банк питань:
 // тиждень = один портрет (ротація за ISO-тижнем), кожен слот — відповідь на одне питання; persona+питання → note слоту.
+// 19.10 вкладка «Аудиторії» (§33): портрети й питання — з таблиць audiences / audience_questions (SQL 017), Іра керує в апці.
+// PERSONAS / TOPIC_BANK у коді лишаються запасом: таблиці нема / порожня / вузол упав → план як до 19.10.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,8 +24,8 @@ export const PLAN_CODE = String.raw`// WF-018 — план тижня. Джер�
 const OFFERS_PER_WEEK = { telegram: 1, instagram: 1 };
 const SOFT_PER_WEEK = { telegram: 1, instagram: 0 };
 
-// ── Портрети (Audience_Strategy_v3, зі слів Іри 14.10). match — теги/who_for готелів, які пасують портрету.
-const PERSONAS = [
+// ── Запасні портрети (Audience_Strategy_v3, зі слів Іри 14.10) — лише якщо в audiences нема активних. match — теги/who_for готелів, які пасують портрету.
+const FALLBACK_PERSONAS = [
   { id: 'P1', name: 'Пара з приводом', who: 'пара 35–45, ювілей / подарунок / романтика, без дітей; хочуть цікаво, активно і гарно',
     match: /couple|adults|romant|honeymoon|пар|двох|романт|ювіл/i },
   { id: 'P2', name: 'Багатодітна сім\'я', who: 'сім\'я з 2–4 дітьми; потрібна сімейна інфраструктура, вілли / connecting rooms, щоб кожен був зайнятий',
@@ -35,7 +37,7 @@ const PERSONAS = [
 ];
 // Банк питань — справжні питання клієнтів Іри (голосові 14.10). hotel: true — відповідь на прикладі готелю слоту;
 // false — загальна експертна тема (Threads, сторіз). Про росіян у постах НЕ пишемо (рішення Влада 14.10).
-const TOPIC_BANK = [
+const FALLBACK_TOPIC_BANK = [
   { p: 'P1', hotel: true, q: 'Куди поїхати вдвох на ювілей, щоб було і красиво, і не нудно?' },
   { p: 'P1', hotel: true, q: 'Який готель обрати для сюрпризу-подарунка, щоб вразити, а не просто «гарно»?' },
   { p: 'P1', hotel: true, q: 'Де на островах і активно (снорклінг, спорт), і романтично ввечері?' },
@@ -66,6 +68,18 @@ const rows = (n) => $(n).all().map(i => i.json).filter(j => Object.keys(j).lengt
 const tours = rows('Supabase - Get Ready Tours');
 const hotels = rows('Supabase - Get Ready Hotels');
 const stories = rows('Supabase - Get New Stories');
+
+// ── Аудиторії з апки (SQL 017). Вузли з onError=continue: при помилці приходить {error} без id — відкидаємо
+const escRe = (w) => w.replace(/[.*+?^$\{}()|[\]\\]/g, '\\$&');
+const wordsRe = (s) => { const w = String(s || '').split(/[,;\n]/).map(x => x.trim()).filter(Boolean).map(escRe); return w.length ? new RegExp(w.join('|'), 'i') : /(?!)/; };
+// Дужки/крапка в назві й дужки в описі ламають розбір note в апці (lib/audience.ts) — прибираємо
+const dbAud = rows('Supabase - Get Audiences').filter(a => a.id && a.code && a.active !== false)
+  .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));
+const dbQ = rows('Supabase - Get Audience Questions').filter(q => q.id && q.audience_id && q.active !== false && String(q.question || '').trim())
+  .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.created_at).localeCompare(String(b.created_at)));
+const FROM_DB = dbAud.length > 0;
+const PERSONAS = FROM_DB ? dbAud.map(a => ({ id: a.code, name: String(a.name).replace(/[().]/g, '').trim(), who: String(a.who || '').replace(/[()]/g, ','), match: wordsRe(a.match_words) })) : FALLBACK_PERSONAS;
+const TOPIC_BANK = FROM_DB ? dbQ.map(q => { const a = dbAud.find(x => x.id === q.audience_id); return a ? { p: a.code, hotel: q.with_hotel !== false, q: String(q.question).trim() } : null; }).filter(Boolean) : FALLBACK_TOPIC_BANK;
 
 tours.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 stories.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
@@ -194,7 +208,9 @@ if (!OFFERS_PER_WEEK.instagram) slots.filter(s => s.platform === 'instagram' && 
 // ── Портрет + питання клієнта → note (генератор отримує slot.note). Пара (pair_key) — одне питання на всі платформи.
 // Без питання: відео, «за кадром», особиста історія з черги (не перебиваємо її), прямий офер (висновок тижня)
 // «Незвичайні готелі» (своя рубрика — кут уже заданий) і сторіз-шаблон (досить фокусу тижня).
-const persona = FOCUS.id + ' ' + FOCUS.name + ' (' + FOCUS.who + ')';
+const persona = FOCUS.id + ' ' + FOCUS.name + ' (' + (FOCUS.who || FOCUS.name) + ')';
+// «» усередині питання ламають «Питання клієнта: «…»» (розбір в апці) → прямі лапки
+const quoteQ = (q) => String(q).replace(/[«»]/g, '"');
 const pairQ = {};
 for (const s of slots) {
   if (s.pillar === 'video' || s.pillar === 'behind_scenes') continue;
@@ -207,11 +223,11 @@ for (const s of slots) {
     if (key) pairQ[key] = q;
   }
   const parts = ['Для кого: ' + persona + '.'];
-  if (q) parts.push('Питання клієнта: «' + q + '» — відповідай цій людині' + (s.hotel_id ? ' на прикладі цього готелю.' : '.'));
+  if (q) parts.push('Питання клієнта: «' + quoteQ(q) + '» — відповідай цій людині' + (s.hotel_id ? ' на прикладі цього готелю.' : '.'));
   if (offer) parts.push('Офер — логічний висновок тижня для цього портрета.');
   parts.push('Поїздки на ' + HORIZON + '; раннє бронювання не рекламувати.');
   if (s.note) parts.push(s.note);
-  Object.assign(s, { note: parts.join(' '), question: q, persona_id: FOCUS.id });
+  Object.assign(s, { note: parts.join(' '), question: q, persona_id: FOCUS.id, personas_from: FROM_DB ? 'app' : 'code' });
 }
 
 // Дата слоту для апки / Buffer Filler (WF-051) і стан огляду
@@ -251,7 +267,7 @@ const ws = items[0] && items[0].week_start;
 const we = ws ? new Date(new Date(ws + 'T00:00:00Z').getTime() + 6 * 86400000).toISOString().slice(0, 10) : null;
 const focus = items.find(s => s.persona_id);
 let text = '📅 План TravelLab на тиждень ' + fmt(ws) + '–' + fmt(we) + '\n';
-if (focus) text += '🎯 Фокус тижня: ' + (focus.note || '').replace(/^Для кого: /, '').split(').')[0] + ')\n';
+if (focus) text += '🎯 Фокус тижня: ' + (focus.note || '').replace(/^Для кого: /, '').split(').')[0] + ')' + (focus.personas_from === 'code' ? ' ⚠️ аудиторії з коду — у таблиці audiences нема активних' : '') + '\n';
 for (const d of DAYS) {
   const day = items.filter(s => s.day === d).sort((a, b) => PORDER.indexOf(a.platform) - PORDER.indexOf(b.platform));
   if (!day.length) continue;
@@ -263,6 +279,23 @@ text += '\nТексти й фото з\'являться в апці TravelLab �
 return [{ json: { text } }];`
 
 const wf = JSON.parse(readFileSync(join(here, 'weekly_plan.json'), 'utf8'))
+
+// Аудиторії з апки (SQL 017): Stories → Get Audiences → Get Audience Questions → Build. Усі рядки (active фільтрує код);
+// executeOnce — один запит незалежно від кількості вхідних рядків; помилка (нема таблиці) не зупиняє план
+const STORIES = 'Supabase - Get New Stories', AUD = 'Supabase - Get Audiences', AUDQ = 'Supabase - Get Audience Questions'
+const sb = wf.nodes.find((n) => n.name === STORIES)
+for (const [name, table, x] of [[AUD, 'audiences', 0], [AUDQ, 'audience_questions', 1]]) {
+  if (wf.nodes.some((n) => n.name === name)) continue
+  wf.nodes.push({
+    parameters: { operation: 'getAll', tableId: table, returnAll: true },
+    name, type: 'n8n-nodes-base.supabase', typeVersion: 1,
+    position: [sb.position[0] + x * 112, sb.position[1] + 192],
+    credentials: sb.credentials, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput',
+  })
+}
+wf.connections[STORIES] = { main: [[{ node: AUD, type: 'main', index: 0 }]] }
+wf.connections[AUD] = { main: [[{ node: AUDQ, type: 'main', index: 0 }]] }
+wf.connections[AUDQ] = { main: [[{ node: PLAN_NODE, type: 'main', index: 0 }]] }
 const plan = wf.nodes.find((n) => n.name === PLAN_NODE)
 if (!plan) throw new Error('нема вузла ' + PLAN_NODE)
 plan.parameters.jsCode = PLAN_CODE
