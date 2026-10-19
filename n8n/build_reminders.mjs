@@ -24,6 +24,8 @@ const node = (name, type, typeVersion, parameters, extra = {}) => ({ id: name.to
 const build = `// Що слати: дайджест (10:00 або вебхук mode=digest) чи нагадування (кожні 5 хв або mode=remind)
 const s = {};
 for (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;
+// аудиторії з апки (SQL 017) — для підказки історії; вузол з onError=continue → рядок {error} без code відкидається
+const aud = $('Supabase - Get Audiences').all().map(i => i.json).filter(j => j && j.code);
 const fromHook = $('Webhook - Manual Run').isExecuted ? String(($('Webhook - Manual Run').first().json.body || {}).mode || 'digest') : '';
 const mode = fromHook || ($('Schedule - Digest 10:00').isExecuted ? 'digest' : 'remind');
 
@@ -114,6 +116,8 @@ const nodes = [
   node('Supabase - Get New Stories', 'n8n-nodes-base.supabase', 1, {
     operation: 'getAll', tableId: 'story_queue', returnAll: true, filterType: 'string', filterString: 'status=eq.new',
   }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
+  node('Supabase - Get Audiences', 'n8n-nodes-base.supabase', 1, { operation: 'getAll', tableId: 'audiences', returnAll: true },
+    { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Code - Build Messages', 'n8n-nodes-base.code', 2, { jsCode: build }, { executeOnce: true }),
   node('IF - Story Button?', 'n8n-nodes-base.if', 2.2, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
@@ -158,7 +162,8 @@ const connections = {
   'Supabase - Get Open Plans': to('Supabase - Get Hotels'),
   'Supabase - Get Hotels': to('Supabase - Get Tours'),
   'Supabase - Get Tours': to('Supabase - Get New Stories'),
-  'Supabase - Get New Stories': to('Code - Build Messages'),
+  'Supabase - Get New Stories': to('Supabase - Get Audiences'),
+  'Supabase - Get Audiences': to('Code - Build Messages'),
   'Code - Build Messages': to('IF - Story Button?'),
   'IF - Story Button?': { main: [[{ node: 'Telegram - Send With Story', type: 'main', index: 0 }], [{ node: 'Telegram - Send', type: 'main', index: 0 }]] },
   'Telegram - Send': to('IF - Reminder Sent?'),

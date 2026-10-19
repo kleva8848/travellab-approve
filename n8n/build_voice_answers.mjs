@@ -94,6 +94,7 @@ const n = $('Code - Normalize').first().json;
 const all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };
 const s = {};
 for (const r of all('Supabase - Get Settings')) s[r.key] = r.value;
+const aud = all('Supabase - Get Audiences');
 ${STORY_HINT_JS}
 const allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);
 const base = String(s.mini_app_url || '').replace(/\\/$/, '');
@@ -299,6 +300,7 @@ const coreNodes = [
   getAll('Supabase - Get Open Requests', 1100, 'data_requests', 'status=eq.open', { onError: 'continueRegularOutput' }),
   getAll('Supabase - Get Hotels', 1320, 'hotels'),
   getAll('Supabase - Get Tours', 1540, 'tours'),
+  getAll('Supabase - Get Audiences', 1650, 'audiences', null, { onError: 'continueRegularOutput', y: 200 }),
   node('Code - Resolve', 'n8n-nodes-base.code', 2, 1760, { jsCode: resolve }, { executeOnce: true }),
   node('Switch - Route', 'n8n-nodes-base.switch', 3.2, 1980, {
     rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story'].map((k) => ({
@@ -385,7 +387,7 @@ const coreConnections = {
   'Webhook - Test Update': to('Code - Normalize'),
   'Code - Normalize': to('IF - Anything?'),
   'IF - Anything?': branches('Supabase - Get Settings'),
-  ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Open Requests', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Code - Resolve', 'Switch - Route'),
+  ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Open Requests', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Audiences', 'Code - Resolve', 'Switch - Route'),
   'Switch - Route': { main: [
     [{ node: 'Code - Ask', type: 'main', index: 0 }],
     [{ node: 'IF - Has Questions?', type: 'main', index: 0 }],

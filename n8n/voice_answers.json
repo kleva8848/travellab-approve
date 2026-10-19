@@ -206,6 +206,30 @@
       "executeOnce": true
     },
     {
+      "id": "supabase-get-audiences",
+      "name": "Supabase - Get Audiences",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "audiences",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "code-resolve",
       "name": "Code - Resolve",
       "type": "n8n-nodes-base.code",
@@ -215,7 +239,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst storyHint = () => {\n  const PERSONAS = ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && (!x.p || x.p === persona));\n  const hint = mine.length ? mine[Math.floor(WEEK / PERSONAS.length) % mine.length].q : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story' };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
+        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst aud = all('Supabase - Get Audiences');\nconst storyHint = () => {\n  const on = (Array.isArray(aud) ? aud : []).filter(a => a && a.code && a.active !== false)\n    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));\n  const PERSONAS = on.length ? on.map(a => a.code) : ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  const a = on.find(x => x.code === persona);\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && x.p === persona);\n  const any = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && !x.p);\n  const list = mine.length ? mine : any;\n  const hint = list.length ? list[Math.floor(WEEK / PERSONAS.length) % list.length].q\n    : a ? 'Згадай клієнтів, схожих на «' + a.name + '». Що їм запамʼяталось найбільше — і чого вони не очікували?'\n    : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story' };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
       },
       "executeOnce": true
     },
@@ -1445,6 +1469,17 @@
       ]
     },
     "Supabase - Get Tours": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Audiences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Audiences": {
       "main": [
         [
           {
