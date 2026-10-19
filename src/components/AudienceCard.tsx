@@ -7,7 +7,7 @@ export function AudienceCard({ plan, compact = false }: { plan: Pick<Plan, 'note
   if (compact) {
     return (
       <span className="mt-1 block text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
-        🎯 {a.persona ?? 'аудиторію не задано'}{a.question ? ` · ❓ ${a.question}` : ''}
+        🎯 {a.persona ?? 'для всіх'}{a.question ? ` · ❓ ${a.question}` : ''}
       </span>
     )
   }
@@ -16,7 +16,7 @@ export function AudienceCard({ plan, compact = false }: { plan: Pick<Plan, 'note
       <div><span style={{ color: 'var(--hint)' }}>Тема:</span> {a.topic}</div>
       <div className="mt-1">
         <span style={{ color: 'var(--hint)' }}>Для кого:</span>{' '}
-        {a.persona ? <><b>{a.persona}</b>{a.who ? <span style={{ color: 'var(--hint)' }}> — {a.who}</span> : null}</> : <span style={{ color: 'var(--warn)' }}>не задано (пост зроблено до портретів аудиторії)</span>}
+        {a.persona ? <><b>{a.persona}</b>{a.who ? <span style={{ color: 'var(--hint)' }}> — {a.who}</span> : null}</> : <span style={{ color: 'var(--hint)' }}>для всіх (відео, «за кадром», історія чи пост до портретів)</span>}
       </div>
       {a.question && <div className="mt-1"><span style={{ color: 'var(--hint)' }}>Відповідає на питання:</span> «{a.question}»</div>}
     </div>
