@@ -4,6 +4,7 @@ import { CalendarScreen } from './components/CalendarScreen'
 import { PlanScreen } from './components/PlanScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
+import { VideoScreen } from './components/VideoScreen'
 import { Center, IconCalendar, IconList, IconPeople, IconSun, Spinner } from './components/ui'
 import { ApiError, getMe, getQueue, type Me, type QueueItem, type StoryInfo } from './lib/api'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
@@ -30,6 +31,8 @@ export default function App() {
     const m = /^post_([0-9a-f-]{36})$/i.exec(startParam())
     return m ? m[1] : null
   })
+  // Відкрите відео (сторіз/рілс) — поки лише демо
+  const [videoId, setVideoId] = useState<string | null>(null)
   // Порядок проходу фіксуємо на момент відкриття, щоб затверджений пост не «стрибав» у степері
   const [session, setSession] = useState<{ order: string[]; done: Set<string> }>({ order: [], done: new Set() })
 
@@ -83,6 +86,14 @@ export default function App() {
   if (auth.state === 'loading') return <Center><Spinner /></Center>
   if (auth.state === 'error') return <AuthError status={auth.status} message={auth.message} />
 
+  if (videoId) {
+    return (
+      <div className="mx-auto h-full max-w-lg">
+        <VideoScreen id={videoId} onBack={() => setVideoId(null)} />
+      </div>
+    )
+  }
+
   if (openId) {
     const order = session.order.includes(openId) ? session.order : [openId]
     return (
@@ -109,7 +120,7 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
-        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onRetry={() => void refresh()} />}
+        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
         {tab === 'plan' && <PlanScreen onOpen={open} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'audiences' && <AudiencesScreen me={auth.me} />}

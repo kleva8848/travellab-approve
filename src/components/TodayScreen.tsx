@@ -1,6 +1,7 @@
 import { AudienceCard } from './AudienceCard'
 import type { Me, QueueItem, StoryInfo } from '../lib/api'
-import { haptic, openTelegram } from '../lib/tg'
+import { haptic, isDemo, openTelegram } from '../lib/tg'
+import { demoVideos } from '../lib/video'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
@@ -18,12 +19,12 @@ function greeting(h: number) {
 // Звертання в кличному відмінку для відомих імен, інакше як є
 const VOCATIVE: Record<string, string> = { 'Іра': 'Іро', 'Ira': 'Іро', 'Ірина': 'Ірино', 'Влад': 'Владе', 'Vlad': 'Владе' }
 
-type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; queueError: string; onOpen: (id: string) => void; onRetry: () => void }
+type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
 
 const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
-export function TodayScreen({ me, queue, story, queueError, onOpen, onRetry }: Props) {
+export function TodayScreen({ me, queue, story, queueError, onOpen, onOpenVideo, onRetry }: Props) {
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
@@ -78,6 +79,7 @@ export function TodayScreen({ me, queue, story, queueError, onOpen, onRetry }: P
             </div>
           )}
 
+          {isDemo && <Videos onOpen={onOpenVideo} />}
           <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
           <List title="Агент переробляє" items={working} onOpen={onOpen} badge={<span className="chip warn">переробляю</span>} />
@@ -104,6 +106,29 @@ function StoryCard({ story }: { story: StoryInfo }) {
             ? `У черзі ${story.queued} ${plural(story.queued, 'історія', 'історії', 'історій')} — піде в суботній пост`
             : 'Відкриється чат з ботом — одне голосове на 1–3 хв, піде в суботній пост'}
         </div>
+      </div>
+    </>
+  )
+}
+
+// Сторіз / рілс на перегляд: обкладинка 9:16 + назва (поки лише демо, справжні — наступний крок)
+function Videos({ onOpen }: { onOpen: (id: string) => void }) {
+  const items = demoVideos()
+  return (
+    <>
+      <Label>Відео на перегляд</Label>
+      <div className="flex gap-2.5 overflow-x-auto pb-1">
+        {items.map((v) => (
+          <button key={v.id} className="shrink-0 text-left" style={{ width: 104 }} onClick={() => { haptic('tap'); onOpen(v.id) }}>
+            <span className="relative block overflow-hidden rounded-xl" style={{ width: 104, height: 185, boxShadow: 'var(--shadow)' }}>
+              <img src={v.poster} alt="" className="h-full w-full object-cover" />
+              <span className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.5)', color: '#fff' }}>{v.format === 'reel' ? 'рілс' : 'сторіз'} · {Math.round(v.dur)}с</span>
+              {v.status === 'approved' && <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'var(--ok)', color: '#fff' }}>✓</span>}
+            </span>
+            <b className="mt-1.5 block text-[13px] leading-tight">{v.name}</b>
+            <span className="text-[12px]" style={{ color: 'var(--hint)' }}>{v.place}</span>
+          </button>
+        ))}
       </div>
     </>
   )
