@@ -32,8 +32,12 @@ export default function App() {
     const m = /^post_([0-9a-f-]{36})$/i.exec(startParam())
     return m ? m[1] : null
   })
-  // Відкрите відео (сторіз/рілс); список — окремо від черги: без SQL 018 блок просто не показується
-  const [videoId, setVideoId] = useState<string | null>(null)
+  // Відкрите відео (сторіз/рілс); список — окремо від черги: без SQL 018 блок просто не показується.
+  // З бота після голосового — startapp=video_<uuid> (WF-055, сет 6)
+  const [videoId, setVideoId] = useState<string | null>(() => {
+    const m = /^video_([0-9a-f-]{36})$/i.exec(startParam())
+    return m ? m[1] : null
+  })
   const [videos, setVideos] = useState<VideoList | null>(null)
   // Порядок проходу фіксуємо на момент відкриття, щоб затверджений пост не «стрибав» у степері
   const [session, setSession] = useState<{ order: string[]; done: Set<string> }>({ order: [], done: new Set() })

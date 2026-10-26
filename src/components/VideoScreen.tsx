@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react'
 import { ackRemount, getVideo, remountVideo, resendVideo, videoAction, type VideoAction } from '../lib/api'
-import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
+import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
-  FONT, GOLD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, remounting, textTimes, wmBox, words,
-  type LineStyle, type RemountJob, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, remounting, textTimes, wmBox, words,
+  type LineStyle, type RemountJob, type RemountKind, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
 
 const FADE = 0.45
+const SUB_FADE = 0.12 // субтитри голосу — як SUB_FADE у server/video_layers.ts
 const POS: { name: string; y: number }[] = [{ name: 'Вгорі', y: 330 }, { name: 'Центр', y: 820 }, { name: 'Внизу', y: 1150 }]
 const SCRIM: { name: string; a: number }[] = [{ name: 'Без', a: 0 }, { name: 'Легке', a: 0.28 }, { name: 'Сильне', a: 0.5 }]
 const WM_POS: { id: WmPos; name: string }[] = [{ id: 'tl', name: '↖ ліворуч вгорі' }, { id: 'tr', name: '↗ праворуч вгорі' }, { id: 'bl', name: '↙ ліворуч унизу' }, { id: 'br', name: '↘ праворуч унизу' }]
@@ -50,6 +51,8 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
   const [t, setT] = useState(0)
   const [playing, setPlaying] = useState(true)
   const [toast, setToast] = useState('')
+  // звук (музика / голос) — лише після дотику: мобільний браузер грає відео зі звуком тільки за жестом
+  const [muted, setMuted] = useState(true)
   const vref = useRef<HTMLVideoElement>(null)
   const dirty = JSON.stringify(planOf(d)) !== saved
   const montage = d.status === 'approved' && !d.final
@@ -79,6 +82,23 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
     }, 5000)
     return () => clearInterval(x)
   }, [locked, d.id])
+
+  // Іра повернулась з бота (надіслала голосове) — бот уже поставив заявку: підтягуємо стан, щоб побачила «Монтую голос…»
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState !== 'visible' || dirty || locked) return
+      getVideo(d.id).then((v) => {
+        if (v.updated_at === d.updated_at && !remounting(v)) return
+        setD(v)
+        setSaved(JSON.stringify(planOf(v)))
+        setSel(null)
+      }).catch(() => null)
+    }
+    document.addEventListener('visibilitychange', onShow)
+    return () => document.removeEventListener('visibilitychange', onShow)
+  }, [d.id, d.updated_at, dirty, locked])
+
+  useEffect(() => { if (vref.current) vref.current.muted = muted }, [muted])
 
   useEffect(() => {
     if (!toast) return
@@ -212,7 +232,12 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
   }
 
   const reset = () => { setD((cur) => ({ ...cur, ...(JSON.parse(saved) as ReturnType<typeof planOf>) })); setSel(null) }
-  const soon = (what: string) => { haptic('tap'); setToast(`${what} — наступний крок розробки`) }
+  // «🎙 Озвучити голосом» — у бот: він попросить голосове саме до цього відео, далі воркер змонтує (WF-055 → remount voice)
+  const voice = () => {
+    if (!d.voice_link) { haptic('warning'); setToast('Голос через бот ще не ввімкнено — скажи Владу'); return }
+    haptic('tap')
+    openTelegram(d.voice_link)
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -258,7 +283,8 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
         {/* Поки редагує текст — відео менше і «прилипає» вгорі, щоб правки було видно під час набору */}
         <div className="sticky z-10 -mx-4 px-4 pt-3 pb-2" style={{ top: -12, background: 'var(--bg)' }}>
           <Preview d={d} t={t} sel={sel} small={sel !== null} vref={vref} onSelect={select} onMove={(tid, y) => updText(tid, (x) => { x.y = y })} onTap={togglePlay} />
-          <Timeline d={d} t={t} playing={playing} small={sel !== null} onPlay={togglePlay} onSeek={(s) => seek(s)} />
+          <Timeline d={d} t={t} playing={playing} small={sel !== null} onPlay={togglePlay} onSeek={(s) => seek(s)}
+            muted={d.music || d.voice ? muted : null} onSound={() => { haptic('select'); setMuted((m) => !m) }} />
           {sel === null && (
             <div className="mt-1.5 text-center text-[12.5px]" style={{ color: 'var(--hint)' }}>
               Торкнись тексту на відео, щоб змінити. Потягни — щоб посунути.
@@ -279,7 +305,7 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
             <div className="qchips">
               {d.texts.map((x, i) => (
                 <button key={x.id} className={x.id === sel ? 'on' : ''} onClick={() => select(x.id === sel ? null : x.id)}>
-                  {i + 1} · {short(x.lines[0]?.text ?? '')}
+                  {x.sec ? '💬' : i + 1} · {short(x.lines[0]?.text ?? '')}
                 </button>
               ))}
               <button onClick={addText}>＋ Додати текст</button>
@@ -302,7 +328,8 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
 
         {tab === 'shots' && (
           <>
-            <ShotsEditor d={d} t={t} disabled={busy || locked} onSeek={(s) => seek(s)} onRemount={remount} onSoon={soon} />
+            <ShotsEditor d={d} t={t} disabled={busy || locked} onSeek={(s) => seek(s)} onRemount={remount} />
+            <SoundCard d={d} disabled={busy || locked} onRemount={remount} onVoice={voice} />
             <div className="card mt-3">
               <div className="flex items-center gap-3">
                 <img src={d.poster} alt="" className="rounded-md object-cover" style={{ width: 54, height: 96 }} />
@@ -353,21 +380,29 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
 
 // ───────────── Перемонтаж: стан заявки ─────────────
 
+const BUSY: Partial<Record<RemountKind, [string, string]>> = {
+  voice: ['Монтую голос…', '1–2 хв: чищу звук, роблю субтитри, підганяю кадри'],
+  music: ['Ставлю іншу музику…', '30–90 с · склейки підганяю під біт'],
+  novoice: ['Прибираю голос…', '30–90 с'],
+}
+const DONE: Partial<Record<RemountKind, string>> = { voice: 'Голос додано ✓', music: 'Нова музика ✓', novoice: 'Голос прибрано ✓' }
+
 function RemountCard({ r, onOk }: { r: NonNullable<VideoDraft['remount']>; onOk: () => void }) {
   if (r.state === 'queued' || r.state === 'running') {
+    const [title, sub] = BUSY[r.kind] ?? ['Перемонтовую кадри…', '30–90 с']
     return (
       <div className="card mb-3 flex items-center gap-3">
         <div className="shrink-0"><Spinner /></div>
         <div className="text-[13.5px] leading-snug">
-          <b className="block text-[14.5px]">Перемонтовую кадри…</b>
-          <span style={{ color: 'var(--hint)' }}>30–90 с · можна закрити апку, відео оновиться саме</span>
+          <b className="block text-[14.5px]">{title}</b>
+          <span style={{ color: 'var(--hint)' }}>{sub} · можна закрити апку, відео оновиться саме</span>
         </div>
       </div>
     )
   }
   return (
     <div className="card mb-3 text-[13.5px] leading-snug">
-      <b className="block text-[14.5px]">{r.state === 'error' ? 'Не вдалося перемонтувати' : 'Перемонтувала ✓'}</b>
+      <b className="block text-[14.5px]">{r.state === 'error' ? 'Не вдалося перемонтувати' : DONE[r.kind] ?? 'Перемонтувала ✓'}</b>
       {r.state === 'error' ? (
         <span style={{ color: 'var(--hint)' }}>{r.error || 'Влад уже бачить помилку.'} Відео лишилось як було.</span>
       ) : r.note.length ? (
@@ -388,10 +423,9 @@ type ShotsProps = {
   disabled: boolean
   onSeek: (s: number) => void
   onRemount: (job: RemountJob, question: string) => Promise<boolean | undefined>
-  onSoon: (what: string) => void
 }
 
-function ShotsEditor({ d, t, disabled, onSeek, onRemount, onSoon }: ShotsProps) {
+function ShotsEditor({ d, t, disabled, onSeek, onRemount }: ShotsProps) {
   const n = d.shots.length
   const [pick, setPick] = useState<number | null>(null)
   // новий порядок збираємо стрілками, перемонтовуємо один раз — кнопкою
@@ -461,9 +495,49 @@ function ShotsEditor({ d, t, disabled, onSeek, onRemount, onSoon }: ShotsProps) 
         </div>
       )}
 
-      <div className="qchips" style={{ borderTop: '.5px solid var(--line)', paddingTop: 8 }}>
-        <button disabled={disabled} onClick={() => void run({ kind: 'shorter' }, `Зробити коротше? Кожен кадр стане ~на чверть коротшим (зараз ${Math.round(d.dur)} с).`)}>Коротше</button>
-        <button disabled={disabled} onClick={() => onSoon('Інша музика')}>Інша музика</button>
+      {!d.voice && (
+        <div className="qchips" style={{ borderTop: '.5px solid var(--line)', paddingTop: 8 }}>
+          <button disabled={disabled} onClick={() => void run({ kind: 'shorter' }, `Зробити коротше? Кожен кадр стане ~на чверть коротшим (зараз ${Math.round(d.dur)} с).`)}>Коротше</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ───────────── Звук: музика (Mixkit) і голос Іри з бота (сет 6, montage-test/music.py) ─────────────
+
+function SoundCard({ d, disabled, onRemount, onVoice }: { d: VideoDraft; disabled: boolean; onRemount: ShotsProps['onRemount']; onVoice: () => void }) {
+  return (
+    <div className="card mt-3">
+      <div className="flex items-start gap-3">
+        <span className="text-[22px] leading-none">♪</span>
+        <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
+          <b className="block text-[14.5px]">{d.music ? `«${d.music.title}»` : 'Без музики'}</b>
+          <span style={{ color: 'var(--hint)' }}>
+            {d.music ? `${d.music.artist} · ${MOOD[d.music.mood] ?? d.music.mood}${d.voice ? ' · тихіше під голосом' : ' · склейки під біт'}` : 'можна додати — склейки підлаштую під біт'}
+          </span>
+        </div>
+      </div>
+      <div className="qchips">
+        <button disabled={disabled} onClick={() => void onRemount({ kind: 'music' }, d.music ? `Поставити іншу музику замість «${d.music.title}»?` : 'Додати музику?')}>
+          {d.music ? 'Інша музика' : 'Додати музику'}
+        </button>
+      </div>
+
+      <div className="mt-3 flex items-start gap-3" style={{ borderTop: '.5px solid var(--line)', paddingTop: 12 }}>
+        <span className="text-[20px] leading-none">🎙</span>
+        <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
+          <b className="block text-[14.5px]">{d.voice ? `Твій голос · ${Math.round(d.voice.dur)} с` : 'Озвучити своїм голосом'}</b>
+          <span style={{ color: 'var(--hint)' }}>
+            {d.voice ? 'субтитри — на вкладці «Текст» (💬), слова можна виправити' : 'бот попросить голосове 15–30 с — я почищу звук, зроблю субтитри й підгоню кадри'}
+          </span>
+        </div>
+      </div>
+      <div className="qchips">
+        <button disabled={disabled} onClick={onVoice}>{d.voice ? 'Записати інший голос' : '🎙 Озвучити голосом'}</button>
+        {d.voice && (
+          <button disabled={disabled} onClick={() => void onRemount({ kind: 'novoice' }, 'Прибрати голос і субтитри? Музика лишиться.')}>Прибрати голос</button>
+        )}
       </div>
     </div>
   )
@@ -523,7 +597,7 @@ function Preview({ d, t, sel, small, vref, onSelect, onMove, onTap }: PreviewPro
         <div className="absolute top-0 left-0" style={{ width: VW, height: VH, transform: `scale(${k})`, transformOrigin: '0 0' }} onPointerMove={move} onPointerUp={up}>
           {d.texts.map((x) => {
             const { t0, t1 } = textTimes(d, x)
-            const op = x.id === sel ? 1 : opacity(t, t0, t1, d.dur)
+            const op = x.id === sel ? 1 : opacity(t, t0, t1, d.dur, x.sec ? SUB_FADE : FADE)
             if (op <= 0) return null
             return <TextBlock key={x.id} x={x} op={op} selected={x.id === sel} onDown={(e) => down(e, x)} />
           })}
@@ -541,10 +615,10 @@ function Preview({ d, t, sel, small, vref, onSelect, onMove, onTap }: PreviewPro
   )
 }
 
-function opacity(t: number, t0: number, t1: number, dur: number) {
+function opacity(t: number, t0: number, t1: number, dur: number, fade: number) {
   if (t < t0 || t > t1) return 0
-  const a = Math.min(1, (t - t0) / FADE)
-  const b = t1 >= dur - 0.05 ? 1 : Math.min(1, (t1 - t) / FADE)
+  const a = Math.min(1, (t - t0) / fade)
+  const b = t1 >= dur - 0.05 ? 1 : Math.min(1, (t1 - t) / fade)
   return Math.max(0, Math.min(a, b))
 }
 
@@ -608,7 +682,9 @@ function Watermark({ kind, pos, color }: { kind: Exclude<WmKind, 'off'>; pos: Wm
 
 // ───────────── Таймлайн: смуга з межами кадрів ─────────────
 
-function Timeline({ d, t, playing, small, onPlay, onSeek }: { d: VideoDraft; t: number; playing: boolean; small: boolean; onPlay: () => void; onSeek: (s: number) => void }) {
+type TimelineProps = { d: VideoDraft; t: number; playing: boolean; small: boolean; onPlay: () => void; onSeek: (s: number) => void; muted: boolean | null; onSound: () => void }
+
+function Timeline({ d, t, playing, small, onPlay, onSeek, muted, onSound }: TimelineProps) {
   const bar = useRef<HTMLDivElement>(null)
   const seekAt = (e: RPointerEvent) => {
     const r = bar.current?.getBoundingClientRect()
@@ -633,6 +709,15 @@ function Timeline({ d, t, playing, small, onPlay, onSeek }: { d: VideoDraft; t: 
         <div className="absolute top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full" style={{ left: `${(t / d.dur) * 100}%`, background: 'var(--text)' }} />
       </div>
       <span className="w-9 text-right text-[12px] tabular-nums" style={{ color: 'var(--hint)' }}>{t.toFixed(1)}с</span>
+      {muted !== null && (
+        <button className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: muted ? 'var(--bg2)' : 'var(--accent)', color: muted ? 'var(--text)' : '#fff' }}
+          onClick={onSound} aria-label={muted ? 'Увімкнути звук' : 'Вимкнути звук'}>
+          <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1.5 5h2.5l3.5-3v10l-3.5-3h-2.5z" fill="currentColor" />
+            {muted ? <path d="M9.5 5l3.5 4M13 5l-3.5 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              : <path d="M9.5 4.5a3.5 3.5 0 0 1 0 5M11 3a5.5 5.5 0 0 1 0 8" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />}
+          </svg>
+        </button>
+      )}
     </div>
   )
 }
@@ -692,12 +777,20 @@ function TextEditor({ d, x, onChange, onRemove }: { d: VideoDraft; x: VText; onC
       <div className="qchips" style={{ marginTop: 6 }}>
         {POS.map((p) => <button key={p.name} className={Math.abs(x.y - p.y) < 60 ? 'on' : ''} onClick={() => onChange((q) => { q.y = p.y })}>{p.name}</button>)}
       </div>
-      <div className="mt-4 text-[13px] font-semibold">На яких кадрах</div>
-      <div className="qchips" style={{ marginTop: 6 }}>
-        {d.shots.map((s, i) => (
-          <button key={i} className={i >= x.from && i <= x.to ? 'on' : ''} onClick={() => toggleShot(i)}>{i + 1} · {s.label}</button>
-        ))}
-      </div>
+      {x.sec ? (
+        <div className="mt-4 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+          💬 Субтитр твого голосу: {x.sec[0].toFixed(1)}–{x.sec[1].toFixed(1)} с. Слова — як почув Whisper: виправ, якщо треба. Час іде за голосом.
+        </div>
+      ) : (
+        <>
+          <div className="mt-4 text-[13px] font-semibold">На яких кадрах</div>
+          <div className="qchips" style={{ marginTop: 6 }}>
+            {d.shots.map((s, i) => (
+              <button key={i} className={i >= x.from && i <= x.to ? 'on' : ''} onClick={() => toggleShot(i)}>{i + 1} · {s.label}</button>
+            ))}
+          </div>
+        </>
+      )}
       <div className="mt-4 text-[13px] font-semibold">Затемнення під текстом</div>
       <div className="seg mt-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
         {SCRIM.map((s) => <button key={s.name} className={Math.abs(x.scrim - s.a) < 0.1 || (s.a === 0.28 && x.scrim > 0.1 && x.scrim < 0.4) ? 'on' : ''} onClick={() => onChange((q) => { q.scrim = s.a })}>{s.name}</button>)}

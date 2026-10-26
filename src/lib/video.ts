@@ -26,8 +26,9 @@ export const FONT = {
 
 // gold — номери слів (з 0), які золотом; у stories.py це *слово*
 export type VLine = { text: string; style: LineStyle; gold: number[]; maxW?: number }
-// Текст прив'язаний до кадрів (from..to), а не до секунд — Ірі простіше «на кадрі 2»
-export type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[] }
+// Текст прив'язаний до кадрів (from..to), а не до секунд — Ірі простіше «на кадрі 2».
+// Субтитр голосу (сет 6) — sec: [від, до] у секундах (за мовою Іри); from/to там лише для старих версій апки
+export type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type WmKind = 'wm2' | 'wm1' | 'wm3' | 'off'
 export type WmPos = 'br' | 'tr' | 'bl' | 'tl'
 export type Shot = { t0: number; t1: number; label: string; thumb: string }
@@ -52,10 +53,15 @@ export type VideoDraft = {
   render_error?: string | null
   // перемонтаж кадрів (SQL 020): queued / running — монтую, текст не правиться; done — note: що сталось з текстами; error — чому ні
   remount?: { state: RemountState; kind: RemountKind; note: string[]; error: string | null } | null
+  // звук (сет 6, montage-test/music.py): музика з бібліотеки Mixkit і голос Іри з бота; voice_link — бот чекає голосове саме до цього відео
+  music?: { title: string; artist: string; mood: string } | null
+  voice?: { dur: number } | null
+  voice_link?: string | null
 }
-export type RemountKind = 'remove' | 'replace' | 'reorder' | 'shorter'
+export type RemountKind = 'remove' | 'replace' | 'reorder' | 'shorter' | 'music' | 'voice' | 'novoice'
 export type RemountState = 'queued' | 'running' | 'done' | 'error'
-export type RemountJob = { kind: RemountKind; shot?: number; order?: number[] }
+export type RemountJob = { kind: Exclude<RemountKind, 'voice'>; shot?: number; order?: number[] }
+export const MOOD: Record<string, string> = { calm: 'спокійна', romantic: 'ніжна', lounge: 'лаунж', breezy: 'легка' }
 export const remounting = (d: Pick<VideoDraft, 'remount'>) => d.remount?.state === 'queued' || d.remount?.state === 'running'
 
 // Картка на «Сьогодні»
@@ -80,8 +86,9 @@ export function wmBox(kind: Exclude<WmKind, 'off'>, pos: WmPos) {
   return { x, y, w, h }
 }
 
-// Коли текст видно: з початку кадру from (після переходу) до переходу на кадр to+1
+// Коли текст видно: з початку кадру from (після переходу) до переходу на кадр to+1; субтитр голосу — за секундами
 export function textTimes(d: VideoDraft, t: VText) {
+  if (t.sec) return { t0: t.sec[0], t1: Math.min(d.dur, t.sec[1]) }
   const last = d.shots.length - 1
   const t0 = t.from === 0 ? 0.2 : d.shots[t.from].t0 + 0.4
   const t1 = t.to >= last ? d.dur : d.shots[t.to + 1].t0 + 0.1

@@ -14,6 +14,7 @@ const SAFE_TOP = 250
 const SAFE_BOTTOM = VH - 340
 const GOLD = '#C9B27C'
 const FADE = 0.45
+const SUB_FADE = 0.12   // субтитри голосу (сет 6) — швидко, щоб встигали за мовою
 
 const STYLES: Record<string, { font: 'Prata' | 'Tenor Sans'; size: number; gold: boolean; gap: number; track: number; upper: boolean }> = {
   hook: { font: 'Prata', size: 84, gold: false, gap: 14, track: 0, upper: false },
@@ -72,8 +73,9 @@ type Shot = { t0: number; t1: number }
 type VText = Plan['texts'][number]
 type VLine = VText['lines'][number]
 
-// Коли текст видно — як textTimes() у src/lib/video.ts
+// Коли текст видно — як textTimes() у src/lib/video.ts; субтитр голосу (sec) — за секундами
 export function textTimes(shots: Shot[], dur: number, t: VText) {
+  if (t.sec) return { t0: t.sec[0], t1: Math.min(dur, t.sec[1]) }
   const last = shots.length - 1
   const from = Math.min(t.from, last)
   const t0 = from === 0 ? 0.2 : shots[from].t0 + 0.4
@@ -170,7 +172,8 @@ export async function videoLayers(plan: Plan, shots: Shot[], dur: number): Promi
   for (const t of plan.texts ?? []) {
     if (!t.lines?.length) continue
     const { t0, t1 } = textTimes(shots, dur, t)
-    texts.push({ png: await textPng(t), t0, t1, fadeIn: FADE, fadeOut: t1 >= dur - 0.05 ? null : Math.max(t0, t1 - FADE) })
+    const f = t.sec ? SUB_FADE : FADE
+    texts.push({ png: await textPng(t), t0, t1, fadeIn: f, fadeOut: t1 >= dur - 0.05 ? null : Math.max(t0, t1 - f) })
   }
   const w = plan.wm ?? { kind: 'wm2', pos: 'br', color: 'white' }
   return { texts, wm: w.kind === 'off' ? null : await wmPng(w.kind, w.pos, w.color) }

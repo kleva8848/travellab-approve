@@ -1,4 +1,4 @@
-import { db } from './http.js'
+import { db, getSettings } from './http.js'
 import { tgCall } from './publish.js'
 import { kyivNow } from './schedule.js'
 
@@ -19,14 +19,17 @@ type DraftRow = {
   web_path: string; poster_path: string; shots: ShotRow[]; plan: Plan; status: string; scheduled_for: string | null; updated_at: string
   final_path: string | null; cover_path: string | null; rendered_at: string | null; render_error: string | null; sent_at: string | null
   remount: Remount | null
+  montage: Montage | null
 }
+// Звук (сет 6, montage-test/music.py): трек Mixkit + точка старту; голос Іри з бота (file_id, тривалість після очистки)
+type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
 // Заявка на перемонтаж кадрів (SQL 020) — виконує montage-test/remount_worker.py
 type Remount = { kind: string; shot?: number; order?: number[]; state: 'queued' | 'running' | 'done' | 'error'; at: string; by: number; error?: string; note?: string[] }
 type VLine = { text: string; style: string; gold: number[]; maxW?: number }
-type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[] }
+type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
 
-const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount'
+const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage'
 
 // Фінал (SQL 019, montage-test/final_worker.py) застарів після будь-якої правки / зміни статусу → воркер рендерить заново
 export const FINAL_RESET = { final_path: null, cover_path: null, rendered_at: null, render_error: null, tg_file_id: null, sent_at: null, sent_to: null }
@@ -53,7 +56,18 @@ function view(d: DraftRow, urls: Map<string, string>) {
     render_error: d.render_error,
     // перемонтаж: queued / running — монтую (текст не правиться); done + note — що сталось з текстами; error — чому ні
     remount: d.remount ? { state: d.remount.state, kind: d.remount.kind, note: d.remount.note ?? [], error: d.remount.error ?? null } : null,
+    music: d.montage?.music ? { title: d.montage.music.title, artist: d.montage.music.artist, mood: d.montage.music.mood } : null,
+    voice: d.montage?.voice ? { dur: Number(d.montage.voice.dur) } : null,
   }
+}
+
+// «🎙 Озвучити голосом» — deep link у бот: бот просить голосове саме до цього відео (WF-055, vo_<id>).
+// Як «Відповісти голосом»: лише коли бот Іри приймає повідомлення (settings.voice_answers = "on")
+async function voiceLink(id: string): Promise<string | null> {
+  const s = await getSettings(['voice_answers', 'bot_username'])
+  const on = s.voice_answers === 'on' || s.voice_answers === true
+  const bot = typeof s.bot_username === 'string' ? s.bot_username.replace(/^@/, '') : ''
+  return on && bot ? `https://t.me/${bot}?start=vo_${id}` : null
 }
 
 // Список на «Сьогодні»: усе, крім пропущених; мініатюри кадрів не підписуємо — там лише постер
@@ -81,8 +95,8 @@ export async function getVideo(id: string) {
   if (r.error) throw r.error
   if (!r.data) return 'not_found'
   const d = r.data as DraftRow
-  const urls = await sign([d.web_path, d.poster_path, ...(d.shots ?? []).map((s) => s.thumb_path)])
-  return view(d, urls)
+  const [urls, voice_link] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).map((s) => s.thumb_path)]), voiceLink(d.id)])
+  return { ...view(d, urls), voice_link }
 }
 
 export async function draftMeta(id: string): Promise<{ n: number; dur: number; remounting: boolean } | null> {
@@ -114,7 +128,9 @@ export async function requestRemount(id: string, b: Record<string, unknown>, use
     const perm = [...order].sort((x, y) => x - y).every((v, i) => v === i) && order.length === meta.n
     if (!perm || order.every((v, i) => v === i)) return { code: 400, error: 'bad order' }
     job.order = order
-  } else if (b.kind !== 'shorter') return { code: 400, error: 'bad kind' }
+  } else if (b.kind === 'music') {
+    if (typeof b.mood === 'string' && ['calm', 'romantic', 'lounge', 'breezy'].includes(b.mood)) job.mood = b.mood
+  } else if (b.kind !== 'shorter' && b.kind !== 'novoice') return { code: 400, error: 'bad kind' }
 
   const now = new Date().toISOString()
   let q = db().from('video_drafts').update({
@@ -145,7 +161,8 @@ const int = (v: unknown, lo: number, hi: number, def: number) => Math.round(num(
 export function cleanPlan(raw: unknown, shots: number, dur: number): Plan | null {
   if (!raw || typeof raw !== 'object') return null
   const p = raw as Record<string, unknown>
-  if (!Array.isArray(p.texts) || p.texts.length > 12) return null
+  // до 40: субтитри голосу (сет 6) — окремий текст на кожну фразу
+  if (!Array.isArray(p.texts) || p.texts.length > 40) return null
   const last = Math.max(0, shots - 1)
   const texts: VText[] = []
   for (const t of p.texts as Record<string, unknown>[]) {
@@ -161,13 +178,19 @@ export function cleanPlan(raw: unknown, shots: number, dur: number): Plan | null
     }).filter((l) => l.text)
     if (!lines.length) continue
     const from = int(t.from, 0, last, 0)
-    texts.push({
+    const x: VText = {
       id: String(t.id ?? '').replace(/[^\w-]/g, '').slice(0, 40) || `t${texts.length}`,
       from, to: int(t.to, from, last, from),
       y: int(t.y, 250, VH - 340 - 120, 820),
       scrim: num(t.scrim, 0, 0.8, 0.28),
       lines,
-    })
+    }
+    // субтитр голосу: секунди в межах відео
+    if (Array.isArray(t.sec) && t.sec.length === 2) {
+      const a = num(t.sec[0], 0, Math.max(0, dur - 0.2), 0)
+      x.sec = [a, num(t.sec[1], a + 0.2, dur, dur)]
+    }
+    texts.push(x)
   }
   const w = (p.wm ?? {}) as Record<string, unknown>
   return {

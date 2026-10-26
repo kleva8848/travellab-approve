@@ -21,6 +21,9 @@
 // «🎬 Відео» (21.10, тест рілсів): /video (або /start video) → посилання на Travel lab/00_Inbox; «відео готово» →
 // бот рахує відео в Inbox і його підпапках (Drive Іри) → Ірі підсумок, Владу (admin_chat_id) — «можна розбирати».
 // Розбір і монтаж поки робить Claude на Mac (Reels_Test_Plan_2026-10-21), потім — воркер на VPS.
+// «🎙 Голос до відео» (26.10, сет 6): кнопка в апці «Озвучити голосом» → /start vo_<draft_id> → бот просить голосове
+// з force_reply і прихованим маркером ?start=vo_<id> → голосове у відповідь → заявка video_drafts.remount {kind: voice, file_id}
+// (лише якщо відео не монтується) → воркер на Mac (montage-test/remount_worker.py): очистка, Whisper, субтитри, кадри під голос.
 // /help або /start — меню кнопок (усі дії без набору тексту). Кнопки callback (video_ask / video_ready / story / help)
 // = ті самі команди: Normalize перетворює callback_query на текст, бот одразу відповідає answerCallbackQuery.
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -78,7 +81,11 @@ const cq = b.callback_query || null;
 const m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});
 const text = String(m.text || m.caption || '').trim();
 const file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;
-let planId = null, how = 'none';
+const audio = (m.voice || m.audio) ? { file_id: (m.voice || m.audio).file_id, dur: Number((m.voice || m.audio).duration || 0) } : null;
+let planId = null, how = 'none', videoId = null;
+// «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео
+const vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);
+if (vo) videoId = vo[1].toLowerCase();
 const st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);
 if (st) { planId = st[1].toLowerCase(); how = 'start'; }
 // «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст
@@ -92,11 +99,15 @@ if (!planId && r) {
     const u = String(e.url || '');
     const mm = u.match(/post_([0-9a-f-]{36})/i);
     if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }
+    const mv = u.match(/start=vo_([0-9a-f-]{36})/i);
+    if (mv) { videoId = mv[1].toLowerCase(); how = 'vo'; break; }
     if (${STORY_MARK_RE}.test(u)) { how = 'story'; break; }
   }
 }
 let route = 'ignore';
 if (!m.chat || !m.from || m.from.is_bot) route = 'ignore';
+else if (vo) route = 'vo_ask';
+else if (how === 'vo') route = 'vo';
 else if (st) route = 'ask';
 else if (videoCmd && !file) route = 'video_ask';
 else if (videoReady && !file) route = 'video_ready';
@@ -104,7 +115,7 @@ else if (storyCmd && !file) route = 'story_ask';
 else if (how === 'story' && (file || text)) route = 'story';
 else if (file || (text && how === 'reply')) route = 'answer';
 else if (text) route = 'help';
-return [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];`
+return [{ json: { route, plan_id: planId, video_id: videoId, audio, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];`
 
 const resolve = `// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання
 const n = $('Code - Normalize').first().json;
@@ -121,6 +132,12 @@ if (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...o
 if (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];
 if (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];
 if (n.route === 'story') return [{ json: out }];
+if (n.route === 'vo_ask' || n.route === 'vo') {
+  const v = all('Supabase - Get Video Draft')[0] || null;
+  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];
+  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, has_voice: !!(v.montage && v.montage.voice) },
+    vo_url: 'https://t.me/' + bot + '?start=vo_' + v.id, video_url: base ? base + '/?startapp=video_' + v.id : base } }];
+}
 
 const reqs = all('Supabase - Get Open Requests');
 const forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))
@@ -171,6 +188,7 @@ const T = {
     + 'Загубила меню — напиши /help.',
   unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.\\n\\nЯкщо це історія для постів — надішли /story і запиши її у відповідь.',
   gone: 'Цього поста вже немає в роботі 🙌',
+  vo_gone: 'Цього відео вже немає в роботі 🙌',
   none: 'По цьому посту питань уже немає 🙌'
 };
 const k = r.route === 'answer' ? 'none' : r.route;
@@ -312,6 +330,41 @@ return [{ json: { chat_id: r.chat_id, kind: 'force',
     + '\\n\\nЗапиши ще раз у відповідь на це повідомлення, будь ласка — хоча б кілька речень.'
 } }];`
 
+// ───── «🎙 Голос до відео» (сет 6) ─────
+const voAsk = `${esc}
+// /start vo_<id>: просимо голосове до цього відео (force_reply + прихований маркер — відповідь знає, до якого відео)
+const r = $json;
+const what = r.video.format === 'reel' ? 'рілсу' : 'сторіз';
+return [{ json: { chat_id: r.chat_id, kind: 'force',
+  text: hidden(r.vo_url) + '🎙 <b>Голос до ' + what + ' «' + esc(r.video.name) + '»</b>\\n\\n'
+    + 'Запиши голосове на 15–30 с у відповідь на це повідомлення — своїми словами, ніби розповідаєш подрузі, що на відео. '
+    + 'Не страшно, якщо будуть паузи чи «е-е» — я їх приберу.\\n\\n'
+    + 'Далі сам: почищу звук, зроблю субтитри (виправиш в апці), підгоню кадри під голос, музика буде тихо на фоні.'
+    + (r.video.has_voice ? '\\n\\nНовий голос замінить попередній.' : '')
+} }];`
+
+const voCheck = `${esc}
+// Голосове до відео: лише голос / аудіо, 3–45 с → заявка воркеру; інакше — пояснюємо й чекаємо ще раз
+const r = $json;
+const a = r.audio;
+let err = '';
+if (!a) err = 'Потрібне саме голосове 🎙 — затисни мікрофон і запиши у відповідь на це повідомлення.';
+else if (a.dur && a.dur < 3) err = 'Дуже коротко 🙈 Запиши 15–30 с, будь ласка.';
+else if (a.dur > 45) err = 'Задовге (' + Math.round(a.dur) + ' с) — для рілсу треба до 45 с, краще 15–30. Запиши коротше, будь ласка.';
+const now = new Date().toISOString();
+const row = { remount: { kind: 'voice', file_id: a ? a.file_id : null, tg_dur: a ? a.dur : null, state: 'queued', at: now, by: Number(r.from_id) },
+  status: 'ready_for_review', approved_at: null, approved_by: null,
+  final_path: null, cover_path: null, rendered_at: null, render_error: null, tg_file_id: null, sent_at: null, sent_to: null, updated_at: now };
+return [{ json: { ...r, ok: !err, err_text: err ? hidden(r.vo_url) + err : '', row } }];`
+
+const voSaved = `// Заявку поставили → «монтую», кнопка прямо у відео; відео вже монтується → попросити пізніше
+const r = $('Code - Video Voice Check').first().json;
+const res = $json;
+const ok = res.statusCode >= 200 && res.statusCode < 300 && Array.isArray(res.body) && res.body.length > 0;
+return [{ json: { chat_id: r.chat_id, kind: 'button', url: r.video_url, button: 'Відкрити відео',
+  text: ok ? 'Отримав голос ✅ Монтую 1–2 хв: чищу звук, роблю субтитри, підганяю кадри під голос. Відкрий відео — побачиш, коли буде готово, і зможеш виправити слова в субтитрах.'
+    : 'Зараз це відео саме монтується ⏳ Надішли голосове ще раз за хвилинку — у відповідь на моє повідомлення вище.' } }];`
+
 // ───── «🎬 Відео» ─────
 const INBOX_URL = 'https://drive.google.com/drive/folders/' + CFG.inboxId
 const videoAsk = `// /video: куди кидати відео і що написати потім
@@ -386,9 +439,12 @@ const coreNodes = [
   getAll('Supabase - Get Hotels', 1320, 'hotels'),
   getAll('Supabase - Get Tours', 1540, 'tours'),
   getAll('Supabase - Get Audiences', 1650, 'audiences', null, { onError: 'continueRegularOutput', y: 200 }),
+  // голос до відео (сет 6): чернетка за id з vo_<id>; інакше — запит-заглушка (порожньо)
+  getAll('Supabase - Get Video Draft', 1700, 'video_drafts',
+    "={{ 'id=eq.' + ($('Code - Normalize').first().json.video_id || '00000000-0000-0000-0000-000000000000') }}", { onError: 'continueRegularOutput', y: -200 }),
   node('Code - Resolve', 'n8n-nodes-base.code', 2, 1760, { jsCode: resolve }, { executeOnce: true }),
   node('Switch - Route', 'n8n-nodes-base.switch', 3.2, 1980, {
-    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story', 'video_ask', 'video_ready'].map((k) => ({
+    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story', 'video_ask', 'video_ready', 'vo_ask', 'vo', 'vo_gone'].map((k) => ({
       conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 }, combinator: 'and',
         conditions: [{ id: 'r-' + k, leftValue: '={{ $json.route }}', rightValue: k, operator: { type: 'string', operation: 'equals' } }] },
       renameOutput: true, outputKey: k,
@@ -471,6 +527,18 @@ const coreNodes = [
     additionalFields: { appendAttribution: false, parse_mode: 'HTML', disable_web_page_preview: true },
   }, { ...tgc, onError: 'continueRegularOutput', y: 8 * Y }),
   node('Code - Video Reply', 'n8n-nodes-base.code', 2, 3520, { jsCode: `return [{ json: $('Code - Video Summary').first().json }];` }, { executeOnce: true, y: 8 * Y }),
+  // «🎙 Голос до відео» — ряд під «Відео»
+  node('Code - Video Voice Ask', 'n8n-nodes-base.code', 2, 2200, { jsCode: voAsk }, { executeOnce: true, y: 10 * Y }),
+  node('Code - Video Voice Check', 'n8n-nodes-base.code', 2, 2200, { jsCode: voCheck }, { executeOnce: true, y: 11 * Y }),
+  ifNode('IF - Voice OK?', 2420, '={{ $json.ok }}', { y: 11 * Y }),
+  node('Code - Video Voice Retry', 'n8n-nodes-base.code', 2, 2640, {
+    jsCode: `const r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force', text: r.err_text } }];`,
+  }, { executeOnce: true, y: 12 * Y }),
+  // заявка лише якщо відео зараз не монтується (як IDLE у server/video.ts) і не «не публікувати»
+  rest('HTTP - Queue Voice', 2640, 'PATCH',
+    "={{ $json.supabase_url }}/rest/v1/video_drafts?id=eq.{{ $json.video.id }}&status=neq.skipped&or=(remount.is.null,remount->>state.in.(done,error))",
+    '={{ JSON.stringify($json.row) }}', { prefer: 'return=representation', y: 11 * Y }),
+  node('Code - Video Voice Saved', 'n8n-nodes-base.code', 2, 2860, { jsCode: voSaved }, { executeOnce: true, y: 11 * Y }),
   ifNode('IF - Link?', 6160, "={{ $json.kind === 'link' }}", { y: Y * 1.5 }),
   node('Telegram - Reply (link)', 'n8n-nodes-base.telegram', 1.2, 6380, {
     chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
@@ -508,7 +576,7 @@ const coreConnections = {
   'IF - Anything?': branches('IF - Callback?'),
   'IF - Callback?': branches('Telegram - Answer Callback', 'Supabase - Get Settings'),
   'Telegram - Answer Callback': to('Supabase - Get Settings'),
-  ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Open Requests', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Audiences', 'Code - Resolve', 'Switch - Route'),
+  ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Open Requests', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Audiences', 'Supabase - Get Video Draft', 'Code - Resolve', 'Switch - Route'),
   'Switch - Route': { main: [
     [{ node: 'Code - Ask', type: 'main', index: 0 }],
     [{ node: 'IF - Has Questions?', type: 'main', index: 0 }],
@@ -519,7 +587,15 @@ const coreConnections = {
     [{ node: 'IF - Story Voice?', type: 'main', index: 0 }],
     [{ node: 'Code - Video Ask', type: 'main', index: 0 }],
     [{ node: 'HTTP - List Inbox', type: 'main', index: 0 }],
+    [{ node: 'Code - Video Voice Ask', type: 'main', index: 0 }],
+    [{ node: 'Code - Video Voice Check', type: 'main', index: 0 }],
+    [{ node: 'Code - Simple Reply', type: 'main', index: 0 }],
   ] },
+  'Code - Video Voice Ask': to('Code - Reply'),
+  'Code - Video Voice Check': to('IF - Voice OK?'),
+  'IF - Voice OK?': branches('HTTP - Queue Voice', 'Code - Video Voice Retry'),
+  ...chain('HTTP - Queue Voice', 'Code - Video Voice Saved', 'Code - Reply'),
+  'Code - Video Voice Retry': to('Code - Reply'),
   'Code - Video Ask': to('Code - Reply'),
   ...chain('HTTP - List Inbox', 'Code - Video Query', 'HTTP - List Inbox Files', 'Code - Video Summary', 'IF - Notify Admin?'),
   'IF - Notify Admin?': branches('Telegram - Notify Admin', 'Code - Video Reply'),
