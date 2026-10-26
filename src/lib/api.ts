@@ -1,4 +1,5 @@
 import { isDemo, tg } from './tg'
+import { demoVideo, demoVideoGaps, demoVideos, saveDemoVideo, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
 export class ApiError extends Error {
   status: number
@@ -269,6 +270,61 @@ export async function audienceAction(a: AudienceAction): Promise<Audiences> {
     return structuredClone(demoAud)
   }
   return call('/api/audiences', { method: 'POST', body: JSON.stringify(a) })
+}
+
+// ───────────── Сторіз / рілс (SQL 018, /api/video) ─────────────
+
+export async function getVideos(): Promise<VideoList> {
+  if (isDemo) return { items: demoVideos(), gaps: demoVideoGaps }
+  const r = await call<Partial<VideoList>>('/api/video')
+  return { items: r.items ?? [], gaps: r.gaps ?? [] }
+}
+
+export async function getVideo(id: string): Promise<VideoDraft> {
+  if (isDemo) {
+    await wait(150)
+    return demoVideo(id)
+  }
+  const r = await call<{ video: VideoDraft }>(`/api/video?id=${encodeURIComponent(id)}`)
+  return r.video
+}
+
+export type VideoAction = 'save' | 'approve' | 'unapprove' | 'skip'
+
+export async function videoAction(d: VideoDraft, action: VideoAction, plan?: VideoPlan): Promise<{ status: VideoDraft['status']; updated_at: string }> {
+  if (isDemo) {
+    await wait(200)
+    const status = action === 'approve' ? 'approved' : action === 'unapprove' ? 'ready_for_review' : action === 'skip' ? 'skipped' : d.status
+    // у демо «воркер» монтує миттєво — щоб було видно «готово ✓» і «Надіслати ще раз»
+    const now = new Date().toISOString()
+    saveDemoVideo({ ...d, ...plan, status, final: status === 'approved' ? { rendered_at: now, sent_at: now } : null })
+    return { status, updated_at: now }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action, id: d.id, plan, expected_updated_at: action === 'save' ? d.updated_at : undefined }) })
+}
+
+// Готове відео ще раз у чат (SQL 019) — тому, хто натиснув
+export async function resendVideo(id: string): Promise<{ sent_at: string }> {
+  if (isDemo) {
+    await wait(300)
+    return { sent_at: new Date().toISOString() }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'resend', id }) })
+}
+
+// Перемонтаж кадрів (SQL 020): заявка воркеру → { status, updated_at }; стан потім — getVideo(id).remount
+export async function remountVideo(d: VideoDraft, job: RemountJob): Promise<{ status: VideoDraft['status']; updated_at: string }> {
+  if (isDemo) {
+    await wait(200)
+    throw new Error('У демо кадри не перемонтовуються — це працює лише зі справжніми відео')
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'remount', id: d.id, ...job, expected_updated_at: d.updated_at }) })
+}
+
+// Іра прочитала підсумок перемонтажу — більше не показуємо
+export async function ackRemount(id: string): Promise<void> {
+  if (isDemo) return
+  await call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'remount_ok', id }) })
 }
 
 // ───────────── Демо (?demo=1): вигадані дані, лише щоб показати екрани ─────────────

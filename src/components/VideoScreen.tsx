@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react'
-import { confirmAction, haptic, useBackButton } from '../lib/tg'
+import { ackRemount, getVideo, remountVideo, resendVideo, videoAction, type VideoAction } from '../lib/api'
+import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import {
-  FONT, GOLD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, demoVideo, lineGap, newId, saveDemoVideo, textTimes, wmBox, words,
-  type LineStyle, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  FONT, GOLD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, remounting, textTimes, wmBox, words,
+  type LineStyle, type RemountJob, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
+import { Center, Spinner } from './ui'
 
 const FADE = 0.45
 const POS: { name: string; y: number }[] = [{ name: 'Вгорі', y: 330 }, { name: 'Центр', y: 820 }, { name: 'Внизу', y: 1150 }]
@@ -13,19 +15,70 @@ const FORMAT = { stories: 'Сторіз', reel: 'Рілс' }
 
 type Tab = 'text' | 'wm' | 'shots'
 
-// Редактор сторіз/рілсу: відео + живі шари тексту і знака. Зараз — лише демо (?demo=1), дані з lib/video
+// Редактор сторіз/рілсу: відео + живі шари тексту і знака. Дані — /api/video (у демо — lib/video)
 export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) {
-  const [d, setD] = useState<VideoDraft>(() => demoVideo(id))
-  const [saved, setSaved] = useState(() => JSON.stringify(demoVideo(id)))
+  const [draft, setDraft] = useState<VideoDraft | null>(null)
+  const [error, setError] = useState('')
+
+  useBackButton(true, onBack)
+
+  useEffect(() => {
+    getVideo(id).then(setDraft).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+  }, [id])
+
+  if (error) {
+    return (
+      <Center>
+        <p className="text-[15px] leading-snug" style={{ color: 'var(--hint)' }}>Не вдалося відкрити відео. {error}</p>
+        <button className="btn sec mt-3" onClick={onBack}>Назад</button>
+      </Center>
+    )
+  }
+  if (!draft) return <Center><Spinner /></Center>
+  return <Editor initial={draft} onBack={onBack} />
+}
+
+const hhmm = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }) : '')
+
+function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }) {
+  const [d, setD] = useState<VideoDraft>(initial)
+  // «Незбережене» — лише план (тексти / знак / обкладинка); статус і готове відео приходять з сервера окремо
+  const [saved, setSaved] = useState(() => JSON.stringify(planOf(initial)))
+  const [busy, setBusy] = useState(false)
   const [sel, setSel] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('text')
   const [t, setT] = useState(0)
   const [playing, setPlaying] = useState(true)
   const [toast, setToast] = useState('')
   const vref = useRef<HTMLVideoElement>(null)
-  const dirty = JSON.stringify(d) !== saved
+  const dirty = JSON.stringify(planOf(d)) !== saved
+  const montage = d.status === 'approved' && !d.final
+  // перемонтаж кадрів (воркер, 30–90 с): поки йде — текст не правиться, бо воркер сам переназначить кадри текстів
+  const locked = remounting(d)
 
-  useBackButton(true, onBack)
+  // Затверджено, а готового ще нема — воркер монтує (1–2 хв): раз на 15 с питаємо, чи готове
+  useEffect(() => {
+    if (!montage || d.render_error) return
+    const x = setInterval(() => {
+      getVideo(d.id).then((v) => { if (v.final) setD((cur) => ({ ...cur, final: v.final, render_error: v.render_error })) }).catch(() => null)
+    }, 15000)
+    return () => clearInterval(x)
+  }, [montage, d.id, d.render_error])
+
+  // Перемонтовую — раз на 5 с питаємо, чи готово; готово → нове відео, кадри й тексти (з переназначеними кадрами)
+  useEffect(() => {
+    if (!locked) return
+    const x = setInterval(() => {
+      getVideo(d.id).then((v) => {
+        if (remounting(v)) return
+        setD(v)
+        setSaved(JSON.stringify(planOf(v)))
+        setSel(null)
+        haptic(v.remount?.state === 'error' ? 'error' : 'success')
+      }).catch(() => null)
+    }, 5000)
+    return () => clearInterval(x)
+  }, [locked, d.id])
 
   useEffect(() => {
     if (!toast) return
@@ -59,6 +112,7 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
 
   // Вибрала текст — ставимо відео на його кадр і паузу, щоб бачити, що редагуєш
   const select = (tid: string | null) => {
+    if (locked && tid) { setToast('Перемонтовую кадри — текст зміниш за хвилинку'); return }
     setSel(tid)
     const tx = d.texts.find((x) => x.id === tid)
     if (tx) {
@@ -68,7 +122,7 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
     }
   }
 
-  const upd = (fn: (x: VideoDraft) => void) => setD((cur) => { const n = structuredClone(cur); fn(n); return n })
+  const upd = (fn: (x: VideoDraft) => void) => setD((cur) => { if (remounting(cur)) return cur; const n = structuredClone(cur); fn(n); return n })
   const updText = (tid: string, fn: (x: VText) => void) => upd((n) => { const x = n.texts.find((q) => q.id === tid); if (x) fn(x) })
 
   const curText = d.texts.find((x) => x.id === sel)
@@ -87,22 +141,77 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
     setSel(null)
   }
 
-  const save = (msg: string) => {
-    saveDemoVideo(d)
-    setSaved(JSON.stringify(d))
-    haptic('success')
-    setToast(msg)
+  // Правки й статус — через /api/video; відповідь дає новий updated_at (щоб наступне «Зберегти» не впало в 409)
+  const act = async (action: VideoAction, msg: string) => {
+    if (busy) return false
+    setBusy(true)
+    try {
+      const r = await videoAction(d, action, action === 'save' || action === 'approve' ? planOf(d) : undefined)
+      // будь-яка правка / зміна статусу (крім «не публікувати») — старе готове відео вже не те, воркер змонтує нове
+      const n = { ...d, status: r.status, updated_at: r.updated_at, ...(action === 'skip' ? {} : { final: null, render_error: null }) }
+      setD(n)
+      setSaved(JSON.stringify(planOf(n)))
+      haptic('success')
+      setToast(msg)
+      return true
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const approve = () => {
-    upd((n) => { n.status = 'approved' })
-    saveDemoVideo({ ...d, status: 'approved' })
-    setSaved(JSON.stringify({ ...d, status: 'approved' }))
-    haptic('success')
-    setToast('Затверджено — відео з цим текстом зберу і надішлю в чат')
+  const skip = async () => {
+    if (!(await confirmAction('Не публікувати це відео? Воно зникне зі «Сьогодні».'))) return
+    if (await act('skip', 'Добре, це відео не публікуємо')) onBack()
   }
 
-  const reset = () => { setD(JSON.parse(saved)); setSel(null) }
+  const resend = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await resendVideo(d.id)
+      setD((cur) => ({ ...cur, final: cur.final ? { ...cur.final, sent_at: r.sent_at } : cur.final }))
+      haptic('success')
+      setToast('Надіслала в чат ✓')
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Кадри: заявка воркеру. Незбережений текст спершу зберігаємо — інакше він би загубився
+  const remount = async (job: RemountJob, question: string) => {
+    if (busy || locked) return
+    const again = d.status === 'approved' ? '\n\nЗатвердження скинеться — після перемонтажу затвердиш ще раз.' : ''
+    if (!(await confirmAction(`${question}\n\nПеремонтую відео — це 30–90 с. Тексти лишаться.${again}`))) return
+    if (dirty && !(await act('save', 'Збережено'))) return
+    setBusy(true)
+    try {
+      const r = await remountVideo(d, job)
+      setD((cur) => ({ ...cur, status: r.status, updated_at: r.updated_at, final: null, render_error: null, remount: { state: 'queued', kind: job.kind, note: [], error: null } }))
+      setSel(null)
+      haptic('success')
+      return true
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ack = () => {
+    void ackRemount(d.id).catch(() => null)
+    setD((cur) => ({ ...cur, remount: null }))
+  }
+
+  const reset = () => { setD((cur) => ({ ...cur, ...(JSON.parse(saved) as ReturnType<typeof planOf>) })); setSel(null) }
   const soon = (what: string) => { haptic('tap'); setToast(`${what} — наступний крок розробки`) }
 
   return (
@@ -112,10 +221,39 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
           <span className={`chip ${d.platform === 'instagram' ? 'ig' : 'tg'}`}>{d.platform === 'instagram' ? 'Instagram' : 'Telegram'}</span>
           <span className="chip">{FORMAT[d.format]}</span>
           <span className="chip">{d.place}</span>
-          {d.status === 'approved' && <span className="chip okc">затверджено</span>}
-          <span className="chip warn">демо</span>
+          {d.status === 'approved' && <span className="chip okc">{d.final ? 'готово ✓' : 'затверджено'}</span>}
+          {isDemo && <span className="chip warn">демо</span>}
         </div>
         <div className="serif mt-2 mb-3 text-[22px] leading-[1.15]">{d.name}</div>
+
+        {d.remount && <RemountCard r={d.remount} onOk={ack} />}
+
+        {d.status === 'approved' && !dirty && (
+          <div className="card mb-3 flex items-center gap-3">
+            {d.final ? (
+              <>
+                <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
+                  <b className="block text-[14.5px]">Готове відео в чаті ✓</b>
+                  <span style={{ color: 'var(--hint)' }}>{d.final.sent_at ? `надіслано о ${hhmm(d.final.sent_at)}` : `змонтовано о ${hhmm(d.final.rendered_at)}`} · збережи в галерею й виклади</span>
+                </div>
+                <button className="btn sec shrink-0" style={{ width: 'auto', paddingInline: 14 }} disabled={busy} onClick={() => void resend()}>Надіслати ще раз</button>
+              </>
+            ) : d.render_error ? (
+              <div className="text-[13.5px] leading-snug">
+                <b className="block text-[14.5px]">Не вдалося змонтувати</b>
+                <span style={{ color: 'var(--hint)' }}>Влад уже бачить помилку. Можна «Повернути на перегляд» і затвердити ще раз.</span>
+              </div>
+            ) : (
+              <>
+                <div className="shrink-0"><Spinner /></div>
+                <div className="text-[13.5px] leading-snug">
+                  <b className="block text-[14.5px]">Монтую готове відео…</b>
+                  <span style={{ color: 'var(--hint)' }}>з цим текстом і знаком — прийде в чат за 1–2 хв</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Поки редагує текст — відео менше і «прилипає» вгорі, щоб правки було видно під час набору */}
         <div className="sticky z-10 -mx-4 px-4 pt-3 pb-2" style={{ top: -12, background: 'var(--bg)' }}>
@@ -146,7 +284,11 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
               ))}
               <button onClick={addText}>＋ Додати текст</button>
             </div>
-            {curText ? (
+            {locked ? (
+              <div className="card mt-3 text-[13.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+                Поки перемонтовую кадри, текст не змінюється — це 30–90 с. Потім тексти будуть на своїх кадрах.
+              </div>
+            ) : curText ? (
               <TextEditor d={d} x={curText} onChange={(fn) => updText(curText.id, fn)} onRemove={() => void removeText(curText.id)} />
             ) : (
               <div className="card mt-3 text-[13.5px] leading-snug" style={{ color: 'var(--hint)' }}>
@@ -160,28 +302,7 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
 
         {tab === 'shots' && (
           <>
-            <div className="card mt-3">
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {d.shots.map((s, i) => {
-                  const on = t >= s.t0 && t < s.t1
-                  return (
-                    <button key={i} className="shrink-0 text-left" onClick={() => seek(s.t0 + 0.5)}>
-                      <span className="relative block overflow-hidden rounded-lg" style={{ width: 72, height: 128, outline: on ? '2px solid var(--text)' : 'none', outlineOffset: 1 }}>
-                        <img src={s.thumb} alt="" className="h-full w-full object-cover" />
-                        <span className="absolute top-1 left-1 rounded-full px-1.5 text-[11px] font-semibold" style={{ background: 'rgba(0,0,0,.55)', color: '#fff' }}>{i + 1}</span>
-                      </span>
-                      <span className="mt-1 block w-[72px] truncate text-[11.5px]" style={{ color: 'var(--hint)' }}>{s.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="qchips">
-                <button onClick={() => soon('Прибрати кадр')}>Прибрати кадр</button>
-                <button onClick={() => soon('Інший кадр')}>Інший кадр</button>
-                <button onClick={() => soon('Коротше')}>Коротше</button>
-                <button onClick={() => soon('Інша музика')}>Інша музика</button>
-              </div>
-            </div>
+            <ShotsEditor d={d} t={t} disabled={busy || locked} onSeek={(s) => seek(s)} onRemount={remount} onSoon={soon} />
             <div className="card mt-3">
               <div className="flex items-center gap-3">
                 <img src={d.poster} alt="" className="rounded-md object-cover" style={{ width: 54, height: 96 }} />
@@ -196,27 +317,154 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
             </div>
           </>
         )}
+
+        {d.status !== 'approved' && (
+          <button className="mt-6 block w-full text-center text-[14px]" style={{ color: 'var(--bad)' }} onClick={() => void skip()}>Не публікувати це відео</button>
+        )}
       </div>
 
       <div className="bbar">
-        {dirty ? (
+        {locked ? (
+          <>
+            <button className="btn sec" onClick={onBack}>Пізніше</button>
+            <button className="btn" disabled>Перемонтовую…</button>
+          </>
+        ) : dirty ? (
           <>
             <button className="btn sec" onClick={reset}>Скинути</button>
-            <button className="btn" onClick={() => save('Збережено')}>Зберегти</button>
+            <button className="btn" disabled={busy} onClick={() => void act('save', 'Збережено')}>{busy ? 'Зберігаю…' : 'Зберегти'}</button>
           </>
         ) : d.status === 'approved' ? (
           <>
-            <button className="btn sec" onClick={() => { upd((n) => { n.status = 'ready_for_review' }); saveDemoVideo({ ...d, status: 'ready_for_review' }); setSaved(JSON.stringify({ ...d, status: 'ready_for_review' })) }}>Повернути на перегляд</button>
+            <button className="btn sec" disabled={busy} onClick={() => void act('unapprove', 'Повернула на перегляд')}>Повернути на перегляд</button>
             <button className="btn" onClick={onBack}>Далі</button>
           </>
         ) : (
           <>
             <button className="btn sec" onClick={onBack}>Пізніше</button>
-            <button className="btn" onClick={approve}>Затвердити</button>
+            <button className="btn" disabled={busy} onClick={() => void act('approve', 'Затверджено ✓ Готове відео з цим текстом прийде в чат')}>Затвердити</button>
           </>
         )}
       </div>
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+// ───────────── Перемонтаж: стан заявки ─────────────
+
+function RemountCard({ r, onOk }: { r: NonNullable<VideoDraft['remount']>; onOk: () => void }) {
+  if (r.state === 'queued' || r.state === 'running') {
+    return (
+      <div className="card mb-3 flex items-center gap-3">
+        <div className="shrink-0"><Spinner /></div>
+        <div className="text-[13.5px] leading-snug">
+          <b className="block text-[14.5px]">Перемонтовую кадри…</b>
+          <span style={{ color: 'var(--hint)' }}>30–90 с · можна закрити апку, відео оновиться саме</span>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="card mb-3 text-[13.5px] leading-snug">
+      <b className="block text-[14.5px]">{r.state === 'error' ? 'Не вдалося перемонтувати' : 'Перемонтувала ✓'}</b>
+      {r.state === 'error' ? (
+        <span style={{ color: 'var(--hint)' }}>{r.error || 'Влад уже бачить помилку.'} Відео лишилось як було.</span>
+      ) : r.note.length ? (
+        <ul className="mt-1 list-disc pl-4" style={{ color: 'var(--hint)' }}>{r.note.map((x, i) => <li key={i}>{x}</li>)}</ul>
+      ) : (
+        <span style={{ color: 'var(--hint)' }}>Тексти на своїх кадрах. Переглянь і затверди.</span>
+      )}
+      <button className="mt-2 text-[14px] font-medium" style={{ color: 'var(--accent)' }} onClick={onOk}>Зрозуміло</button>
+    </div>
+  )
+}
+
+// ───────────── Кадри: прибрати / інший / порядок / коротше (перемонтаж, SQL 020) ─────────────
+
+type ShotsProps = {
+  d: VideoDraft
+  t: number
+  disabled: boolean
+  onSeek: (s: number) => void
+  onRemount: (job: RemountJob, question: string) => Promise<boolean | undefined>
+  onSoon: (what: string) => void
+}
+
+function ShotsEditor({ d, t, disabled, onSeek, onRemount, onSoon }: ShotsProps) {
+  const n = d.shots.length
+  const [pick, setPick] = useState<number | null>(null)
+  // новий порядок збираємо стрілками, перемонтовуємо один раз — кнопкою
+  const [order, setOrder] = useState<number[] | null>(null)
+  const ord = order ?? d.shots.map((_, i) => i)
+  const reordered = ord.some((v, i) => v !== i)
+  const name = (i: number) => `кадр ${i + 1} «${d.shots[i].label}»`
+
+  // після перемонтажу кадри інші — вибір і незбережений порядок скидаємо (правки тексту/обкладинки їх не чіпають)
+  const shotsKey = d.shots.map((s) => s.thumb).join('|')
+  useEffect(() => { setPick(null); setOrder(null) }, [shotsKey])
+
+  const move = (dir: -1 | 1) => {
+    if (pick === null) return
+    const at = ord.indexOf(pick)
+    const to = at + dir
+    if (to < 0 || to >= n) return
+    haptic('select')
+    const next = [...ord]
+    ;[next[at], next[to]] = [next[to], next[at]]
+    setOrder(next)
+  }
+  const run = async (job: RemountJob, q: string) => { if (await onRemount(job, q)) { setPick(null); setOrder(null) } }
+
+  return (
+    <div className="card mt-3">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {ord.map((i, pos) => {
+          const s = d.shots[i]
+          const playing = !reordered && t >= s.t0 && t < s.t1
+          return (
+            <button key={i} className="shrink-0 text-left" disabled={disabled} onClick={() => { haptic('select'); setPick(pick === i ? null : i); if (!reordered) onSeek(s.t0 + 0.5) }}>
+              <span className="relative block overflow-hidden rounded-lg" style={{
+                width: 72, height: 128, outline: pick === i ? '3px solid var(--accent)' : playing ? '2px solid var(--text)' : 'none', outlineOffset: 1,
+              }}>
+                <img src={s.thumb} alt="" className="h-full w-full object-cover" />
+                <span className="absolute top-1 left-1 rounded-full px-1.5 text-[11px] font-semibold" style={{ background: 'rgba(0,0,0,.55)', color: '#fff' }}>{pos + 1}</span>
+              </span>
+              <span className="mt-1 block w-[72px] truncate text-[11.5px]" style={{ color: 'var(--hint)' }}>{s.label}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {reordered ? (
+        <>
+          <div className="mt-2 text-[13px] leading-snug" style={{ color: 'var(--hint)' }}>Новий порядок: {ord.map((i) => d.shots[i].label).join(' → ')}</div>
+          {pick !== null && (
+            <div className="qchips">
+              <button disabled={disabled || ord.indexOf(pick) === 0} onClick={() => move(-1)}>← Раніше</button>
+              <button disabled={disabled || ord.indexOf(pick) === n - 1} onClick={() => move(1)}>Пізніше →</button>
+            </div>
+          )}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button className="btn sec" disabled={disabled} onClick={() => { setOrder(null); setPick(null) }}>Як було</button>
+            <button className="btn" disabled={disabled} onClick={() => void run({ kind: 'reorder', order: ord }, 'Перемонтувати в такому порядку?')}>Перемонтувати</button>
+          </div>
+        </>
+      ) : pick === null ? (
+        <div className="mt-2 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Торкнись кадру — прибрати, замінити або пересунути.</div>
+      ) : (
+        <div className="qchips">
+          {n > 1 && <button disabled={disabled} onClick={() => void run({ kind: 'remove', shot: pick }, `Прибрати ${name(pick)}?`)}>Прибрати кадр</button>}
+          <button disabled={disabled} onClick={() => void run({ kind: 'replace', shot: pick }, `Замінити ${name(pick)} іншим шматком відео?`)}>Інший кадр</button>
+          {n > 1 && <button disabled={disabled || pick === 0} onClick={() => move(-1)}>← Раніше</button>}
+          {n > 1 && <button disabled={disabled || pick === n - 1} onClick={() => move(1)}>Пізніше →</button>}
+        </div>
+      )}
+
+      <div className="qchips" style={{ borderTop: '.5px solid var(--line)', paddingTop: 8 }}>
+        <button disabled={disabled} onClick={() => void run({ kind: 'shorter' }, `Зробити коротше? Кожен кадр стане ~на чверть коротшим (зараз ${Math.round(d.dur)} с).`)}>Коротше</button>
+        <button disabled={disabled} onClick={() => onSoon('Інша музика')}>Інша музика</button>
+      </div>
     </div>
   )
 }

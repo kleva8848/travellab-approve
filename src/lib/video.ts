@@ -45,8 +45,27 @@ export type VideoDraft = {
   texts: VText[]
   wm: { kind: WmKind; pos: WmPos; color: 'white' | 'gold' }
   cover: number
-  status: 'ready_for_review' | 'approved'
+  status: 'ready_for_review' | 'approved' | 'skipped'
+  updated_at?: string
+  // готове відео з текстом (SQL 019, воркер final_worker.py): є — «готово ✓», бот надіслав у чат (sent_at)
+  final?: { rendered_at: string | null; sent_at: string | null } | null
+  render_error?: string | null
+  // перемонтаж кадрів (SQL 020): queued / running — монтую, текст не правиться; done — note: що сталось з текстами; error — чому ні
+  remount?: { state: RemountState; kind: RemountKind; note: string[]; error: string | null } | null
 }
+export type RemountKind = 'remove' | 'replace' | 'reorder' | 'shorter'
+export type RemountState = 'queued' | 'running' | 'done' | 'error'
+export type RemountJob = { kind: RemountKind; shot?: number; order?: number[] }
+export const remounting = (d: Pick<VideoDraft, 'remount'>) => d.remount?.state === 'queued' || d.remount?.state === 'running'
+
+// Картка на «Сьогодні»
+export type VideoCard = Pick<VideoDraft, 'id' | 'name' | 'format' | 'platform' | 'place' | 'dur' | 'poster' | 'status'> & { scheduled_for?: string | null; ready?: boolean; remounting?: boolean }
+// Слот плану, на який агент (montage-test/video_agent.py) не склав відео — бракує кадрів (SQL 021 video_slots)
+export type VideoGap = { plan_id: string; scheduled_for: string; format: 'stories' | 'reel'; topic: string; need: string | null }
+export type VideoList = { items: VideoCard[]; gaps: VideoGap[] }
+// Те, що Іра правує і що зберігає /api/video (решта — файли й межі кадрів — з Mac)
+export type VideoPlan = Pick<VideoDraft, 'texts' | 'wm' | 'cover'>
+export const planOf = (d: VideoDraft): VideoPlan => ({ texts: d.texts, wm: d.wm, cover: d.cover })
 
 export const WM: Record<Exclude<WmKind, 'off'>, { name: string; src: string; w: number; h: number }> = {
   wm2: { name: 'Коло', src: '/wm/wm2.png', w: 150, h: 150 },
@@ -115,6 +134,9 @@ const DEMO: VideoDraft[] = [
 
 // Правки в демо живуть, поки відкрита апка (повернулась до списку — нічого не загубилось)
 const store = new Map(DEMO.map((d) => [d.id, structuredClone(d)]))
-export const demoVideos = () => [...store.values()]
+export const demoVideos = () => [...store.values()].filter((d) => d.status !== 'skipped').map((d) => ({ ...d, ready: Boolean(d.final) }))
 export const demoVideo = (id: string) => structuredClone(store.get(id) ?? DEMO[0])
 export const saveDemoVideo = (d: VideoDraft) => void store.set(d.id, structuredClone(d))
+export const demoVideoGaps: VideoGap[] = [
+  { plan_id: 'demo-gap', scheduled_for: '2026-10-31', format: 'stories', topic: 'Пара з приводом · сторіз', need: 'кадри одного місця, що пасують темі — 2–3 відео по 5–15 с' },
+]

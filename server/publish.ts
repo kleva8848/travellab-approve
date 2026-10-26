@@ -14,7 +14,7 @@ const DEFAULT_GRACE_MIN = 60
 
 type Sent = { message_ids: number[] }
 
-async function tgCall<T>(method: string, body: FormData | object): Promise<T> {
+export async function tgCall<T>(method: string, body: FormData | object): Promise<T> {
   const token = process.env.TELEGRAM_BOT_TOKEN
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set')
   const isForm = body instanceof FormData

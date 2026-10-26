@@ -6,6 +6,7 @@
 // «🎙 Історія тижня» (14.10): раз на тиждень (settings.story_remind_dow, дефолт 4 = Чт) у дайджесті — питання-підказка
 // (n8n/story_prompt.mjs) і друга кнопка «🎙 Розповісти історію» → бот (?start=story). Якщо в story_queue уже є нова
 // історія — лише «історія на суботу вже є», без питання.
+// Відео (26.10, сет 5): «🎬 Відео готово на перегляд: N» (video_drafts) і «📹 Бракує кадрів: <тема>» (video_slots, SQL 021).
 import { readFileSync, writeFileSync } from 'node:fs'
 import { STORY_HINT_JS } from './story_prompt.mjs'
 import { dirname, join } from 'node:path'
@@ -83,6 +84,14 @@ if (missed.length) parts.push('\\n⚠️ Час минув, ще не викла
 if (review.length) parts.push('\\n📝 Чекають твого перегляду: ' + review.length + '\\n' + review.slice(0, 5).map(p => '• ' + (PLAT[p.platform] || p.platform) + ' — ' + title(p)).join('\\n') + (review.length > 5 ? '\\n…' : ''));
 if (needData.length) parts.push('\\n❓ Бракує даних: ' + needData.length);
 if (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWork.length);
+// Відео (SQL 018/021, montage-test/video_agent.py): готові чернетки сторіз/рілс і слоти, де агенту бракує кадрів.
+// Таблиць ще нема → вузли з onError=continue дають рядок {error} без id → просто не показуємо
+const vday = v => DateTime.fromISO(String(v)).setZone(zone).setLocale('uk').toFormat('ccc dd.MM');
+const vids = $('Supabase - Get Video Drafts').all().map(i => i.json).filter(j => j && j.id);
+const gaps = $('Supabase - Get Video Gaps').all().map(i => i.json).filter(j => j && j.plan_id && String(j.scheduled_for) >= today)
+  .sort((a, b) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)));
+if (vids.length) parts.push('\\n🎬 Відео готово на перегляд: ' + vids.length + '\\n' + vids.slice(0, 5).map(v => '• ' + (v.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + v.name + '»' + (v.scheduled_for ? ' — на ' + vday(v.scheduled_for) : '')).join('\\n'));
+if (gaps.length) parts.push('\\n📹 Бракує кадрів:\\n' + gaps.slice(0, 3).map(g => '• ' + vday(g.scheduled_for) + ' ' + (g.topic || 'відео') + (g.need ? ' — ' + g.need : '')).join('\\n') + '\\nЗакинь відео в Drive → 00_Inbox (у боті /video).');
 // Історія тижня — у свій день; у черзі вже є нова → не просимо ще
 ${STORY_HINT_JS}
 const storyDow = s.story_remind_dow === undefined || s.story_remind_dow === null ? 4 : Number(s.story_remind_dow);
@@ -95,7 +104,7 @@ if (storyDow && now.weekday === storyDow) {
     story_url = 'https://t.me/' + String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '') + '?start=story';
   }
 }
-if (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url) parts.push('\\nВсе чисто — можна відпочивати 🌴');
+if (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url && !vids.length && !gaps.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');
 for (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок', story_url } });
 return out;`
 
@@ -118,6 +127,12 @@ const nodes = [
   }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Supabase - Get Audiences', 'n8n-nodes-base.supabase', 1, { operation: 'getAll', tableId: 'audiences', returnAll: true },
     { credentials: sb, ...always, onError: 'continueRegularOutput' }),
+  node('Supabase - Get Video Drafts', 'n8n-nodes-base.supabase', 1, {
+    operation: 'getAll', tableId: 'video_drafts', returnAll: true, filterType: 'string', filterString: 'status=eq.ready_for_review',
+  }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
+  node('Supabase - Get Video Gaps', 'n8n-nodes-base.supabase', 1, {
+    operation: 'getAll', tableId: 'video_slots', returnAll: true, filterType: 'string', filterString: 'state=eq.gap',
+  }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Code - Build Messages', 'n8n-nodes-base.code', 2, { jsCode: build }, { executeOnce: true }),
   node('IF - Story Button?', 'n8n-nodes-base.if', 2.2, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
@@ -163,7 +178,9 @@ const connections = {
   'Supabase - Get Hotels': to('Supabase - Get Tours'),
   'Supabase - Get Tours': to('Supabase - Get New Stories'),
   'Supabase - Get New Stories': to('Supabase - Get Audiences'),
-  'Supabase - Get Audiences': to('Code - Build Messages'),
+  'Supabase - Get Audiences': to('Supabase - Get Video Drafts'),
+  'Supabase - Get Video Drafts': to('Supabase - Get Video Gaps'),
+  'Supabase - Get Video Gaps': to('Code - Build Messages'),
   'Code - Build Messages': to('IF - Story Button?'),
   'IF - Story Button?': { main: [[{ node: 'Telegram - Send With Story', type: 'main', index: 0 }], [{ node: 'Telegram - Send', type: 'main', index: 0 }]] },
   'Telegram - Send': to('IF - Reminder Sent?'),

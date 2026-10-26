@@ -6,7 +6,8 @@ import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
 import { VideoScreen } from './components/VideoScreen'
 import { Center, IconCalendar, IconList, IconPeople, IconSun, Spinner } from './components/ui'
-import { ApiError, getMe, getQueue, type Me, type QueueItem, type StoryInfo } from './lib/api'
+import { ApiError, getMe, getQueue, getVideos, type Me, type QueueItem, type StoryInfo } from './lib/api'
+import type { VideoList } from './lib/video'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
 
 type Tab = 'today' | 'plan' | 'calendar' | 'audiences'
@@ -31,12 +32,18 @@ export default function App() {
     const m = /^post_([0-9a-f-]{36})$/i.exec(startParam())
     return m ? m[1] : null
   })
-  // Відкрите відео (сторіз/рілс) — поки лише демо
+  // Відкрите відео (сторіз/рілс); список — окремо від черги: без SQL 018 блок просто не показується
   const [videoId, setVideoId] = useState<string | null>(null)
+  const [videos, setVideos] = useState<VideoList | null>(null)
   // Порядок проходу фіксуємо на момент відкриття, щоб затверджений пост не «стрибав» у степері
   const [session, setSession] = useState<{ order: string[]; done: Set<string> }>({ order: [], done: new Set() })
 
+  const refreshVideos = useCallback(async () => {
+    setVideos(await getVideos().catch(() => null))
+  }, [])
+
   const refresh = useCallback(async () => {
+    void refreshVideos()
     try {
       const q = await getQueue()
       setQueue(q.items)
@@ -45,7 +52,7 @@ export default function App() {
     } catch (e) {
       setQueueError(e instanceof ApiError && e.status === 503 ? 'schema_pending' : e instanceof Error ? e.message : String(e))
     }
-  }, [])
+  }, [refreshVideos])
 
   useEffect(() => {
     initTelegram()
@@ -89,7 +96,7 @@ export default function App() {
   if (videoId) {
     return (
       <div className="mx-auto h-full max-w-lg">
-        <VideoScreen id={videoId} onBack={() => setVideoId(null)} />
+        <VideoScreen id={videoId} onBack={() => { setVideoId(null); void refreshVideos() }} />
       </div>
     )
   }
@@ -120,7 +127,7 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
-        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
+        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
         {tab === 'plan' && <PlanScreen onOpen={open} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'audiences' && <AudiencesScreen me={auth.me} />}

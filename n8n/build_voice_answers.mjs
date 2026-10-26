@@ -17,6 +17,12 @@
 // ставить питання-підказку тижня (settings.story_prompts, n8n/story_prompt.mjs) з force_reply і прихованим маркером
 // ?start=story → голосове/текст у відповідь → Whisper → gpt-4.1 чистить розшифровку (її слова, без вигадок) + готель/країна →
 // story_queue (pillar personal_experience, status new) → WF-018 бере найстарішу в суботній слот наступного тижня.
+//
+// «🎬 Відео» (21.10, тест рілсів): /video (або /start video) → посилання на Travel lab/00_Inbox; «відео готово» →
+// бот рахує відео в Inbox і його підпапках (Drive Іри) → Ірі підсумок, Владу (admin_chat_id) — «можна розбирати».
+// Розбір і монтаж поки робить Claude на Mac (Reels_Test_Plan_2026-10-21), потім — воркер на VPS.
+// /help або /start — меню кнопок (усі дії без набору тексту). Кнопки callback (video_ask / video_ready / story / help)
+// = ті самі команди: Normalize перетворює callback_query на текст, бот одразу відповідає answerCallbackQuery.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { STORY_HINT_JS, STORY_MARK_RE } from './story_prompt.mjs'
 import { dirname, join } from 'node:path'
@@ -30,6 +36,9 @@ const CFG = {
   openai: { id: 'W0SZsbrcQTP4Dcjx', name: 'n8n_easypanel_p2p_mira' },
   // [TravelLab] Data Answer (Mini App) — n8n/build_data_answer.mjs
   dataAnswerId: process.env.TL_DATA_ANSWER_ID || '7LRWGhCgnoM8MXmW',
+  drive: { id: 'cjY7BSZAIddR6oLs', name: 'Google Drive Іра' },
+  // Travel lab/00_Inbox на Drive Іри — сюди вона кидає відео (/video), розбір — після «відео готово»
+  inboxId: '1py-eratM0G1dr8gGI94PXJMx7DziXk9K',
 }
 const sb = { supabaseApi: CFG.supabase }
 const tgc = { credentials: { telegramApi: CFG.telegram } }
@@ -62,8 +71,11 @@ const ifNode = (name, x, leftValue, extra = {}) => node(name, 'n8n-nodes-base.if
 
 // ───────────────────────── Code ─────────────────────────
 const normalize = `// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина
-const b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.update_id) ? $json.body : $json;
-const m = b.message || {};
+const b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.callback_query || $json.body.update_id) ? $json.body : $json;
+// натиснута кнопка = та сама команда текстом
+const CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help' };
+const cq = b.callback_query || null;
+const m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});
 const text = String(m.text || m.caption || '').trim();
 const file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;
 let planId = null, how = 'none';
@@ -71,6 +83,9 @@ const st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);
 if (st) { planId = st[1].toLowerCase(); how = 'start'; }
 // «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст
 const storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);
+// «🎬 Відео»: посилання на Inbox і «відео готово» після завантаження
+const videoCmd = /^\\/video(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+video$/i.test(text) || /^(🎬\\s*)?завантажити відео$/i.test(text);
+const videoReady = /^(\\/videodone(?:@\\w+)?|відео\\s+готов[оі]?)[.!\\s]*$/i.test(text);
 const r = m.reply_to_message;
 if (!planId && r) {
   for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {
@@ -83,11 +98,13 @@ if (!planId && r) {
 let route = 'ignore';
 if (!m.chat || !m.from || m.from.is_bot) route = 'ignore';
 else if (st) route = 'ask';
+else if (videoCmd && !file) route = 'video_ask';
+else if (videoReady && !file) route = 'video_ready';
 else if (storyCmd && !file) route = 'story_ask';
 else if (how === 'story' && (file || text)) route = 'story';
 else if (file || (text && how === 'reply')) route = 'answer';
 else if (text) route = 'help';
-return [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file } }];`
+return [{ json: { route, plan_id: planId, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];`
 
 const resolve = `// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання
 const n = $('Code - Normalize').first().json;
@@ -99,8 +116,9 @@ ${STORY_HINT_JS}
 const allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);
 const base = String(s.mini_app_url || '').replace(/\\/$/, '');
 const bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');
-const out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story' };
+const out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story', admin_chat_id: String(s.admin_chat_id || '') };
 if (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];
+if (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];
 if (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];
 if (n.route === 'story') return [{ json: out }];
 
@@ -144,13 +162,20 @@ return [{ json: {
 const simple = `// help / unresolved / gone / нема питань — коротко + кнопка в апку
 const r = $json;
 const T = {
-  help: 'Пости на перегляд — у TravelLab (кнопка нижче). Щоб відповісти голосом на питання агента, відкрий пост і натисни «Відповісти голосом».\\n\\n🎙 Розповісти історію для постів — /story',
+  help: 'Привіт! Я бот TravelLab. Що я вмію — тисни кнопку нижче:\\n\\n'
+    + '📱 Відкрити TravelLab — пости на перегляд: затвердити, попросити правку, вибрати фото.\\n\\n'
+    + '🎬 Завантажити відео — дам папку на Диску. Закинь туди відео з телефона чи компʼютера, повернись сюди й натисни «✅ Відео готово».\\n\\n'
+    + '🎙 Розповісти історію — запишеш голосове, я зроблю з нього пост.\\n\\n'
+    + '❓ Питання агента до поста — відкрий пост в апці й натисни «Відповісти голосом».\\n\\n'
+    + '📷 Фото поки що — через бот завантаження фото, скоро переїде сюди.\\n\\n'
+    + 'Загубила меню — напиши /help.',
   unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.\\n\\nЯкщо це історія для постів — надішли /story і запиши її у відповідь.',
   gone: 'Цього поста вже немає в роботі 🙌',
   none: 'По цьому посту питань уже немає 🙌'
 };
 const k = r.route === 'answer' ? 'none' : r.route;
-return [{ json: { chat_id: r.chat_id, kind: 'button', text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];`
+const kind = (k === 'help' || !T[k]) ? 'menu' : 'button';
+return [{ json: { chat_id: r.chat_id, kind, text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];`
 
 const resolveText = `// Текст відповіді: розшифровка голосового або текст як є
 const r = $('Code - Resolve').first().json;
@@ -287,6 +312,66 @@ return [{ json: { chat_id: r.chat_id, kind: 'force',
     + '\\n\\nЗапиши ще раз у відповідь на це повідомлення, будь ласка — хоча б кілька речень.'
 } }];`
 
+// ───── «🎬 Відео» ─────
+const INBOX_URL = 'https://drive.google.com/drive/folders/' + CFG.inboxId
+const videoAsk = `// /video: куди кидати відео і що написати потім
+const r = $json;
+return [{ json: { chat_id: r.chat_id, kind: 'link', url: ${JSON.stringify(INBOX_URL)}, button: '📂 Відкрити папку для відео',
+  text: '🎬 Відео для рілс і сторіз\\n\\n'
+    + 'Закинь відео в папку «00_Inbox» (кнопка нижче):\\n'
+    + '• телефон: Google Диск → «+» → Завантажити → Фото й відео. Не закривай Диск, поки не завантажиться;\\n'
+    + '• компʼютер: перетягни файли або цілу папку.\\n\\n'
+    + 'Можна підпапкою з назвою готелю чи острова — так я швидше впізнаю місце. '
+    + 'Не пересилай відео через Telegram/WhatsApp/Viber: вони стискають якість і стирають, де знято.\\n\\n'
+    + 'Коли все завантажиться — повернись сюди й натисни «✅ Відео готово».'
+} }];`
+
+// Inbox → підпапки: другий запит бере і сам Inbox, і всі його підпапки (один рівень)
+const videoQuery = `const files = Array.isArray($json.files) ? $json.files : [];
+const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+const ids = [${JSON.stringify(CFG.inboxId)}, ...folders.map(f => f.id)];
+return [{ json: { q: '(' + ids.map(id => "'" + id + "' in parents").join(' or ') + ') and trashed=false', folders: folders.map(f => ({ id: f.id, name: f.name })), list_error: $json.error ? String($json.error.message || $json.error).slice(0, 200) : '' } }];`
+
+const videoSummary = `${esc}
+// Підсумок Inbox: скільки відео, де, скільки місця; Владу — сигнал «можна розбирати» (HTML: назви папок екрануємо)
+const r = $('Code - Resolve').first().json;
+const q = $('Code - Video Query').first().json;
+const files = (Array.isArray($json.files) ? $json.files : []).filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
+const err = q.list_error || ($json.error ? String($json.error.message || $json.error).slice(0, 200) : '');
+const names = Object.fromEntries(q.folders.map(f => [f.id, f.name]));
+const videos = files.filter(f => String(f.mimeType || '').startsWith('video/'));
+const photos = files.filter(f => String(f.mimeType || '').startsWith('image/'));
+const other = files.length - videos.length - photos.length;
+const gb = videos.reduce((s, f) => s + Number(f.size || 0), 0) / 1e9;
+const by = {};
+for (const f of videos) { const k = names[(f.parents || [])[0]] || ''; by[k] = (by[k] || 0) + 1; }
+const lines = Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, c]) => '• ' + (k ? '«' + esc(k) + '»' : 'без папки') + ' — ' + c);
+const size = gb >= 1 ? gb.toFixed(1).replace('.', ',') + ' ГБ' : Math.round(gb * 1000) + ' МБ';
+const url = ${JSON.stringify(INBOX_URL)};
+let text, admin = '';
+if (err) text = 'Не вдалось відкрити папку з відео 🙈 Я передав Владу, він подивиться.';
+else if (!videos.length) text = 'У папці поки немає відео 🤔\\n\\nЯкщо завантажувала з телефона — перевір, що завантаження закінчилось (Диск має бути відкритий до кінця). Потім знову натисни «✅ Відео готово».';
+else text = 'Отримав ' + videos.length + ' відео (' + size + ') ✅\\n' + lines.join('\\n')
+  + (photos.length ? '\\n\\nФото в цій папці (' + photos.length + ') поки не беру — фото поки що через бот завантаження фото (/upload).' : '')
+  + '\\n\\nТепер я їх розберу: де знято, який готель чи острів, найкращі моменти. Перший рілс покаже Влад.';
+if (err) admin = '⚠️ Іра написала «відео готово», але Inbox не відкрився: ' + esc(err);
+else if (videos.length) admin = '🎬 Іра закинула ' + videos.length + ' відео (' + size + ') у 00_Inbox:\\n' + lines.join('\\n')
+  + (photos.length ? '\\n+ фото: ' + photos.length : '') + (other > 0 ? '\\n+ інші файли: ' + other : '') + '\\n\\nМожна запускати розбір (Reels_Test_Plan §3).';
+return [{ json: { chat_id: r.chat_id, kind: 'link', text, url, button: '📂 Відкрити папку для відео',
+  admin_chat_id: r.admin_chat_id, admin_text: admin, notify_admin: !!admin && !!r.admin_chat_id && r.admin_chat_id !== r.chat_id } }];`
+
+const driveList = (name, x, q, extra = {}) => node(name, 'n8n-nodes-base.httpRequest', 4.2, x, {
+  url: 'https://www.googleapis.com/drive/v3/files',
+  authentication: 'predefinedCredentialType', nodeCredentialType: 'googleDriveOAuth2Api',
+  sendQuery: true,
+  queryParameters: { parameters: [
+    { name: 'q', value: q },
+    { name: 'fields', value: 'files(id,name,mimeType,size,parents)' },
+    { name: 'pageSize', value: '1000' },
+  ] },
+  options: {},
+}, { credentials: { googleDriveOAuth2Api: CFG.drive }, onError: 'continueRegularOutput', executeOnce: true, ...extra })
+
 const Y = 260
 const coreNodes = [
   node('Execute Workflow Trigger', 'n8n-nodes-base.executeWorkflowTrigger', 1.1, 0, { inputSource: 'passthrough' }),
@@ -303,7 +388,7 @@ const coreNodes = [
   getAll('Supabase - Get Audiences', 1650, 'audiences', null, { onError: 'continueRegularOutput', y: 200 }),
   node('Code - Resolve', 'n8n-nodes-base.code', 2, 1760, { jsCode: resolve }, { executeOnce: true }),
   node('Switch - Route', 'n8n-nodes-base.switch', 3.2, 1980, {
-    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story'].map((k) => ({
+    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story', 'video_ask', 'video_ready'].map((k) => ({
       conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 }, combinator: 'and',
         conditions: [{ id: 'r-' + k, leftValue: '={{ $json.route }}', rightValue: k, operator: { type: 'string', operation: 'equals' } }] },
       renameOutput: true, outputKey: k,
@@ -374,6 +459,40 @@ const coreNodes = [
   node('Code - Story Row', 'n8n-nodes-base.code', 2, 3740, { jsCode: storyRow }, { executeOnce: true, y: 5 * Y }),
   rest('HTTP - Insert Story', 3960, 'POST', "={{ $json.supabase_url }}/rest/v1/story_queue", '={{ JSON.stringify($json.row) }}', { prefer: 'return=representation', y: 5 * Y }),
   node('Code - Story Saved', 'n8n-nodes-base.code', 2, 4180, { jsCode: storySaved }, { executeOnce: true, y: 5 * Y }),
+  // «🎬 Відео» — ряд під історіями
+  node('Code - Video Ask', 'n8n-nodes-base.code', 2, 2200, { jsCode: videoAsk }, { executeOnce: true, y: 7 * Y }),
+  driveList('HTTP - List Inbox', 2200, "'" + CFG.inboxId + "' in parents and trashed=false", { y: 8 * Y }),
+  node('Code - Video Query', 'n8n-nodes-base.code', 2, 2420, { jsCode: videoQuery }, { executeOnce: true, y: 8 * Y }),
+  driveList('HTTP - List Inbox Files', 2640, '={{ $json.q }}', { y: 8 * Y }),
+  node('Code - Video Summary', 'n8n-nodes-base.code', 2, 2860, { jsCode: videoSummary }, { executeOnce: true, y: 8 * Y }),
+  ifNode('IF - Notify Admin?', 3080, '={{ $json.notify_admin }}', { y: 8 * Y }),
+  node('Telegram - Notify Admin', 'n8n-nodes-base.telegram', 1.2, 3300, {
+    chatId: '={{ $json.admin_chat_id }}', text: '={{ $json.admin_text }}',
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML', disable_web_page_preview: true },
+  }, { ...tgc, onError: 'continueRegularOutput', y: 8 * Y }),
+  node('Code - Video Reply', 'n8n-nodes-base.code', 2, 3520, { jsCode: `return [{ json: $('Code - Video Summary').first().json }];` }, { executeOnce: true, y: 8 * Y }),
+  ifNode('IF - Link?', 6160, "={{ $json.kind === 'link' }}", { y: Y * 1.5 }),
+  node('Telegram - Reply (link)', 'n8n-nodes-base.telegram', 1.2, 6380, {
+    chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+    inlineKeyboard: { rows: [
+      { row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { url: '={{ $json.url }}' } }] } },
+      { row: { buttons: [{ text: '✅ Відео готово', additionalFields: { callback_data: 'video_ready' } }] } },
+    ] },
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML', disable_web_page_preview: true },
+  }, { ...tgc, onError: 'continueRegularOutput', y: Y * 2 }),
+  ifNode('IF - Menu?', 6380, "={{ $json.kind === 'menu' }}", { y: Y * 3 }),
+  node('Telegram - Reply (menu)', 'n8n-nodes-base.telegram', 1.2, 6600, {
+    chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+    inlineKeyboard: { rows: [
+      { row: { buttons: [{ text: '📱 Відкрити TravelLab', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } },
+      { row: { buttons: [{ text: '🎬 Завантажити відео', additionalFields: { callback_data: 'video_ask' } }] } },
+      { row: { buttons: [{ text: '🎙 Розповісти історію', additionalFields: { callback_data: 'story' } }] } },
+    ] },
+    additionalFields: { appendAttribution: false, disable_web_page_preview: true },
+  }, { ...tgc, onError: 'continueRegularOutput', y: Y * 4 }),
+  ifNode('IF - Callback?', 550, '={{ !!$json.callback_id }}', { y: -Y }),
+  node('Telegram - Answer Callback', 'n8n-nodes-base.telegram', 1.2, 600, { resource: 'callback', operation: 'answerQuery', queryId: '={{ $json.callback_id }}', additionalFields: {} },
+    { ...tgc, onError: 'continueRegularOutput', y: -2 * Y }),
   node('Execute - Data Answer', 'n8n-nodes-base.executeWorkflow', 1.2, 6820, {
     source: 'database', workflowId: { __rl: true, value: CFG.dataAnswerId, mode: 'id' }, mode: 'once', options: { waitForSubWorkflow: false },
   }, { onError: 'continueRegularOutput' }),
@@ -386,7 +505,9 @@ const coreConnections = {
   'Execute Workflow Trigger': to('Code - Normalize'),
   'Webhook - Test Update': to('Code - Normalize'),
   'Code - Normalize': to('IF - Anything?'),
-  'IF - Anything?': branches('Supabase - Get Settings'),
+  'IF - Anything?': branches('IF - Callback?'),
+  'IF - Callback?': branches('Telegram - Answer Callback', 'Supabase - Get Settings'),
+  'Telegram - Answer Callback': to('Supabase - Get Settings'),
   ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Open Requests', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Audiences', 'Code - Resolve', 'Switch - Route'),
   'Switch - Route': { main: [
     [{ node: 'Code - Ask', type: 'main', index: 0 }],
@@ -396,7 +517,13 @@ const coreConnections = {
     [{ node: 'Code - Simple Reply', type: 'main', index: 0 }],
     [{ node: 'Code - Story Ask', type: 'main', index: 0 }],
     [{ node: 'IF - Story Voice?', type: 'main', index: 0 }],
+    [{ node: 'Code - Video Ask', type: 'main', index: 0 }],
+    [{ node: 'HTTP - List Inbox', type: 'main', index: 0 }],
   ] },
+  'Code - Video Ask': to('Code - Reply'),
+  ...chain('HTTP - List Inbox', 'Code - Video Query', 'HTTP - List Inbox Files', 'Code - Video Summary', 'IF - Notify Admin?'),
+  'IF - Notify Admin?': branches('Telegram - Notify Admin', 'Code - Video Reply'),
+  ...chain('Telegram - Notify Admin', 'Code - Video Reply', 'Code - Reply'),
   'IF - Story Voice?': branches('Telegram - Get Story File', 'Code - Story Text'),
   ...chain('Telegram - Get Story File', 'OpenAI - Transcribe Story', 'Code - Story Text', 'IF - Story Long Enough?'),
   'IF - Story Long Enough?': branches('Code - Story Prompt', 'Code - Story Too Short'),
@@ -416,7 +543,9 @@ const coreConnections = {
   'Code - Simple Reply': to('Code - Reply'),
   'Code - Not Heard': to('Code - Reply'),
   'Code - Reply': to('IF - Force Reply?'),
-  'IF - Force Reply?': branches('Telegram - Ask (force reply)', 'Telegram - Reply (button)'),
+  'IF - Force Reply?': branches('Telegram - Ask (force reply)', 'IF - Link?'),
+  'IF - Link?': branches('Telegram - Reply (link)', 'IF - Menu?'),
+  'IF - Menu?': branches('Telegram - Reply (menu)', 'Telegram - Reply (button)'),
   'Telegram - Reply (button)': to('IF - Run Data Answer?'),
   'IF - Run Data Answer?': branches('Code - Data Answer Input'),
   'Code - Data Answer Input': to('Execute - Data Answer'),
@@ -427,7 +556,7 @@ const core = { name: '[TravelLab] Voice Answers (Mini App)', nodes: coreNodes, c
 const botWf = (coreId) => ({
   name: '[TravelLab] Ira Bot (updates)',
   nodes: [
-    node('Telegram Trigger', 'n8n-nodes-base.telegramTrigger', 1.2, 0, { updates: ['message'], additionalFields: {} }, { ...tgc, webhookId: '0e7c4b19-5a2d-4f3e-8c61-tl-ira-bot' }),
+    node('Telegram Trigger', 'n8n-nodes-base.telegramTrigger', 1.2, 0, { updates: ['message', 'callback_query'], additionalFields: {} }, { ...tgc, webhookId: '0e7c4b19-5a2d-4f3e-8c61-tl-ira-bot' }),
     node('Execute - Voice Answers', 'n8n-nodes-base.executeWorkflow', 1.2, 220, {
       source: 'database', workflowId: { __rl: true, value: coreId, mode: 'id' }, mode: 'once', options: { waitForSubWorkflow: false },
     }, { onError: 'continueRegularOutput' }),

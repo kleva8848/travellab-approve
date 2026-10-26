@@ -18,6 +18,9 @@
     "api/publish.ts": {
       "includeFiles": "server/**",
       "maxDuration": 60
+    },
+    "api/video.ts": {
+      "maxDuration": 60
     }
   }
 }

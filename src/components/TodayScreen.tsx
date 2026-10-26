@@ -1,7 +1,7 @@
 import { AudienceCard } from './AudienceCard'
 import type { Me, QueueItem, StoryInfo } from '../lib/api'
-import { haptic, isDemo, openTelegram } from '../lib/tg'
-import { demoVideos } from '../lib/video'
+import { haptic, openTelegram } from '../lib/tg'
+import type { VideoCard, VideoGap, VideoList } from '../lib/video'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
@@ -19,12 +19,12 @@ function greeting(h: number) {
 // Звертання в кличному відмінку для відомих імен, інакше як є
 const VOCATIVE: Record<string, string> = { 'Іра': 'Іро', 'Ira': 'Іро', 'Ірина': 'Ірино', 'Влад': 'Владе', 'Vlad': 'Владе' }
 
-type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
+type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; videos: VideoList | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
 
 const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
-export function TodayScreen({ me, queue, story, queueError, onOpen, onOpenVideo, onRetry }: Props) {
+export function TodayScreen({ me, queue, story, videos, queueError, onOpen, onOpenVideo, onRetry }: Props) {
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
@@ -34,7 +34,8 @@ export function TodayScreen({ me, queue, story, queueError, onOpen, onOpenVideo,
   const reviewing = waiting.filter((q) => !asking.includes(q))
   const working = (queue ?? []).filter((q) => q.review_status === 'regenerating')
   const approved = (queue ?? []).filter((q) => q.review_status === 'approved')
-  const allDone = queue && !waiting.length && !working.length
+  const videosWaiting = (videos?.items ?? []).some((v) => v.status === 'ready_for_review')
+  const allDone = queue && !waiting.length && !working.length && !videosWaiting
 
   return (
     <div className="px-4 pt-3.5 pb-6">
@@ -79,7 +80,8 @@ export function TodayScreen({ me, queue, story, queueError, onOpen, onOpenVideo,
             </div>
           )}
 
-          {isDemo && <Videos onOpen={onOpenVideo} />}
+          {videos && videos.items.length > 0 && <Videos items={videos.items} onOpen={onOpenVideo} />}
+          {videos && videos.gaps.length > 0 && <VideoGaps gaps={videos.gaps} />}
           <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
           <List title="Агент переробляє" items={working} onOpen={onOpen} badge={<span className="chip warn">переробляю</span>} />
@@ -111,24 +113,55 @@ function StoryCard({ story }: { story: StoryInfo }) {
   )
 }
 
-// Сторіз / рілс на перегляд: обкладинка 9:16 + назва (поки лише демо, справжні — наступний крок)
-function Videos({ onOpen }: { onOpen: (id: string) => void }) {
-  const items = demoVideos()
+const WD = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+// «Сб 31.10» — день слоту (дата YYYY-MM-DD або timestamptz → за Києвом)
+function slotDay(s: string) {
+  const ymd = s.length === 10 ? s : new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv' }).format(new Date(s))
+  return `${WD[new Date(`${ymd}T12:00:00Z`).getUTCDay()]} ${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`
+}
+
+// Сторіз / рілс на перегляд: обкладинка 9:16 + назва (у демо — 3 тестові з lib/video); з автоконвеєра — ще й день слоту
+function Videos({ items, onOpen }: { items: VideoCard[]; onOpen: (id: string) => void }) {
+  const ready = items.filter((v) => v.status === 'ready_for_review').length
   return (
     <>
-      <Label>Відео на перегляд</Label>
-      <div className="flex gap-2.5 overflow-x-auto pb-1">
+      <Label>{ready ? `🎬 Готово ${ready} відео на перегляд` : 'Відео'}</Label>
+      <div className="flex items-start gap-2.5 overflow-x-auto pb-1">
         {items.map((v) => (
           <button key={v.id} className="shrink-0 text-left" style={{ width: 104 }} onClick={() => { haptic('tap'); onOpen(v.id) }}>
             <span className="relative block overflow-hidden rounded-xl" style={{ width: 104, height: 185, boxShadow: 'var(--shadow)' }}>
               <img src={v.poster} alt="" className="h-full w-full object-cover" />
               <span className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.5)', color: '#fff' }}>{v.format === 'reel' ? 'рілс' : 'сторіз'} · {Math.round(v.dur)}с</span>
-              {v.status === 'approved' && <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'var(--ok)', color: '#fff' }}>✓</span>}
+              {v.remounting ? (
+                <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.55)', color: '#fff' }}>перемонтовую…</span>
+              ) : v.status === 'approved' && (
+                <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: v.ready ? 'var(--ok)' : 'rgba(0,0,0,.55)', color: '#fff' }}>
+                  {v.ready ? 'готово ✓' : 'монтую…'}
+                </span>
+              )}
             </span>
             <b className="mt-1.5 block text-[13px] leading-tight">{v.name}</b>
-            <span className="text-[12px]" style={{ color: 'var(--hint)' }}>{v.place}</span>
+            <span className="text-[12px]" style={{ color: 'var(--hint)' }}>{[v.scheduled_for && `на ${slotDay(v.scheduled_for)}`, v.place].filter(Boolean).join(' · ')}</span>
           </button>
         ))}
+      </div>
+    </>
+  )
+}
+
+// «📹 Бракує кадрів»: агент не зміг скласти відео на слот — Іра закидає відео в Drive 00_Inbox, наступний прохід спробує знову
+function VideoGaps({ gaps }: { gaps: VideoGap[] }) {
+  return (
+    <>
+      <Label>📹 Бракує кадрів</Label>
+      <div className="card">
+        {gaps.map((g, i) => (
+          <div key={g.plan_id} className="py-1.5" style={{ borderTop: i ? '.5px solid var(--line)' : 0 }}>
+            <b className="block text-[14.5px] leading-snug">{slotDay(g.scheduled_for)} · {g.topic || (g.format === 'reel' ? 'рілс' : 'сторіз')}</b>
+            {g.need && <span className="block text-[13px] leading-snug" style={{ color: 'var(--hint)' }}>Потрібно: {g.need}</span>}
+          </div>
+        ))}
+        <div className="mt-2 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Закинь відео в Google Drive → Travel lab → 00_Inbox (у боті — команда /video). Агент сам збере відео й покаже тут.</div>
       </div>
     </>
   )
