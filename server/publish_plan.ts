@@ -101,3 +101,34 @@ export function layoutPost(text: string, photos: number): Layout {
   if (visibleLen(t) <= CAPTION_MAX) return { mode: 'photos+caption', caption: t, messages: [] }
   return { mode: 'photos+text', caption: null, messages: splitText(t) }
 }
+
+// ───────────── Відео (SQL 022, server/video_publish.ts) ─────────────
+
+// Instagram Іра викладає сама: якщо відео змонтувалось пізніше слоту (затвердила ввечері) — усе одно надішлемо в чат, але не давніше доби
+export const CHAT_WINDOW_MIN = 24 * 60
+
+export type VideoDueRow = {
+  platform: string
+  status: string
+  scheduled_for: string | null
+  final_path: string | null
+  published_at: string | null
+  delivered_at: string | null
+  publish_slot: string | null
+}
+
+// Куди піде відео: 'channel' — TG-канал автоматично (платформа telegram, канал підключено); 'chat' — Ірі в чат «виклади зараз»
+export const videoMode = (v: Pick<VideoDueRow, 'platform'>, channel: boolean): 'channel' | 'chat' =>
+  v.platform === 'telegram' && channel ? 'channel' : 'chat'
+
+// Відео пора відправити: затверджене, змонтоване, ще не вийшло й не надіслане, слот настав (канал — не давніше graceMin,
+// чат — не давніше доби); слот, який уже пробували, не повторюємо (після помилки — вручну)
+export function videoDue(v: VideoDueRow, nowMs: number, o: { channel: boolean; chatOn: boolean; graceMin: number }): 'channel' | 'chat' | null {
+  if (v.status !== 'approved' || !v.final_path || v.published_at || v.delivered_at || !v.scheduled_for) return null
+  const at = Date.parse(v.scheduled_for)
+  if (!Number.isFinite(at) || at > nowMs || v.publish_slot === v.scheduled_for) return null
+  const mode = videoMode(v, o.channel)
+  if (mode === 'chat' && !o.chatOn) return null
+  const win = mode === 'channel' ? o.graceMin : Math.max(o.graceMin, CHAT_WINDOW_MIN)
+  return nowMs - at > win * 60_000 ? null : mode
+}

@@ -48,7 +48,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.callback_query || $json.body.update_id) ? $json.body : $json;\n// натиснута кнопка = та сама команда текстом\nconst CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help' };\nconst cq = b.callback_query || null;\nconst m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nconst audio = (m.voice || m.audio) ? { file_id: (m.voice || m.audio).file_id, dur: Number((m.voice || m.audio).duration || 0) } : null;\nlet planId = null, how = 'none', videoId = null;\n// «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео\nconst vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);\nif (vo) videoId = vo[1].toLowerCase();\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\n// «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст\nconst storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);\n// «🎬 Відео»: посилання на Inbox і «відео готово» після завантаження\nconst videoCmd = /^\\/video(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+video$/i.test(text) || /^(🎬\\s*)?завантажити відео$/i.test(text);\nconst videoReady = /^(\\/videodone(?:@\\w+)?|відео\\s+готов[оі]?)[.!\\s]*$/i.test(text);\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const u = String(e.url || '');\n    const mm = u.match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n    const mv = u.match(/start=vo_([0-9a-f-]{36})/i);\n    if (mv) { videoId = mv[1].toLowerCase(); how = 'vo'; break; }\n    if (/[?&]start(?:app)?=story\\b/i.test(u)) { how = 'story'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (vo) route = 'vo_ask';\nelse if (how === 'vo') route = 'vo';\nelse if (st) route = 'ask';\nelse if (videoCmd && !file) route = 'video_ask';\nelse if (videoReady && !file) route = 'video_ready';\nelse if (storyCmd && !file) route = 'story_ask';\nelse if (how === 'story' && (file || text)) route = 'story';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, video_id: videoId, audio, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];"
+        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.callback_query || $json.body.update_id) ? $json.body : $json;\n// натиснута кнопка = та сама команда текстом\nconst CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help' };\nconst cq = b.callback_query || null;\n// «✅ Виклала» під відео, яке бот надіслав у слот (server/video_publish.ts)\nconst vp = cq ? String(cq.data || '').match(/^vpub_([0-9a-f-]{36})$/i) : null;\nconst m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nconst audio = (m.voice || m.audio) ? { file_id: (m.voice || m.audio).file_id, dur: Number((m.voice || m.audio).duration || 0) } : null;\nlet planId = null, how = 'none', videoId = null;\n// «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео\nconst vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);\nif (vo) videoId = vo[1].toLowerCase();\nif (vp) videoId = vp[1].toLowerCase();\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\n// «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст\nconst storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);\n// «🎬 Відео»: посилання на Inbox і «відео готово» після завантаження\nconst videoCmd = /^\\/video(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+video$/i.test(text) || /^(🎬\\s*)?завантажити відео$/i.test(text);\nconst videoReady = /^(\\/videodone(?:@\\w+)?|відео\\s+готов[оі]?)[.!\\s]*$/i.test(text);\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const u = String(e.url || '');\n    const mm = u.match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n    const mv = u.match(/start=vo_([0-9a-f-]{36})/i);\n    if (mv) { videoId = mv[1].toLowerCase(); how = 'vo'; break; }\n    if (/[?&]start(?:app)?=story\\b/i.test(u)) { how = 'story'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (vp) route = 'vpub';\nelse if (vo) route = 'vo_ask';\nelse if (how === 'vo') route = 'vo';\nelse if (st) route = 'ask';\nelse if (videoCmd && !file) route = 'video_ask';\nelse if (videoReady && !file) route = 'video_ready';\nelse if (storyCmd && !file) route = 'story_ask';\nelse if (how === 'story' && (file || text)) route = 'story';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, video_id: videoId, audio, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];"
       }
     },
     {
@@ -265,7 +265,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst aud = all('Supabase - Get Audiences');\nconst storyHint = () => {\n  const on = (Array.isArray(aud) ? aud : []).filter(a => a && a.code && a.active !== false)\n    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));\n  const PERSONAS = on.length ? on.map(a => a.code) : ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  const a = on.find(x => x.code === persona);\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && x.p === persona);\n  const any = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && !x.p);\n  const list = mine.length ? mine : any;\n  const hint = list.length ? list[Math.floor(WEEK / PERSONAS.length) % list.length].q\n    : a ? 'Згадай клієнтів, схожих на «' + a.name + '». Що їм запамʼяталось найбільше — і чого вони не очікували?'\n    : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story', admin_chat_id: String(s.admin_chat_id || '') };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\nif (n.route === 'vo_ask' || n.route === 'vo') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, has_voice: !!(v.montage && v.montage.voice) },\n    vo_url: 'https://t.me/' + bot + '?start=vo_' + v.id, video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
+        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst aud = all('Supabase - Get Audiences');\nconst storyHint = () => {\n  const on = (Array.isArray(aud) ? aud : []).filter(a => a && a.code && a.active !== false)\n    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));\n  const PERSONAS = on.length ? on.map(a => a.code) : ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  const a = on.find(x => x.code === persona);\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && x.p === persona);\n  const any = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && !x.p);\n  const list = mine.length ? mine : any;\n  const hint = list.length ? list[Math.floor(WEEK / PERSONAS.length) % list.length].q\n    : a ? 'Згадай клієнтів, схожих на «' + a.name + '». Що їм запамʼяталось найбільше — і чого вони не очікували?'\n    : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story', admin_chat_id: String(s.admin_chat_id || '') };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\nif (n.route === 'vpub') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, published_at: v.published_at || null },\n    row: { published_at: new Date().toISOString(), published_ref: { ...(v.published_ref || {}), posted_via: 'bot', posted_by: Number(n.from_id) } },\n    video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\nif (n.route === 'vo_ask' || n.route === 'vo') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, has_voice: !!(v.montage && v.montage.voice) },\n    vo_url: 'https://t.me/' + bot + '?start=vo_' + v.id, video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
       },
       "executeOnce": true
     },
@@ -568,6 +568,30 @@
               },
               "renameOutput": true,
               "outputKey": "vo_gone"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-vpub",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "vpub",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "vpub"
             }
           ]
         },
@@ -1836,6 +1860,67 @@
       "executeOnce": true
     },
     {
+      "id": "http-mark-posted",
+      "name": "HTTP - Mark Posted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        3380
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/video_drafts?id=eq.{{ $json.video.id }}&published_at=is.null&status=eq.approved",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.row) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-posted-reply",
+      "name": "Code - Posted Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        3380
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Code - Resolve').first().json;\nconst c = $json;\nconst ok = c.statusCode >= 200 && c.statusCode < 300 && Array.isArray(c.body) && c.body.length > 0;\nconst fail = !ok && !(c.statusCode >= 200 && c.statusCode < 300);\nconst what = (r.video.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + r.video.name + '»';\nconst text = fail ? 'Не вдалось позначити 🙈 Відкрий відео в апці й натисни «✅ Виклала» там.'\n  : ok ? 'Позначила ✅ ' + what + ' — опубліковано. Дякую!' : what + ' уже позначено як опубліковане ✓';\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text, url: r.video_url || r.mini_app_url, button: 'Відкрити відео' } }];"
+      },
+      "executeOnce": true
+    },
+    {
       "id": "if-link-",
       "name": "IF - Link?",
       "type": "n8n-nodes-base.if",
@@ -2352,6 +2437,35 @@
         [
           {
             "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Mark Posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Mark Posted": {
+      "main": [
+        [
+          {
+            "node": "Code - Posted Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Posted Reply": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
             "type": "main",
             "index": 0
           }

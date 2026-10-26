@@ -35,7 +35,7 @@
         "tableId": "settings",
         "returnAll": true,
         "filterType": "string",
-        "filterString": "key=in.(autopublish_tg,mini_app_url,admin_chat_id)"
+        "filterString": "key=in.(autopublish_tg,video_ig_send,mini_app_url,admin_chat_id)"
       },
       "credentials": {
         "supabaseApi": {
@@ -55,7 +55,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Перемикач вимкнено / не налаштовано → нічого не робимо (жодного виклику Vercel)\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nif (s.autopublish_tg !== 'on') return [];\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\nreturn [{ json: { url: base + '/api/publish', admin_chat_id: String(s.admin_chat_id || '') } }];"
+        "jsCode": "// Обидва перемикачі вимкнено → нічого не робимо (жодного виклику Vercel); решту вирішує сервер\nconst s = {};\nfor (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;\nif (s.autopublish_tg !== 'on' && s.video_ig_send !== 'on') return [];\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nif (!base) throw new Error('settings.mini_app_url порожній');\nreturn [{ json: { url: base + '/api/publish', admin_chat_id: String(s.admin_chat_id || '') } }];"
       },
       "executeOnce": true
     },

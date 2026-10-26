@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react'
-import { ackRemount, getVideo, remountVideo, resendVideo, videoAction, type VideoAction } from '../lib/api'
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
+import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, saveVideoCaption, videoAction, type VideoAction } from '../lib/api'
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
-  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, remounting, textTimes, wmBox, words,
+  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
   type LineStyle, type RemountJob, type RemountKind, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
@@ -53,11 +53,27 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
   const [toast, setToast] = useState('')
   // звук (музика / голос) — лише після дотику: мобільний браузер грає відео зі звуком тільки за жестом
   const [muted, setMuted] = useState(true)
+  // підпис до поста (SQL 022) — зберігається окремо від плану, готове відео не скидає
+  const [cap, setCap] = useState(initial.caption ?? '')
+  const [capSaved, setCapSaved] = useState(initial.caption ?? '')
   const vref = useRef<HTMLVideoElement>(null)
   const dirty = JSON.stringify(planOf(d)) !== saved
   const montage = d.status === 'approved' && !d.final
   // перемонтаж кадрів (воркер, 30–90 с): поки йде — текст не правиться, бо воркер сам переназначить кадри текстів
   const locked = remounting(d)
+  // уже вийшло (канал або «✅ Виклала») — лише перегляд
+  const published = Boolean(d.published_at)
+  const hasCaption = d.format === 'reel' || d.platform === 'telegram'
+  const waitPublish = d.status === 'approved' && Boolean(d.final) && !published
+
+  // Готове й чекає слоту / надіслане в чат — раз на 30 с: чи вже надіслано, чи Іра натиснула «✅ Виклала» в боті
+  useEffect(() => {
+    if (!waitPublish) return
+    const x = setInterval(() => {
+      getVideo(d.id).then((v) => setD((cur) => ({ ...cur, final: v.final, delivered_at: v.delivered_at, published_at: v.published_at }))).catch(() => null)
+    }, 30000)
+    return () => clearInterval(x)
+  }, [waitPublish, d.id])
 
   // Затверджено, а готового ще нема — воркер монтує (1–2 хв): раз на 15 с питаємо, чи готове
   useEffect(() => {
@@ -168,7 +184,7 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
     try {
       const r = await videoAction(d, action, action === 'save' || action === 'approve' ? planOf(d) : undefined)
       // будь-яка правка / зміна статусу (крім «не публікувати») — старе готове відео вже не те, воркер змонтує нове
-      const n = { ...d, status: r.status, updated_at: r.updated_at, ...(action === 'skip' ? {} : { final: null, render_error: null }) }
+      const n = { ...d, status: r.status, updated_at: r.updated_at, ...(action === 'skip' ? {} : { final: null, render_error: null, delivered_at: null }) }
       setD(n)
       setSaved(JSON.stringify(planOf(n)))
       haptic('success')
@@ -178,6 +194,47 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
       haptic('error')
       setToast(e instanceof Error ? e.message : String(e))
       return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveCap = async () => {
+    if (busy) return false
+    setBusy(true)
+    try {
+      const r = await saveVideoCaption(d.id, cap)
+      setCap(r.caption)
+      setCapSaved(r.caption)
+      haptic('success')
+      setToast('Підпис збережено')
+      return true
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Затвердити разом з незбереженим підписом — щоб у слот пішов саме він
+  const approve = async () => {
+    if (cap !== capSaved && !(await saveCap())) return
+    await act('approve', d.scheduled_for ? `Затверджено ✓ Відео змонтую, а ${slotLabel(d.scheduled_for).date} о ${slotLabel(d.scheduled_for).time} ${d.dest === 'channel' ? 'викладу в канал' : 'надішлю в чат'}` : 'Затверджено ✓ Готове відео з цим текстом прийде в чат')
+  }
+
+  const posted = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await markVideoPosted(d.id)
+      setD((cur) => ({ ...cur, published_at: r.published_at }))
+      haptic('success')
+      setToast('Позначила: опубліковано ✓')
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
@@ -246,39 +303,14 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
           <span className={`chip ${d.platform === 'instagram' ? 'ig' : 'tg'}`}>{d.platform === 'instagram' ? 'Instagram' : 'Telegram'}</span>
           <span className="chip">{FORMAT[d.format]}</span>
           <span className="chip">{d.place}</span>
-          {d.status === 'approved' && <span className="chip okc">{d.final ? 'готово ✓' : 'затверджено'}</span>}
+          {published ? <span className="chip okc">опубліковано ✓</span> : d.status === 'approved' && <span className="chip okc">{d.final ? 'готово ✓' : 'затверджено'}</span>}
           {isDemo && <span className="chip warn">демо</span>}
         </div>
         <div className="serif mt-2 mb-3 text-[22px] leading-[1.15]">{d.name}</div>
 
         {d.remount && <RemountCard r={d.remount} onOk={ack} />}
 
-        {d.status === 'approved' && !dirty && (
-          <div className="card mb-3 flex items-center gap-3">
-            {d.final ? (
-              <>
-                <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
-                  <b className="block text-[14.5px]">Готове відео в чаті ✓</b>
-                  <span style={{ color: 'var(--hint)' }}>{d.final.sent_at ? `надіслано о ${hhmm(d.final.sent_at)}` : `змонтовано о ${hhmm(d.final.rendered_at)}`} · збережи в галерею й виклади</span>
-                </div>
-                <button className="btn sec shrink-0" style={{ width: 'auto', paddingInline: 14 }} disabled={busy} onClick={() => void resend()}>Надіслати ще раз</button>
-              </>
-            ) : d.render_error ? (
-              <div className="text-[13.5px] leading-snug">
-                <b className="block text-[14.5px]">Не вдалося змонтувати</b>
-                <span style={{ color: 'var(--hint)' }}>Влад уже бачить помилку. Можна «Повернути на перегляд» і затвердити ще раз.</span>
-              </div>
-            ) : (
-              <>
-                <div className="shrink-0"><Spinner /></div>
-                <div className="text-[13.5px] leading-snug">
-                  <b className="block text-[14.5px]">Монтую готове відео…</b>
-                  <span style={{ color: 'var(--hint)' }}>з цим текстом і знаком — прийде в чат за 1–2 хв</span>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+        {(d.status === 'approved' || published) && !dirty && <PublishCard d={d} busy={busy} onResend={() => void resend()} onPosted={() => void posted()} />}
 
         {/* Поки редагує текст — відео менше і «прилипає» вгорі, щоб правки було видно під час набору */}
         <div className="sticky z-10 -mx-4 px-4 pt-3 pb-2" style={{ top: -12, background: 'var(--bg)' }}>
@@ -345,13 +377,32 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
           </>
         )}
 
-        {d.status !== 'approved' && (
+        {hasCaption && (
+          <div className="card mt-3">
+            <b className="block text-[14.5px]">Підпис до поста</b>
+            <span className="text-[13px]" style={{ color: 'var(--hint)' }}>
+              {d.dest === 'channel' ? 'піде в канал разом з відео' : 'бот надішле його з відео — скопіюєш в Instagram'}
+            </span>
+            <textarea className="in mt-2" rows={5} value={cap} disabled={published} maxLength={2200}
+              placeholder={published ? '' : 'Агент ще не написав підпис — можна свій'} onChange={(e) => setCap(e.target.value)} />
+            {cap !== capSaved && !published && (
+              <div className="mt-2 flex gap-2">
+                <button className="btn sec" onClick={() => setCap(capSaved)}>Скинути</button>
+                <button className="btn" disabled={busy} onClick={() => void saveCap()}>Зберегти підпис</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {d.status !== 'approved' && !published && (
           <button className="mt-6 block w-full text-center text-[14px]" style={{ color: 'var(--bad)' }} onClick={() => void skip()}>Не публікувати це відео</button>
         )}
       </div>
 
       <div className="bbar">
-        {locked ? (
+        {published ? (
+          <button className="btn sec" onClick={onBack}>Назад</button>
+        ) : locked ? (
           <>
             <button className="btn sec" onClick={onBack}>Пізніше</button>
             <button className="btn" disabled>Перемонтовую…</button>
@@ -369,11 +420,76 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
         ) : (
           <>
             <button className="btn sec" onClick={onBack}>Пізніше</button>
-            <button className="btn" disabled={busy} onClick={() => void act('approve', 'Затверджено ✓ Готове відео з цим текстом прийде в чат')}>Затвердити</button>
+            <button className="btn" disabled={busy} onClick={() => void approve()}>Затвердити</button>
           </>
         )}
       </div>
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+// ───────────── Публікація (сет 7): чекає слоту / надіслано в чат / опубліковано ─────────────
+
+function PublishCard({ d, busy, onResend, onPosted }: { d: VideoDraft; busy: boolean; onResend: () => void; onPosted: () => void }) {
+  const s = pubState({ ...d, ready: Boolean(d.final) })
+  const slot = d.scheduled_for ? slotLabel(d.scheduled_for) : null
+  const where = d.platform === 'telegram' ? (d.dest === 'channel' ? 'Telegram-каналі' : 'Telegram') : 'Instagram'
+  const reel = d.format === 'reel'
+  const btn = { width: 'auto', paddingInline: 14 }
+  const Row = ({ posted = false, resend = 'Надіслати ще раз' }: { posted?: boolean; resend?: string }) => (
+    <div className="mt-3 flex gap-2">
+      {posted && <button className="btn" disabled={busy} onClick={onPosted}>✅ Виклала</button>}
+      <button className="btn sec" style={posted ? undefined : btn} disabled={busy} onClick={onResend}>{resend}</button>
+    </div>
+  )
+
+  if (s === 'rendering') {
+    return d.render_error ? (
+      <div className="card mb-3 text-[13.5px] leading-snug">
+        <b className="block text-[14.5px]">Не вдалося змонтувати</b>
+        <span style={{ color: 'var(--hint)' }}>Влад уже бачить помилку. Можна «Повернути на перегляд» і затвердити ще раз.</span>
+      </div>
+    ) : (
+      <div className="card mb-3 flex items-center gap-3">
+        <div className="shrink-0"><Spinner /></div>
+        <div className="text-[13.5px] leading-snug">
+          <b className="block text-[14.5px]">Монтую готове відео…</b>
+          <span style={{ color: 'var(--hint)' }}>з цим текстом і знаком — прийде в чат за 1–2 хв</span>
+        </div>
+      </div>
+    )
+  }
+  let title = '', sub = '', row: ReactNode = null
+  if (s === 'published') {
+    title = 'Опубліковано ✓'
+    sub = d.dest === 'channel' && !d.delivered_at ? `у Telegram-каналі о ${hhmm(d.published_at)}` : `в ${where} · позначено о ${hhmm(d.published_at)}`
+  } else if (s === 'delivered') {
+    title = `Надіслано тобі в чат о ${hhmm(d.delivered_at)}`
+    sub = `У чаті з ботом: відео${d.nomusic ? ' з музикою і без' : ''}${reel ? ', обкладинка' : ''}${d.caption ? ' і підпис' : ''}. Виклади в ${where} і натисни «✅ Виклала».`
+    row = <Row posted />
+  } else if (s === 'waiting' && slot) {
+    title = `Готове ✓ · чекає слоту ${slot.date} о ${slot.time}`
+    sub = d.dest === 'channel'
+      ? 'Бот сам викладе відео в канал з підписом.'
+      : `О ${slot.time} бот надішле тобі в чат відео${d.nomusic ? ' (з музикою і без)' : ''}${reel ? ', обкладинку' : ''} і підпис — лишиться викласти.`
+    sub += ' Скасувати — «Повернути на перегляд».'
+    row = <Row resend="Переглянути в чаті" />
+  } else if (s === 'sending') {
+    title = d.dest === 'channel' ? 'Слот настав — викладаю в канал…' : 'Слот настав — надсилаю тобі в чат…'
+    sub = 'За кілька хвилин.'
+  } else {
+    title = 'Готове відео в чаті ✓'
+    sub = `${slot ? `Слот ${slot.date} о ${slot.time} минув — ` : ''}${d.final?.sent_at ? `надіслано о ${hhmm(d.final.sent_at)}` : 'збережи в галерею'} · виклади й натисни «✅ Виклала».`
+    row = <Row posted />
+  }
+  return (
+    <div className="card mb-3">
+      <div className="text-[13.5px] leading-snug">
+        <b className="block text-[14.5px]">{title}</b>
+        <span style={{ color: 'var(--hint)' }}>{sub}</span>
+      </div>
+      {row}
     </div>
   )
 }

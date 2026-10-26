@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { failSchema } from '../server/schema.js'
-import { FINAL_RESET, ackRemount, cleanPlan, draftMeta, getVideo, listVideoGaps, listVideos, requestRemount, resendFinal } from '../server/video.js'
+import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, draftMeta, getVideo, listVideoGaps, listVideos, requestRemount, resendFinal, saveCaption } from '../server/video.js'
+import { markPosted } from '../server/video_publish.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -14,6 +15,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 //        перемонтаж кадрів (SQL 020, воркер montage-test/remount_worker.py, 30–90 с); поки йде — save / approve → 409.
 //        music — інший трек (сет 6), novoice — прибрати голос; голос (kind 'voice') кладе бот WF-055 сам, не апка
 //      { action: 'remount_ok', id } — Іра прочитала підсумок перемонтажу (remount.note / error)
+//      { action: 'caption', id, caption } — підпис до поста (SQL 022); готове відео не скидає → { ok, caption }
+//      { action: 'posted', id } — «✅ Виклала» (Instagram / TG вручну) → { ok, published_at }; після цього правки → 409
 // Відповідь POST → { ok, status, updated_at }. Фінальний mp4 з шарами збирає montage-test/final_worker.py (бере approved без final_path);
 // save / approve / unapprove чистять final_* — після правки воркер збирає нове відео
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -47,14 +50,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
     }
     if (b.action === 'remount_ok') return void res.json({ ok: await ackRemount(id) })
+    if (b.action === 'caption') {
+      const r = await saveCaption(id, b.caption)
+      if (!r) return void res.status(409).json({ error: PUBLISHED_ERR })
+      return void res.json({ ok: true, ...r })
+    }
+    if (b.action === 'posted') {
+      const r = await markPosted(id, user.id)
+      if (r === 'not_found') return void res.status(404).json({ error: 'not found' })
+      if (r === 'not_ready') return void res.status(409).json({ error: 'Відео ще не затверджене або не змонтоване.' })
+      return void res.json({ ok: true, ...r })
+    }
     const now = new Date().toISOString()
     const row: Record<string, unknown> = { updated_at: now }
 
-    if (b.action === 'save' || b.action === 'approve' || b.action === 'unapprove') {
+    if (b.action === 'save' || b.action === 'approve' || b.action === 'unapprove' || b.action === 'skip') {
       const meta = await draftMeta(id)
       if (!meta) return void res.status(404).json({ error: 'not found' })
+      if (meta.published) return void res.status(409).json({ error: PUBLISHED_ERR })
       // воркер перемонтовує кадри й сам переназначить тексти — правка зараз загубилась би
-      if (meta.remounting) return void res.status(409).json({ error: 'Перемонтовую кадри — зачекай хвилинку, потім зміниш текст.' })
+      if (meta.remounting && b.action !== 'skip') return void res.status(409).json({ error: 'Перемонтовую кадри — зачекай хвилинку, потім зміниш текст.' })
       if (b.action === 'save' || (b.action === 'approve' && b.plan !== undefined)) {
         const plan = cleanPlan(b.plan, meta.n, meta.dur)
         if (!plan) return void res.status(400).json({ error: 'bad plan' })

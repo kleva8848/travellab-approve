@@ -1,5 +1,6 @@
 import { db, getSettings } from './http.js'
 import { tgCall } from './publish.js'
+import { videoMode } from './publish_plan.js'
 import { kyivNow } from './schedule.js'
 
 // Сторіз / рілс: чернетки з таблиці video_drafts (SQL 018). Файли — у приватному bucket `video` (signed URL на 2 год).
@@ -20,6 +21,9 @@ type DraftRow = {
   final_path: string | null; cover_path: string | null; rendered_at: string | null; render_error: string | null; sent_at: string | null
   remount: Remount | null
   montage: Montage | null
+  // публікація (сет 7, SQL 022, server/video_publish.ts)
+  caption: string | null; nomusic_path: string | null; delivered_at: string | null; published_at: string | null
+  published_ref: { via?: string; posted_via?: string } | null
 }
 // Звук (сет 6, montage-test/music.py): трек Mixkit + точка старту; голос Іри з бота (file_id, тривалість після очистки)
 type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
@@ -29,10 +33,21 @@ type VLine = { text: string; style: string; gold: number[]; maxW?: number }
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
 
-const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage'
+const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage, caption, nomusic_path, delivered_at, published_at, published_ref'
 
 // Фінал (SQL 019, montage-test/final_worker.py) застарів після будь-якої правки / зміни статусу → воркер рендерить заново
-export const FINAL_RESET = { final_path: null, cover_path: null, rendered_at: null, render_error: null, tg_file_id: null, sent_at: null, sent_to: null }
+// (і надіслане Ірі в чат для Instagram — нове відео прийде ще раз; SQL 022)
+export const FINAL_RESET = {
+  final_path: null, cover_path: null, rendered_at: null, render_error: null, tg_file_id: null, sent_at: null, sent_to: null,
+  nomusic_path: null, delivered_at: null, publish_slot: null, published_ref: null,
+}
+export const CAPTION_MAX = 2200 // ліміт підпису Instagram
+
+// Куди піде відео в слот: TG-канал автоматом чи Ірі в чат (як server/video_publish.ts)
+async function channelOn(): Promise<boolean> {
+  const s = await getSettings(['autopublish_tg', 'tg_channel_id'])
+  return s.autopublish_tg === 'on' && s.tg_channel_id != null && String(s.tg_channel_id).trim() !== ''
+}
 
 async function sign(paths: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(paths.filter(Boolean))]
@@ -43,7 +58,7 @@ async function sign(paths: string[]): Promise<Map<string, string>> {
 }
 
 // Рядок → VideoDraft для апки (файли — signed URL)
-function view(d: DraftRow, urls: Map<string, string>) {
+function view(d: DraftRow, urls: Map<string, string>, channel: boolean) {
   const plan = d.plan ?? ({} as Plan)
   return {
     id: d.id, name: d.name, format: d.format, platform: d.platform, place: d.place, hotel_id: d.hotel_id, dur: Number(d.dur),
@@ -58,6 +73,10 @@ function view(d: DraftRow, urls: Map<string, string>) {
     remount: d.remount ? { state: d.remount.state, kind: d.remount.kind, note: d.remount.note ?? [], error: d.remount.error ?? null } : null,
     music: d.montage?.music ? { title: d.montage.music.title, artist: d.montage.music.artist, mood: d.montage.music.mood } : null,
     voice: d.montage?.voice ? { dur: Number(d.montage.voice.dur) } : null,
+    // публікація: dest — куди в слот (channel — TG-канал автоматом, chat — Ірі в чат «виклади зараз»);
+    // delivered_at — надіслано в чат; published_at — вийшло (канал) або Іра натиснула «✅ Виклала»
+    caption: d.caption ?? '', nomusic: Boolean(d.nomusic_path), dest: videoMode(d, channel),
+    delivered_at: d.delivered_at ?? null, published_at: d.published_at ?? null,
   }
 }
 
@@ -75,10 +94,14 @@ export async function listVideos() {
   const r = await db().from('video_drafts').select(COLS).neq('status', 'skipped').order('created_at', { ascending: false }).limit(30)
   if (r.error) throw r.error
   const rows = (r.data ?? []) as DraftRow[]
-  const urls = await sign(rows.map((d) => d.poster_path))
+  const [urls, channel] = await Promise.all([sign(rows.map((d) => d.poster_path)), channelOn()])
   return rows.map((d) => {
-    const v = view(d, urls)
-    return { id: v.id, name: v.name, format: v.format, platform: v.platform, place: v.place, dur: v.dur, poster: v.poster, status: v.status, scheduled_for: v.scheduled_for, ready: Boolean(v.final), remounting: v.remount?.state === 'queued' || v.remount?.state === 'running' }
+    const v = view(d, urls, channel)
+    return {
+      id: v.id, name: v.name, format: v.format, platform: v.platform, place: v.place, dur: v.dur, poster: v.poster, status: v.status, scheduled_for: v.scheduled_for,
+      ready: Boolean(v.final), remounting: v.remount?.state === 'queued' || v.remount?.state === 'running',
+      dest: v.dest, delivered_at: v.delivered_at, published_at: v.published_at,
+    }
   })
 }
 
@@ -95,16 +118,27 @@ export async function getVideo(id: string) {
   if (r.error) throw r.error
   if (!r.data) return 'not_found'
   const d = r.data as DraftRow
-  const [urls, voice_link] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).map((s) => s.thumb_path)]), voiceLink(d.id)])
-  return { ...view(d, urls), voice_link }
+  const [urls, voice_link, channel] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).map((s) => s.thumb_path)]), voiceLink(d.id), channelOn()])
+  return { ...view(d, urls, channel), voice_link }
 }
 
-export async function draftMeta(id: string): Promise<{ n: number; dur: number; remounting: boolean } | null> {
-  const r = await db().from('video_drafts').select('shots, dur, remount').eq('id', id).maybeSingle()
+// published — уже вийшло: правити, перемонтовувати й повертати на перегляд пізно
+export async function draftMeta(id: string): Promise<{ n: number; dur: number; remounting: boolean; published: boolean } | null> {
+  const r = await db().from('video_drafts').select('shots, dur, remount, published_at').eq('id', id).maybeSingle()
   if (r.error) throw r.error
   if (!r.data) return null
   const state = (r.data.remount as Remount | null)?.state
-  return { n: ((r.data.shots ?? []) as unknown[]).length, dur: Number(r.data.dur), remounting: state === 'queued' || state === 'running' }
+  return { n: ((r.data.shots ?? []) as unknown[]).length, dur: Number(r.data.dur), remounting: state === 'queued' || state === 'running', published: Boolean(r.data.published_at) }
+}
+
+export const PUBLISHED_ERR = 'Це відео вже опубліковане — змінити його не можна.'
+
+// Підпис до поста: лише текст, без перемонтажу й без скидання готового відео (воркер підпис не рендерить)
+export async function saveCaption(id: string, raw: unknown) {
+  const caption = String(raw ?? '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, CAPTION_MAX)
+  const r = await db().from('video_drafts').update({ caption }).eq('id', id).is('published_at', null).select('id')
+  if (r.error) throw r.error
+  return r.data?.length ? { caption } : null
 }
 
 // ───────────── Перемонтаж кадрів (SQL 020) ─────────────
@@ -117,6 +151,7 @@ export async function requestRemount(id: string, b: Record<string, unknown>, use
   const meta = await draftMeta(id)
   if (!meta) return { code: 404, error: 'not found' }
   if (meta.remounting) return { code: 409, error: 'Уже перемонтовую — зачекай хвилинку.' }
+  if (meta.published) return { code: 409, error: PUBLISHED_ERR }
   const job: Record<string, unknown> = { kind: b.kind }
   if (b.kind === 'remove' || b.kind === 'replace') {
     const shot = Number(b.shot)
@@ -136,7 +171,7 @@ export async function requestRemount(id: string, b: Record<string, unknown>, use
   let q = db().from('video_drafts').update({
     remount: { ...job, state: 'queued', at: now, by: userId },
     status: 'ready_for_review', approved_at: null, approved_by: null, ...FINAL_RESET, updated_at: now,
-  }).eq('id', id).neq('status', 'skipped').or(IDLE)
+  }).eq('id', id).neq('status', 'skipped').is('published_at', null).or(IDLE)
   if (b.expected_updated_at) q = q.eq('updated_at', String(b.expected_updated_at))
   const r = await q.select('status, updated_at')
   if (r.error) throw r.error

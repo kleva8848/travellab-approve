@@ -7,6 +7,7 @@
 // (n8n/story_prompt.mjs) і друга кнопка «🎙 Розповісти історію» → бот (?start=story). Якщо в story_queue уже є нова
 // історія — лише «історія на суботу вже є», без питання.
 // Відео (26.10, сет 5): «🎬 Відео готово на перегляд: N» (video_drafts) і «📹 Бракує кадрів: <тема>» (video_slots, SQL 021).
+// Сет 7 (SQL 022): «🎬 Відео сьогодні: 19:00 рілс «…» — о 19:00 надішлю в чат / викладу в канал / ще не затверджено / чекає «✅ Виклала»».
 import { readFileSync, writeFileSync } from 'node:fs'
 import { STORY_HINT_JS } from './story_prompt.mjs'
 import { dirname, join } from 'node:path'
@@ -87,7 +88,21 @@ if (inWork.length) parts.push('\\n🔄 Агент переробляє: ' + inWo
 // Відео (SQL 018/021, montage-test/video_agent.py): готові чернетки сторіз/рілс і слоти, де агенту бракує кадрів.
 // Таблиць ще нема → вузли з onError=continue дають рядок {error} без id → просто не показуємо
 const vday = v => DateTime.fromISO(String(v)).setZone(zone).setLocale('uk').toFormat('ccc dd.MM');
-const vids = $('Supabase - Get Video Drafts').all().map(i => i.json).filter(j => j && j.id);
+const allVids = $('Supabase - Get Video Drafts').all().map(i => i.json).filter(j => j && j.id);
+const vids = allVids.filter(v => v.status === 'ready_for_review');
+// на сьогодні (за Києвом): затверджені й ще ні; опубліковані не показуємо
+const vtime = v => DateTime.fromISO(String(v.scheduled_for)).setZone(zone);
+const toChannel = v => v.platform === 'telegram' && s.autopublish_tg === 'on' && s.tg_channel_id;
+const vToday = allVids.filter(v => v.scheduled_for && !v.published_at && vtime(v).toFormat('yyyy-MM-dd') === today)
+  .sort((a, b) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)));
+const vState = v => {
+  const at = vtime(v).toFormat('HH:mm');
+  if (v.status !== 'approved') return 'ще не затверджено — затверди до ' + at + ', щоб встигло змонтуватись';
+  if (v.delivered_at) return 'надіслано в чат — виклади й натисни «✅ Виклала»';
+  if (!v.final_path) return 'монтується — о ' + at + (toChannel(v) ? ' викладу в канал' : ' надішлю в чат');
+  return toChannel(v) ? 'готове, о ' + at + ' викладу в канал сам' : 'готове, о ' + at + ' надішлю в чат з підписом — лишиться викласти';
+};
+if (vToday.length) parts.push('\\n🎬 Відео сьогодні:\\n' + vToday.map(v => '• ' + vtime(v).toFormat('HH:mm') + ' ' + (v.format === 'reel' ? 'рілс' : 'сторіз') + ' «' + v.name + '» — ' + vState(v)).join('\\n'));
 const gaps = $('Supabase - Get Video Gaps').all().map(i => i.json).filter(j => j && j.plan_id && String(j.scheduled_for) >= today)
   .sort((a, b) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)));
 if (vids.length) parts.push('\\n🎬 Відео готово на перегляд: ' + vids.length + '\\n' + vids.slice(0, 5).map(v => '• ' + (v.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + v.name + '»' + (v.scheduled_for ? ' — на ' + vday(v.scheduled_for) : '')).join('\\n'));
@@ -104,7 +119,7 @@ if (storyDow && now.weekday === storyDow) {
     story_url = 'https://t.me/' + String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '') + '?start=story';
   }
 }
-if (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url && !vids.length && !gaps.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');
+if (!todayPosts.length && !missed.length && !review.length && !needData.length && !story_url && !vids.length && !gaps.length && !vToday.length) parts.push('\\nВсе чисто — можна відпочивати 🌴');
 for (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: parts.join('\\n'), url: base, button: 'Відкрити застосунок', story_url } });
 return out;`
 
@@ -130,7 +145,7 @@ const nodes = [
   node('Supabase - Get Audiences', 'n8n-nodes-base.supabase', 1, { operation: 'getAll', tableId: 'audiences', returnAll: true },
     { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Supabase - Get Video Drafts', 'n8n-nodes-base.supabase', 1, {
-    operation: 'getAll', tableId: 'video_drafts', returnAll: true, filterType: 'string', filterString: 'status=eq.ready_for_review',
+    operation: 'getAll', tableId: 'video_drafts', returnAll: true, filterType: 'string', filterString: 'status=in.(ready_for_review,approved)',
   }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Supabase - Get Video Gaps', 'n8n-nodes-base.supabase', 1, {
     operation: 'getAll', tableId: 'video_slots', returnAll: true, filterType: 'string', filterString: 'state=eq.gap',

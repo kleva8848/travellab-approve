@@ -57,7 +57,16 @@ export type VideoDraft = {
   music?: { title: string; artist: string; mood: string } | null
   voice?: { dur: number } | null
   voice_link?: string | null
+  // публікація (сет 7, SQL 022): підпис до поста; рілс має ще версію без музики; dest — куди в слот:
+  // channel — TG-канал автоматом, chat — Ірі в чат «виклади зараз»; delivered_at — надіслано в чат; published_at — вийшло / «✅ Виклала»
+  scheduled_for?: string | null
+  caption?: string
+  nomusic?: boolean
+  dest?: Dest
+  delivered_at?: string | null
+  published_at?: string | null
 }
+export type Dest = 'channel' | 'chat'
 export type RemountKind = 'remove' | 'replace' | 'reorder' | 'shorter' | 'music' | 'voice' | 'novoice'
 export type RemountState = 'queued' | 'running' | 'done' | 'error'
 export type RemountJob = { kind: Exclude<RemountKind, 'voice'>; shot?: number; order?: number[] }
@@ -65,10 +74,35 @@ export const MOOD: Record<string, string> = { calm: 'спокійна', romantic
 export const remounting = (d: Pick<VideoDraft, 'remount'>) => d.remount?.state === 'queued' || d.remount?.state === 'running'
 
 // Картка на «Сьогодні»
-export type VideoCard = Pick<VideoDraft, 'id' | 'name' | 'format' | 'platform' | 'place' | 'dur' | 'poster' | 'status'> & { scheduled_for?: string | null; ready?: boolean; remounting?: boolean }
+export type VideoCard = Pick<VideoDraft, 'id' | 'name' | 'format' | 'platform' | 'place' | 'dur' | 'poster' | 'status' | 'scheduled_for' | 'dest' | 'delivered_at' | 'published_at'> & { ready?: boolean; remounting?: boolean }
 // Слот плану, на який агент (montage-test/video_agent.py) не склав відео — бракує кадрів (SQL 021 video_slots)
 export type VideoGap = { plan_id: string; scheduled_for: string; format: 'stories' | 'reel'; topic: string; need: string | null }
 export type VideoList = { items: VideoCard[]; gaps: VideoGap[] }
+// Слот за Києвом: «Вт 27.10 о 19:00» (date — «Вт 27.10», time — «19:00»)
+export function slotLabel(iso: string) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('uk-UA', { timeZone: 'Europe/Kyiv', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(iso)).map((x) => [x.type, x.value]))
+  const wd = String(p.weekday ?? '').replace(/^./, (c) => c.toUpperCase())
+  return { date: `${wd} ${p.day}.${p.month}`, time: `${p.hour}:${p.minute}` }
+}
+
+// Скільки після слоту ще чекаємо відправку (n8n кожні 5 хв + рендер) — далі «час минув, виклади вручну»; як CHAT_WINDOW_MIN / grace у server/publish_plan.ts
+const CHAT_WINDOW_MS = 24 * 60 * 60_000
+const CHANNEL_WINDOW_MS = 60 * 60_000
+
+// Стан публікації затвердженого відео — для бейджа на «Сьогодні» і картки в редакторі
+export type PubState = 'published' | 'delivered' | 'rendering' | 'waiting' | 'sending' | 'manual'
+export function pubState(v: Pick<VideoDraft, 'status' | 'scheduled_for' | 'dest' | 'delivered_at' | 'published_at'> & { ready: boolean }, now = Date.now()): PubState | null {
+  if (v.published_at) return 'published'
+  if (v.status !== 'approved') return null
+  if (v.delivered_at) return 'delivered'
+  if (!v.ready) return 'rendering'
+  const at = v.scheduled_for ? Date.parse(v.scheduled_for) : NaN
+  if (!Number.isFinite(at)) return 'manual'
+  if (at > now) return 'waiting'
+  return now - at < (v.dest === 'channel' ? CHANNEL_WINDOW_MS : CHAT_WINDOW_MS) ? 'sending' : 'manual'
+}
+
 // Те, що Іра правує і що зберігає /api/video (решта — файли й межі кадрів — з Mac)
 export type VideoPlan = Pick<VideoDraft, 'texts' | 'wm' | 'cover'>
 export const planOf = (d: VideoDraft): VideoPlan => ({ texts: d.texts, wm: d.wm, cover: d.cover })
@@ -142,6 +176,8 @@ const DEMO: VideoDraft[] = [
 // Правки в демо живуть, поки відкрита апка (повернулась до списку — нічого не загубилось)
 const store = new Map(DEMO.map((d) => [d.id, structuredClone(d)]))
 export const demoVideos = () => [...store.values()].filter((d) => d.status !== 'skipped').map((d) => ({ ...d, ready: Boolean(d.final) }))
+// демо: підпис і «✅ Виклала» живуть у тому ж сховищі
+export const patchDemoVideo = (id: string, p: Partial<VideoDraft>) => { const d = store.get(id); if (d) store.set(id, { ...d, ...p }) }
 export const demoVideo = (id: string) => structuredClone(store.get(id) ?? DEMO[0])
 export const saveDemoVideo = (d: VideoDraft) => void store.set(d.id, structuredClone(d))
 export const demoVideoGaps: VideoGap[] = [

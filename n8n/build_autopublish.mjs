@@ -4,6 +4,9 @@
 // рендер, відправка в канал, замок, статус published, повідомлення Владу про помилку публікації) — у Vercel server/publish.ts.
 // Тут лише розклад + повідомлення Владу, якщо сам ендпоінт недоступний. Створюється НЕАКТИВНИМ (чекає каналу Іри).
 // Перевірка без відправки: curl -X POST {mini_app_url}/api/publish -H 'X-TL-Secret: …' -d '{"dry_run":true}'
+// Сет 7 (26.10): той самий виклик публікує й готові сторіз/рілс (server/video_publish.ts): TG-канал авто, Instagram — Ірі в чат.
+// Тому кличемо Vercel щоразу, коли є mini_app_url: пости сервер і далі пропускає при autopublish_tg = off,
+// відео в чат Іри — при video_ig_send = on (SQL 022). Активувати воркфлоу — після SQL 022 і пушу.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,10 +20,10 @@ const CFG = {
 let x = 0
 const node = (name, type, typeVersion, parameters, extra = {}) => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), name, type, typeVersion, position: [(x += 220), extra.y ?? 0], parameters, ...extra })
 
-const prepare = `// Перемикач вимкнено / не налаштовано → нічого не робимо (жодного виклику Vercel)
+const prepare = `// Обидва перемикачі вимкнено → нічого не робимо (жодного виклику Vercel); решту вирішує сервер
 const s = {};
 for (const r of $('Supabase - Get Settings').all()) s[r.json.key] = r.json.value;
-if (s.autopublish_tg !== 'on') return [];
+if (s.autopublish_tg !== 'on' && s.video_ig_send !== 'on') return [];
 const base = String(s.mini_app_url || '').replace(/\\/$/, '');
 if (!base) throw new Error('settings.mini_app_url порожній');
 return [{ json: { url: base + '/api/publish', admin_chat_id: String(s.admin_chat_id || '') } }];`
@@ -29,7 +32,7 @@ const nodes = [
   node('Schedule - Every 5 min', 'n8n-nodes-base.scheduleTrigger', 1.2, { rule: { interval: [{ field: 'minutes', minutesInterval: 5 }] } }),
   node('Supabase - Get Settings', 'n8n-nodes-base.supabase', 1, {
     operation: 'getAll', tableId: 'settings', returnAll: true,
-    filterType: 'string', filterString: 'key=in.(autopublish_tg,mini_app_url,admin_chat_id)',
+    filterType: 'string', filterString: 'key=in.(autopublish_tg,video_ig_send,mini_app_url,admin_chat_id)',
   }, { credentials: { supabaseApi: CFG.supabase }, executeOnce: true }),
   node('Code - Check Switch', 'n8n-nodes-base.code', 2, { jsCode: prepare }, { executeOnce: true }),
   node('HTTP - Publish Due Posts', 'n8n-nodes-base.httpRequest', 4.2, {

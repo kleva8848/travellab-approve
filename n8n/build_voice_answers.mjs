@@ -24,6 +24,8 @@
 // «🎙 Голос до відео» (26.10, сет 6): кнопка в апці «Озвучити голосом» → /start vo_<draft_id> → бот просить голосове
 // з force_reply і прихованим маркером ?start=vo_<id> → голосове у відповідь → заявка video_drafts.remount {kind: voice, file_id}
 // (лише якщо відео не монтується) → воркер на Mac (montage-test/remount_worker.py): очистка, Whisper, субтитри, кадри під голос.
+// «✅ Виклала» (26.10, сет 7): Vercel /api/publish у слот шле Ірі в чат готове відео + підпис з кнопкою callback vpub_<draft_id> →
+// video_drafts.published_at (лише якщо ще порожньо) → «Позначила ✅» + кнопка відкрити відео в апці.
 // /help або /start — меню кнопок (усі дії без набору тексту). Кнопки callback (video_ask / video_ready / story / help)
 // = ті самі команди: Normalize перетворює callback_query на текст, бот одразу відповідає answerCallbackQuery.
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -78,6 +80,8 @@ const b = $json.body && typeof $json.body === 'object' && ($json.body.message ||
 // натиснута кнопка = та сама команда текстом
 const CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help' };
 const cq = b.callback_query || null;
+// «✅ Виклала» під відео, яке бот надіслав у слот (server/video_publish.ts)
+const vp = cq ? String(cq.data || '').match(/^vpub_([0-9a-f-]{36})$/i) : null;
 const m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});
 const text = String(m.text || m.caption || '').trim();
 const file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;
@@ -86,6 +90,7 @@ let planId = null, how = 'none', videoId = null;
 // «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео
 const vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);
 if (vo) videoId = vo[1].toLowerCase();
+if (vp) videoId = vp[1].toLowerCase();
 const st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);
 if (st) { planId = st[1].toLowerCase(); how = 'start'; }
 // «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст
@@ -106,6 +111,7 @@ if (!planId && r) {
 }
 let route = 'ignore';
 if (!m.chat || !m.from || m.from.is_bot) route = 'ignore';
+else if (vp) route = 'vpub';
 else if (vo) route = 'vo_ask';
 else if (how === 'vo') route = 'vo';
 else if (st) route = 'ask';
@@ -132,6 +138,13 @@ if (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...o
 if (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];
 if (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];
 if (n.route === 'story') return [{ json: out }];
+if (n.route === 'vpub') {
+  const v = all('Supabase - Get Video Draft')[0] || null;
+  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];
+  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, published_at: v.published_at || null },
+    row: { published_at: new Date().toISOString(), published_ref: { ...(v.published_ref || {}), posted_via: 'bot', posted_by: Number(n.from_id) } },
+    video_url: base ? base + '/?startapp=video_' + v.id : base } }];
+}
 if (n.route === 'vo_ask' || n.route === 'vo') {
   const v = all('Supabase - Get Video Draft')[0] || null;
   if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];
@@ -194,6 +207,16 @@ const T = {
 const k = r.route === 'answer' ? 'none' : r.route;
 const kind = (k === 'help' || !T[k]) ? 'menu' : 'button';
 return [{ json: { chat_id: r.chat_id, kind, text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];`
+
+// «✅ Виклала»: позначка стала (рядок повернувся) або вже стояла раніше
+const posted = `const r = $('Code - Resolve').first().json;
+const c = $json;
+const ok = c.statusCode >= 200 && c.statusCode < 300 && Array.isArray(c.body) && c.body.length > 0;
+const fail = !ok && !(c.statusCode >= 200 && c.statusCode < 300);
+const what = (r.video.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + r.video.name + '»';
+const text = fail ? 'Не вдалось позначити 🙈 Відкрий відео в апці й натисни «✅ Виклала» там.'
+  : ok ? 'Позначила ✅ ' + what + ' — опубліковано. Дякую!' : what + ' уже позначено як опубліковане ✓';
+return [{ json: { chat_id: r.chat_id, kind: 'button', text, url: r.video_url || r.mini_app_url, button: 'Відкрити відео' } }];`
 
 const resolveText = `// Текст відповіді: розшифровка голосового або текст як є
 const r = $('Code - Resolve').first().json;
@@ -444,7 +467,7 @@ const coreNodes = [
     "={{ 'id=eq.' + ($('Code - Normalize').first().json.video_id || '00000000-0000-0000-0000-000000000000') }}", { onError: 'continueRegularOutput', y: -200 }),
   node('Code - Resolve', 'n8n-nodes-base.code', 2, 1760, { jsCode: resolve }, { executeOnce: true }),
   node('Switch - Route', 'n8n-nodes-base.switch', 3.2, 1980, {
-    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story', 'video_ask', 'video_ready', 'vo_ask', 'vo', 'vo_gone'].map((k) => ({
+    rules: { values: ['ask', 'answer', 'help', 'unresolved', 'gone', 'story_ask', 'story', 'video_ask', 'video_ready', 'vo_ask', 'vo', 'vo_gone', 'vpub'].map((k) => ({
       conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 }, combinator: 'and',
         conditions: [{ id: 'r-' + k, leftValue: '={{ $json.route }}', rightValue: k, operator: { type: 'string', operation: 'equals' } }] },
       renameOutput: true, outputKey: k,
@@ -539,6 +562,11 @@ const coreNodes = [
     "={{ $json.supabase_url }}/rest/v1/video_drafts?id=eq.{{ $json.video.id }}&status=neq.skipped&or=(remount.is.null,remount->>state.in.(done,error))",
     '={{ JSON.stringify($json.row) }}', { prefer: 'return=representation', y: 11 * Y }),
   node('Code - Video Voice Saved', 'n8n-nodes-base.code', 2, 2860, { jsCode: voSaved }, { executeOnce: true, y: 11 * Y }),
+  // «✅ Виклала» — ряд під «Голос до відео»; позначаємо лише якщо ще не опубліковано
+  rest('HTTP - Mark Posted', 2200, 'PATCH',
+    "={{ $json.supabase_url }}/rest/v1/video_drafts?id=eq.{{ $json.video.id }}&published_at=is.null&status=eq.approved",
+    '={{ JSON.stringify($json.row) }}', { prefer: 'return=representation', y: 13 * Y }),
+  node('Code - Posted Reply', 'n8n-nodes-base.code', 2, 2420, { jsCode: posted }, { executeOnce: true, y: 13 * Y }),
   ifNode('IF - Link?', 6160, "={{ $json.kind === 'link' }}", { y: Y * 1.5 }),
   node('Telegram - Reply (link)', 'n8n-nodes-base.telegram', 1.2, 6380, {
     chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
@@ -590,7 +618,9 @@ const coreConnections = {
     [{ node: 'Code - Video Voice Ask', type: 'main', index: 0 }],
     [{ node: 'Code - Video Voice Check', type: 'main', index: 0 }],
     [{ node: 'Code - Simple Reply', type: 'main', index: 0 }],
+    [{ node: 'HTTP - Mark Posted', type: 'main', index: 0 }],
   ] },
+  ...chain('HTTP - Mark Posted', 'Code - Posted Reply', 'Code - Reply'),
   'Code - Video Voice Ask': to('Code - Reply'),
   'Code - Video Voice Check': to('IF - Voice OK?'),
   'IF - Voice OK?': branches('HTTP - Queue Voice', 'Code - Video Voice Retry'),

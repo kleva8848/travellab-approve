@@ -1,7 +1,7 @@
 import { AudienceCard } from './AudienceCard'
 import type { Me, QueueItem, StoryInfo } from '../lib/api'
 import { haptic, openTelegram } from '../lib/tg'
-import type { VideoCard, VideoGap, VideoList } from '../lib/video'
+import { pubState, slotLabel, type PubState, type VideoCard, type VideoGap, type VideoList } from '../lib/video'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
@@ -34,7 +34,8 @@ export function TodayScreen({ me, queue, story, videos, queueError, onOpen, onOp
   const reviewing = waiting.filter((q) => !asking.includes(q))
   const working = (queue ?? []).filter((q) => q.review_status === 'regenerating')
   const approved = (queue ?? []).filter((q) => q.review_status === 'approved')
-  const videosWaiting = (videos?.items ?? []).some((v) => v.status === 'ready_for_review')
+  // чекає Іру: перегляд або «надіслано в чат — виклади»
+  const videosWaiting = (videos?.items ?? []).some((v) => v.status === 'ready_for_review' || (v.delivered_at && !v.published_at))
   const allDone = queue && !waiting.length && !working.length && !videosWaiting
 
   return (
@@ -80,7 +81,7 @@ export function TodayScreen({ me, queue, story, videos, queueError, onOpen, onOp
             </div>
           )}
 
-          {videos && videos.items.length > 0 && <Videos items={videos.items} onOpen={onOpenVideo} />}
+          {videos && shownVideos(videos.items).length > 0 && <Videos items={shownVideos(videos.items)} onOpen={onOpenVideo} />}
           {videos && videos.gaps.length > 0 && <VideoGaps gaps={videos.gaps} />}
           <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
@@ -120,6 +121,20 @@ function slotDay(s: string) {
   return `${WD[new Date(`${ymd}T12:00:00Z`).getUTCDay()]} ${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`
 }
 
+// Опубліковане тримаємо на «Сьогодні» ще добу — щоб Іра бачила «опубліковано ✓», далі прибираємо
+const shownVideos = (items: VideoCard[]) => items.filter((v) => !v.published_at || Date.now() - Date.parse(v.published_at) < 24 * 60 * 60_000)
+
+// Бейдж публікації (сет 7): ok — зелений, wait — темний, act — золотий (Ірі треба щось зробити)
+function pubBadge(v: VideoCard, s: PubState): [string, 'ok' | 'wait' | 'act'] {
+  if (s === 'published') return ['опубліковано', 'ok']
+  if (s === 'delivered') return ['виклади зараз', 'act']
+  if (s === 'rendering') return ['монтую…', 'wait']
+  if (s === 'waiting') return [`чекає ${slotLabel(v.scheduled_for!).time}`, 'ok']
+  if (s === 'sending') return [v.dest === 'channel' ? 'викладаю…' : 'надсилаю…', 'wait']
+  return ['готово ✓', 'ok']
+}
+const BADGE_BG = { ok: 'var(--ok)', wait: 'rgba(0,0,0,.55)', act: '#C9B27C' }
+
 // Сторіз / рілс на перегляд: обкладинка 9:16 + назва (у демо — 3 тестові з lib/video); з автоконвеєра — ще й день слоту
 function Videos({ items, onOpen }: { items: VideoCard[]; onOpen: (id: string) => void }) {
   const ready = items.filter((v) => v.status === 'ready_for_review').length
@@ -134,11 +149,12 @@ function Videos({ items, onOpen }: { items: VideoCard[]; onOpen: (id: string) =>
               <span className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.5)', color: '#fff' }}>{v.format === 'reel' ? 'рілс' : 'сторіз'} · {Math.round(v.dur)}с</span>
               {v.remounting ? (
                 <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.55)', color: '#fff' }}>перемонтовую…</span>
-              ) : v.status === 'approved' && (
-                <span className="absolute right-1.5 bottom-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: v.ready ? 'var(--ok)' : 'rgba(0,0,0,.55)', color: '#fff' }}>
-                  {v.ready ? 'готово ✓' : 'монтую…'}
-                </span>
-              )}
+              ) : (() => {
+                const s = pubState({ ...v, ready: Boolean(v.ready) })
+                if (!s) return null
+                const [text, tone] = pubBadge(v, s)
+                return <span className="absolute right-1.5 bottom-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px]" style={{ background: BADGE_BG[tone], color: '#fff' }}>{text}</span>
+              })()}
             </span>
             <b className="mt-1.5 block text-[13px] leading-tight">{v.name}</b>
             <span className="text-[12px]" style={{ color: 'var(--hint)' }}>{[v.scheduled_for && `на ${slotDay(v.scheduled_for)}`, v.place].filter(Boolean).join(' · ')}</span>

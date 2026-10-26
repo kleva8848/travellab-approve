@@ -1,5 +1,5 @@
 import { isDemo, tg } from './tg'
-import { demoVideo, demoVideoGaps, demoVideos, saveDemoVideo, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
+import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
 export class ApiError extends Error {
   status: number
@@ -310,6 +310,27 @@ export async function resendVideo(id: string): Promise<{ sent_at: string }> {
     return { sent_at: new Date().toISOString() }
   }
   return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'resend', id }) })
+}
+
+// Підпис до поста (SQL 022): окремо від плану — готове відео не скидається
+export async function saveVideoCaption(id: string, caption: string): Promise<{ caption: string }> {
+  if (isDemo) {
+    await wait(200)
+    patchDemoVideo(id, { caption })
+    return { caption }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'caption', id, caption }) })
+}
+
+// «✅ Виклала» (Instagram — Іра викладає сама; те саме робить кнопка в боті)
+export async function markVideoPosted(id: string): Promise<{ published_at: string }> {
+  if (isDemo) {
+    await wait(200)
+    const published_at = new Date().toISOString()
+    patchDemoVideo(id, { published_at })
+    return { published_at }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'posted', id }) })
 }
 
 // Перемонтаж кадрів (SQL 020): заявка воркеру → { status, updated_at }; стан потім — getVideo(id).remount
