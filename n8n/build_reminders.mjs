@@ -109,6 +109,8 @@ for (const chat_id of chats) out.push({ json: { kind: 'digest', chat_id, text: p
 return out;`
 
 const tgCreds = { credentials: { telegramApi: CFG.telegram } }
+// Текст як є: без parse_mode вузол шле Markdown, і «_» у назві (personal_take) ламав дайджест (26.10, exec 76463) → HTML з екрануванням
+const TEXT_HTML = "={{ $json.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }}"
 const always = { executeOnce: true, alwaysOutputData: true }
 const nodes = [
   node('Schedule - Every 5 min', 'n8n-nodes-base.scheduleTrigger', 1.2, { rule: { interval: [{ field: 'minutes', minutesInterval: 5 }] } }),
@@ -141,17 +143,17 @@ const nodes = [
   }),
   // дайджест з другою кнопкою: url-кнопка в чат з ботом (/start story), не web_app
   node('Telegram - Send With Story', 'n8n-nodes-base.telegram', 1.2, {
-    chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+    chatId: '={{ $json.chat_id }}', text: TEXT_HTML, replyMarkup: 'inlineKeyboard',
     inlineKeyboard: { rows: [
       { row: { buttons: [{ text: '🎙 Розповісти історію', additionalFields: { url: '={{ $json.story_url }}' } }] } },
       { row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } },
     ] },
-    additionalFields: { appendAttribution: false },
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML' },
   }, { ...tgCreds, onError: 'continueRegularOutput' }),
   node('Telegram - Send', 'n8n-nodes-base.telegram', 1.2, {
-    chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+    chatId: '={{ $json.chat_id }}', text: TEXT_HTML, replyMarkup: 'inlineKeyboard',
     inlineKeyboard: { rows: [{ row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } }] },
-    additionalFields: { appendAttribution: false },
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML' },
   }, { ...tgCreds, onError: 'continueRegularOutput' }),
   node('IF - Reminder Sent?', 'n8n-nodes-base.if', 2.2, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
