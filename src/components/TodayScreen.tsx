@@ -2,6 +2,7 @@ import { AudienceCard } from './AudienceCard'
 import type { Me, QueueItem, StoryInfo } from '../lib/api'
 import { haptic, openTelegram } from '../lib/tg'
 import { pubState, slotLabel, type PubState, type VideoCard, type VideoGap, type VideoList } from '../lib/video'
+import { matchFilter, PlatformFilter, type Filter } from './CalendarScreen'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
@@ -19,21 +20,22 @@ function greeting(h: number) {
 // Звертання в кличному відмінку для відомих імен, інакше як є
 const VOCATIVE: Record<string, string> = { 'Іра': 'Іро', 'Ira': 'Іро', 'Ірина': 'Ірино', 'Влад': 'Владе', 'Vlad': 'Владе' }
 
-type Props = { me: Me; queue: QueueItem[] | null; story: StoryInfo | null; videos: VideoList | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
+type Props = { me: Me; queue: QueueItem[] | null; filter: Filter; setFilter: (f: Filter) => void; story: StoryInfo | null; videos: VideoList | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
 
 const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
-export function TodayScreen({ me, queue, story, videos, queueError, onOpen, onOpenVideo, onRetry }: Props) {
+export function TodayScreen({ me, queue, filter, setFilter, story, videos, queueError, onOpen, onOpenVideo, onRetry }: Props) {
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
-  const waiting = (queue ?? []).filter((q) => WAITING.has(q.review_status))
+  const posts = (queue ?? []).filter((q) => matchFilter(filter, q))
+  const waiting = posts.filter((q) => WAITING.has(q.review_status))
   // Пости, де агенту бракує фактів, — окремо: там не перегляд, а питання до Іри
   const asking = waiting.filter((q) => q.review_status === 'needs_data' && q.questions)
   const reviewing = waiting.filter((q) => !asking.includes(q))
-  const working = (queue ?? []).filter((q) => q.review_status === 'regenerating')
-  const approved = (queue ?? []).filter((q) => q.review_status === 'approved')
+  const working = posts.filter((q) => q.review_status === 'regenerating')
+  const approved = posts.filter((q) => q.review_status === 'approved')
   // чекає Іру: перегляд або «надіслано в чат — виклади»
   const videosWaiting = (videos?.items ?? []).some((v) => v.status === 'ready_for_review' || (v.delivered_at && !v.published_at))
   const allDone = queue && !waiting.length && !working.length && !videosWaiting
@@ -64,6 +66,7 @@ export function TodayScreen({ me, queue, story, videos, queueError, onOpen, onOp
         <div className="flex justify-center py-8"><Spinner /></div>
       ) : (
         <>
+          <div className="mb-3"><PlatformFilter value={filter} onChange={setFilter} /></div>
           {waiting.length > 0 && (
             <button className="card flex w-full items-center gap-3.5 text-left" onClick={() => { haptic('tap'); onOpen(waiting[0].id) }}>
               <span className="serif min-w-[38px] text-[44px] leading-none">{waiting.length}</span>

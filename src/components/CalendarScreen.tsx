@@ -6,7 +6,7 @@ import { Inquiries } from './Inquiries'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Label } from './ui'
 
-type Filter = 'all' | 'telegram' | 'instagram' | 'threads'
+export type Filter = 'all' | 'telegram' | 'instagram' | 'threads'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Усі' },
@@ -14,6 +14,31 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'instagram', label: 'IG' },
   { id: 'threads', label: 'Threads' },
 ]
+
+// Фільтр платформи — один на «Сьогодні» і «Календар», вибір пам'ятаємо між відкриттями
+const FILTER_KEY = 'tl_platform_filter'
+export function loadFilter(): Filter {
+  try {
+    const v = localStorage.getItem(FILTER_KEY)
+    return FILTERS.some((f) => f.id === v) ? (v as Filter) : 'all'
+  } catch {
+    return 'all'
+  }
+}
+export function saveFilter(f: Filter) {
+  try { localStorage.setItem(FILTER_KEY, f) } catch { /* приватний режим — просто не запам'ятаємо */ }
+}
+export const matchFilter = (f: Filter, q: QueueItem) => f === 'all' || q.platform === f
+
+export function PlatformFilter({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) {
+  return (
+    <div className="seg" style={{ gridTemplateColumns: `repeat(${FILTERS.length}, 1fr)` }}>
+      {FILTERS.map((f) => (
+        <button key={f.id} className={value === f.id ? 'on' : ''} onClick={() => { haptic('select'); onChange(f.id) }}>{f.label}</button>
+      ))}
+    </div>
+  )
+}
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
@@ -31,14 +56,13 @@ const when = (q: QueueItem) => (q.scheduled_for ? whenLabel(q.scheduled_for, q.s
 const overdue = (q: QueueItem) => Boolean(q.scheduled_for && `${q.scheduled_for}T${(q.slot_time ?? '23:59').slice(0, 5)}` < `${ymd(new Date())}T${new Date().toTimeString().slice(0, 5)}`)
 
 // Фаза 5: затверджені пости по платформах + ручна публікація. Текст і фото забирає з поста («Надіслати в чат»), тут — позначка «опубліковано»
-export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[] | null; onOpen: (id: string) => void; onChanged: () => void }) {
-  const [filter, setFilter] = useState<Filter>('all')
+export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: { queue: QueueItem[] | null; filter: Filter; setFilter: (f: Filter) => void; onOpen: (id: string) => void; onChanged: () => void }) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [toast, setToast] = useState('')
   // Зміна дати: id поста, який зараз редагуємо, + чернетка дати/часу
   const [edit, setEdit] = useState<{ id: string; date: string; time: string } | null>(null)
 
-  const items = (queue ?? []).filter((q) => filter === 'all' || q.platform === filter)
+  const items = (queue ?? []).filter((q) => matchFilter(filter, q))
   const toPublish = items
     .filter((q) => q.review_status === 'approved')
     .sort((a, b) => `${a.scheduled_for ?? '9999'}${a.slot_time ?? ''}`.localeCompare(`${b.scheduled_for ?? '9999'}${b.slot_time ?? ''}`))
@@ -141,11 +165,7 @@ export function CalendarScreen({ queue, onOpen, onChanged }: { queue: QueueItem[
   return (
     <div className="px-4 pt-3.5 pb-6">
       <h1 className="serif mt-1.5 mb-3 text-[28px]">Календар</h1>
-      <div className="seg" style={{ gridTemplateColumns: `repeat(${FILTERS.length}, 1fr)` }}>
-        {FILTERS.map((f) => (
-          <button key={f.id} className={filter === f.id ? 'on' : ''} onClick={() => { haptic('select'); setFilter(f.id) }}>{f.label}</button>
-        ))}
-      </div>
+      <PlatformFilter value={filter} onChange={setFilter} />
 
       {queue === null ? null : !toPublish.length && !published.length ? (
         <div className="card mt-4 text-center text-[14px] leading-snug" style={{ color: 'var(--hint)' }}>

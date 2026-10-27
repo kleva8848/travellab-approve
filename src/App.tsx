@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AudiencesScreen } from './components/AudiencesScreen'
-import { CalendarScreen } from './components/CalendarScreen'
+import { CalendarScreen, loadFilter, matchFilter, saveFilter, type Filter } from './components/CalendarScreen'
 import { PlanScreen } from './components/PlanScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
@@ -40,6 +40,9 @@ export default function App() {
   })
   const [videos, setVideos] = useState<VideoList | null>(null)
   // Порядок проходу фіксуємо на момент відкриття, щоб затверджений пост не «стрибав» у степері
+  // Фільтр платформи (IG/TG/Threads) — спільний для «Сьогодні» і «Календаря»; прохід «наступний пост» теж лише по ньому
+  const [filter, setFilterState] = useState<Filter>(loadFilter)
+  const setFilter = (f: Filter) => { setFilterState(f); saveFilter(f) }
   const [session, setSession] = useState<{ order: string[]; done: Set<string> }>({ order: [], done: new Set() })
 
   const refreshVideos = useCallback(async () => {
@@ -74,8 +77,8 @@ export default function App() {
   }, [auth.state, refresh])
 
   const waitingIds = useMemo(
-    () => (queue ?? []).filter((q) => ['ready_for_review', 'changes_requested', 'needs_data'].includes(q.review_status)).map((q) => q.id),
-    [queue],
+    () => (queue ?? []).filter((q) => matchFilter(filter, q) && ['ready_for_review', 'changes_requested', 'needs_data'].includes(q.review_status)).map((q) => q.id),
+    [queue, filter],
   )
 
   const open = (id: string) => {
@@ -131,9 +134,9 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
-        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
+        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} filter={filter} setFilter={setFilter} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
         {tab === 'plan' && <PlanScreen onOpen={open} />}
-        {tab === 'calendar' && <CalendarScreen queue={queue} onOpen={open} onChanged={() => void refresh()} />}
+        {tab === 'calendar' && <CalendarScreen queue={queue} filter={filter} setFilter={setFilter} onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'audiences' && <AudiencesScreen me={auth.me} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>
