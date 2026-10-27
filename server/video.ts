@@ -11,6 +11,7 @@ const TTL_SEC = 2 * 60 * 60
 const VH = 1920
 
 const STYLES = new Set(['hook', 'title', 'word', 'num', 'sub', 'label'])
+const FONTS = new Set(['cormorant', 'tenor', 'hand'])  // брендові шрифти рядка (src/lib/video.ts FONT)
 const WM_KINDS = new Set(['wm2', 'wm1', 'wm3', 'off'])
 const WM_POS = new Set(['br', 'tr', 'bl', 'tl'])
 
@@ -34,7 +35,7 @@ type DraftRow = {
 type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
 // Заявка на перемонтаж кадрів (SQL 020) — виконує montage-test/remount_worker.py
 type Remount = { kind: string; shot?: number; order?: number[]; start?: number; state: 'queued' | 'running' | 'done' | 'error'; at: string; by: number; error?: string; note?: string[] }
-type VLine = { text: string; style: string; gold: number[]; maxW?: number }
+type VLine = { text: string; style: string; gold: number[]; maxW?: number; font?: string }
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
 
@@ -226,6 +227,7 @@ export function cleanPlan(raw: unknown, shots: number, dur: number): Plan | null
       const style = STYLES.has(String(l?.style)) ? String(l.style) : 'sub'
       const line: VLine = { text, style, gold }
       if (l?.maxW != null) line.maxW = int(l.maxW, 300, 900, 900)
+      if (FONTS.has(String(l?.font))) line.font = String(l.font)
       return line
     }).filter((l) => l.text)
     if (!lines.length) continue

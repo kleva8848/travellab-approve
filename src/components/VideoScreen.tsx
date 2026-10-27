@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPoi
 import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, saveVideoCaption, videoAction, type VideoAction } from '../lib/api'
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
-  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
-  type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, lineLook, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
+  type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
 
@@ -867,14 +867,14 @@ function TextBlock({ x, op, selected, onDown }: { x: VText; op: number; selected
 
 function Line({ l, gap }: { l: VLine; gap: number }) {
   const st = STYLES[l.style]
-  const f = FONT[st.font]
+  const { f, size, track, upper } = lineLook(l)
   const gold = new Set(l.gold)
   return (
     <div
       style={{
         marginTop: gap, marginInline: 'auto', maxWidth: l.maxW ?? 900,
-        fontFamily: f.family, fontSize: st.size, lineHeight: f.lh, letterSpacing: st.track,
-        textTransform: st.upper ? 'uppercase' : 'none', color: st.gold ? GOLD : '#fff',
+        fontFamily: f.family, fontWeight: f.weight, fontSize: size, lineHeight: f.lh, letterSpacing: track,
+        textTransform: upper ? 'uppercase' : 'none', color: st.gold ? GOLD : '#fff',
         textShadow: '0 4px 7px rgba(0,0,0,.75)', whiteSpace: 'normal', wordBreak: 'normal',
       }}
     >
@@ -973,6 +973,13 @@ function TextEditor({ d, x, onChange, onRemove }: { d: VideoDraft; x: VText; onC
           <div className="qchips">
             {(Object.keys(STYLES) as LineStyle[]).map((s) => (
               <button key={s} className={l.style === s ? 'on' : ''} onClick={() => onChange((q) => { q.lines[i].style = s })}>{STYLES[s].name}</button>
+            ))}
+          </div>
+          <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>Шрифт:</div>
+          <div className="qchips" style={{ marginTop: 4 }}>
+            {(Object.keys(FONT) as FontKey[]).map((k) => (
+              <button key={k} className={(l.font ?? STYLES[l.style].font) === k ? 'on' : ''} style={{ fontFamily: FONT[k].family, fontWeight: FONT[k].weight }}
+                onClick={() => onChange((q) => { q.lines[i].font = k })}>{FONT[k].name}</button>
             ))}
           </div>
           {!STYLES[l.style].gold && words(l.text).length > 1 && (

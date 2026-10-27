@@ -16,27 +16,27 @@ const GOLD = '#C9B27C'
 const FADE = 0.45
 const SUB_FADE = 0.12   // субтитри голосу (сет 6) — швидко, щоб встигали за мовою
 
-const STYLES: Record<string, { font: 'Prata' | 'Tenor Sans'; size: number; gold: boolean; gap: number; track: number; upper: boolean }> = {
-  hook: { font: 'Prata', size: 84, gold: false, gap: 14, track: 0, upper: false },
-  title: { font: 'Prata', size: 70, gold: false, gap: 12, track: 0, upper: false },
-  word: { font: 'Prata', size: 120, gold: false, gap: 10, track: 6, upper: false },
-  num: { font: 'Prata', size: 110, gold: true, gap: 6, track: 4, upper: false },
-  sub: { font: 'Tenor Sans', size: 46, gold: false, gap: 12, track: 1, upper: false },
-  label: { font: 'Tenor Sans', size: 38, gold: true, gap: 10, track: 7, upper: true },
+const STYLES: Record<string, { font: string; size: number; gold: boolean; gap: number; track: number; upper: boolean }> = {
+  hook: { font: 'cormorant', size: 84, gold: false, gap: 14, track: 0, upper: false },
+  title: { font: 'cormorant', size: 70, gold: false, gap: 12, track: 0, upper: false },
+  word: { font: 'cormorant', size: 120, gold: false, gap: 10, track: 6, upper: false },
+  num: { font: 'tenor', size: 110, gold: true, gap: 6, track: 4, upper: false },
+  sub: { font: 'tenor', size: 46, gold: false, gap: 12, track: 1, upper: false },
+  label: { font: 'tenor', size: 38, gold: true, gap: 10, track: 7, upper: true },
 }
-const LH = { Prata: 1.48, 'Tenor Sans': 1.264 }
+// Брендові шрифти — як FONT у src/lib/video.ts (hand = Marck Script, тимчасова заміна Buongiorno Rastellino)
+const FONT: Record<string, { name: string; file: string; weight: 400 | 500; lh: number; scale: number; script: boolean }> = {
+  cormorant: { name: 'Cormorant Garamond', file: 'CormorantGaramond-Medium.ttf', weight: 500, lh: 1.308, scale: 1.1, script: false },
+  tenor: { name: 'Tenor Sans', file: 'TenorSans-Regular.ttf', weight: 400, lh: 1.264, scale: 1, script: false },
+  hand: { name: 'Marck Script', file: 'MarckScript-Regular.ttf', weight: 400, lh: 1.349, scale: 1.15, script: true },
+}
 const WM: Record<string, { w: number; h: number }> = { wm2: { w: 150, h: 150 }, wm1: { w: 330, h: 110 }, wm3: { w: 225, h: 150 } }
 
 const dir = (sub: string) => fileURLToPath(new URL(`./${sub}/`, import.meta.url))
 
-let fonts: { name: string; data: Buffer; weight: 400; style: 'normal' }[] | null = null
+let fonts: { name: string; data: Buffer; weight: 400 | 500; style: 'normal' }[] | null = null
 function loadFonts() {
-  if (!fonts) {
-    fonts = [
-      { name: 'Prata', data: readFileSync(dir('fonts') + 'Prata-Regular.ttf'), weight: 400, style: 'normal' },
-      { name: 'Tenor Sans', data: readFileSync(dir('fonts') + 'TenorSans-Regular.ttf'), weight: 400, style: 'normal' },
-    ]
-  }
+  fonts ??= Object.values(FONT).map((f) => ({ name: f.name, data: readFileSync(dir('fonts') + f.file), weight: f.weight, style: 'normal' as const }))
   return fonts
 }
 
@@ -88,16 +88,19 @@ export function textTimes(shots: Shot[], dur: number, t: VText) {
 // на початку рядка відступу немає — як браузер «з'їдає» пробіл на переносі
 function line(l: VLine, gap: number): El {
   const st = STYLES[l.style] ?? STYLES.sub
+  const f = FONT[l.font ?? ''] ?? FONT[st.font]
+  const size = Math.round(st.size * f.scale)
+  const track = f.script ? 0 : st.track
   const words = l.text.split(/\s+/).filter(Boolean)
   const base = {
     marginTop: gap, width: Math.min(l.maxW ?? 900, 900),
-    fontFamily: st.font, fontSize: st.size, lineHeight: LH[st.font], letterSpacing: st.track,
-    textTransform: st.upper ? 'uppercase' : 'none', color: st.gold ? GOLD : '#fff',
+    fontFamily: f.name, fontWeight: f.weight, fontSize: size, lineHeight: f.lh, letterSpacing: track,
+    textTransform: !f.script && st.upper ? 'uppercase' : 'none', color: st.gold ? GOLD : '#fff',
     textShadow: '0 4px 7px rgba(0,0,0,0.75)',
   }
   if (!l.gold.length) return el('div', { ...base, display: 'flex', justifyContent: 'center', textAlign: 'center' }, words.join(' '))
   const gold = new Set(l.gold)
-  return el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: space(st.font) * st.size + st.track },
+  return el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: space(f.name) * size + track },
     words.map((w, i) => el('div', gold.has(i) ? { color: GOLD } : {}, w)))
 }
 

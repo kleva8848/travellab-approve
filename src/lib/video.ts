@@ -10,22 +10,36 @@ export const GOLD = '#C9B27C'
 
 export type LineStyle = 'hook' | 'title' | 'word' | 'num' | 'sub' | 'label'
 
-// Ті самі стилі, що в stories.py (STYLES); lh — висота рядка як у Pillow ((ascent+descent)·1.08)
-export const STYLES: Record<LineStyle, { name: string; font: 'prata' | 'tenor'; size: number; gold: boolean; gap: number; track: number; upper: boolean }> = {
-  hook: { name: 'Заголовок', font: 'prata', size: 84, gold: false, gap: 14, track: 0, upper: false },
-  title: { name: 'Заголовок менший', font: 'prata', size: 70, gold: false, gap: 12, track: 0, upper: false },
-  word: { name: 'Одне слово', font: 'prata', size: 120, gold: false, gap: 10, track: 6, upper: false },
-  num: { name: 'Номер', font: 'prata', size: 110, gold: true, gap: 6, track: 4, upper: false },
+// Брендові шрифти (Index TravelLab 2026-10-02): Cormorant Garamond замість Prata, Tenor Sans, рукописний.
+// Buongiorno Rastellino не куплений → hand = Marck Script (є кирилиця), ТИМЧАСОВО. Ті самі TTF — у server/fonts (фінальний рендер).
+export type FontKey = 'cormorant' | 'tenor' | 'hand'
+
+// Ті самі стилі, що в stories.py (STYLES); font — шрифт за замовчуванням, Іра може змінити на рядку (VLine.font)
+export const STYLES: Record<LineStyle, { name: string; font: FontKey; size: number; gold: boolean; gap: number; track: number; upper: boolean }> = {
+  hook: { name: 'Заголовок', font: 'cormorant', size: 84, gold: false, gap: 14, track: 0, upper: false },
+  title: { name: 'Заголовок менший', font: 'cormorant', size: 70, gold: false, gap: 12, track: 0, upper: false },
+  word: { name: 'Одне слово', font: 'cormorant', size: 120, gold: false, gap: 10, track: 6, upper: false },
+  num: { name: 'Номер', font: 'tenor', size: 110, gold: true, gap: 6, track: 4, upper: false },
   sub: { name: 'Підпис', font: 'tenor', size: 46, gold: false, gap: 12, track: 1, upper: false },
   label: { name: 'Мітка', font: 'tenor', size: 38, gold: true, gap: 10, track: 7, upper: true },
 }
-export const FONT = {
-  prata: { family: '"Prata", serif', lh: 1.48 },
-  tenor: { family: '"Tenor Sans", sans-serif', lh: 1.264 },
+// lh — висота рядка як у Pillow ((ascent+descent)·1.08); scale — множник кегля, щоб шрифти з меншим очком читались як Tenor;
+// script — рукописний: без розрядки й капсу (рвуть з'єднання літер). Копія — у server/video_layers.ts і montage-test/remount_worker.py
+export const FONT: Record<FontKey, { name: string; family: string; weight: number; lh: number; scale: number; script: boolean }> = {
+  cormorant: { name: 'Cormorant', family: '"Cormorant Garamond", serif', weight: 500, lh: 1.308, scale: 1.1, script: false },
+  tenor: { name: 'Tenor', family: '"Tenor Sans", sans-serif', weight: 400, lh: 1.264, scale: 1, script: false },
+  hand: { name: 'Рукописний (тимчасово)', family: '"Marck Script", cursive', weight: 400, lh: 1.349, scale: 1.15, script: true },
 }
 
-// gold — номери слів (з 0), які золотом; у stories.py це *слово*
-export type VLine = { text: string; style: LineStyle; gold: number[]; maxW?: number }
+// gold — номери слів (з 0), які золотом; у stories.py це *слово*; font — вибір Іри (немає — за стилем)
+export type VLine = { text: string; style: LineStyle; gold: number[]; maxW?: number; font?: FontKey }
+
+// Як рядок виглядає: шрифт, кегль, розрядка, капс — одне джерело для прев'ю (і копія логіки в server/video_layers.ts)
+export function lineLook(l: VLine) {
+  const st = STYLES[l.style]
+  const f = FONT[l.font ?? st.font]
+  return { f, size: Math.round(st.size * f.scale), track: f.script ? 0 : st.track, upper: !f.script && st.upper }
+}
 // Текст прив'язаний до кадрів (from..to), а не до секунд — Ірі простіше «на кадрі 2».
 // Субтитр голосу (сет 6) — sec: [від, до] у секундах (за мовою Іри); from/to там лише для старих версій апки
 export type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
