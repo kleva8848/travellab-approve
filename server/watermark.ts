@@ -18,7 +18,7 @@ export type WmKind = 'wm1' | 'wm2' | 'wm3'
 const GOLD = '#C9B27C'
 // Ширина знака від меншої сторони кадру (wm1 0.46 → 0.34 19.10: Іра хоче дрібний)
 const SIZE: Record<WmKind, number> = { wm1: 0.34, wm2: 0.26, wm3: 0.27 }
-const STUB_REV = 's3' // змінили вигляд заглушки / накладання → новий кеш
+const STUB_REV = 's4' // змінили вигляд заглушки / накладання → новий кеш
 // Колір знака під фон (сірий 0..255 під знаком): світлий → темна бронза, інакше світле золото
 const LIGHT_BG = 150
 const INK_ON_LIGHT = [112, 82, 38] as const
@@ -104,7 +104,7 @@ function stubLayout(k: WmKind): { root: El; w: number; h: number } {
   }
   const root = el('div', { width: W * 1.5, height: 260, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: GOLD }, [
     el('div', { display: 'flex', alignItems: 'flex-start' }, [
-      el('div', { fontFamily: 'Prata', fontSize: 104, lineHeight: 1 }, 'Travel Lab'),
+      el('div', { fontFamily: 'Cormorant Garamond', fontWeight: 500, fontSize: 114, lineHeight: 1 }, 'Travel Lab'),
       star(40, { marginLeft: 10, marginTop: -6 }),
     ]),
     caps('Private Travel Concierge', 27, '0.2em', { marginTop: 14 }),
