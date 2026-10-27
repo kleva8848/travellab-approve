@@ -312,8 +312,9 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
 
         {(d.status === 'approved' || published) && !dirty && <PublishCard d={d} busy={busy} onResend={() => void resend()} onPosted={() => void posted()} />}
 
-        {/* Поки редагує текст — відео менше і «прилипає» вгорі, щоб правки було видно під час набору */}
-        <div className="sticky z-10 -mx-4 px-4 pt-3 pb-2" style={{ top: -12, background: 'var(--bg)' }}>
+        {/* Поки редагує текст — відео менше і «прилипає» вгорі, щоб правки було видно під час набору.
+            Без вибраного тексту не прилипає: велике прев'ю на низькому екрані ховало вкладки «Текст / Знак / Кадри» */}
+        <div className={`${sel !== null ? 'sticky' : 'relative'} z-10 -mx-4 px-4 pt-3 pb-2`} style={{ top: -12, background: 'var(--bg)' }}>
           <Preview d={d} t={t} sel={sel} small={sel !== null} vref={vref} onSelect={select} onMove={(tid, y) => updText(tid, (x) => { x.y = y })} onTap={togglePlay} />
           <Timeline d={d} t={t} playing={playing} small={sel !== null} onPlay={togglePlay} onSeek={(s) => seek(s)}
             muted={d.music || d.voice ? muted : null} onSound={() => { haptic('select'); setMuted((m) => !m) }} />
@@ -707,7 +708,7 @@ function Preview({ d, t, sel, small, vref, onSelect, onMove, onTap }: PreviewPro
   }
 
   return (
-    <div className="mx-auto" style={{ maxWidth: small ? 170 : 300, transition: 'max-width .2s' }}>
+    <div className="mx-auto" style={{ maxWidth: small ? 170 : 'min(300px, 30vh)', transition: 'max-width .2s' }}>
       <div ref={box} className="relative w-full overflow-hidden rounded-2xl" style={{ aspectRatio: '9 / 16', background: '#000', boxShadow: 'var(--shadow)' }} onClick={onTap}>
         <video ref={vref} src={d.video} poster={d.poster} className="absolute inset-0 h-full w-full object-cover" muted playsInline autoPlay loop preload="auto" />
         <div className="absolute top-0 left-0" style={{ width: VW, height: VH, transform: `scale(${k})`, transformOrigin: '0 0' }} onPointerMove={move} onPointerUp={up}>
