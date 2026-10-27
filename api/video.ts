@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { failSchema } from '../server/schema.js'
-import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, draftMeta, getVideo, listVideoGaps, listVideos, requestRemount, resendFinal, saveCaption } from '../server/video.js'
+import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, draftMeta, getVideo, listVideoGaps, listVideos, requestRemount, resendFinal, rewriteCaption, saveCaption } from '../server/video.js'
 import { markPosted } from '../server/video_publish.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -16,6 +16,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 //        music — інший трек (сет 6), novoice — прибрати голос; голос (kind 'voice') кладе бот WF-055 сам, не апка
 //      { action: 'remount_ok', id } — Іра прочитала підсумок перемонтажу (remount.note / error)
 //      { action: 'caption', id, caption } — підпис до поста (SQL 022); готове відео не скидає → { ok, caption }
+//      { action: 'caption_ai', id, comment, chips?, caption? } — AI переписує підпис за правкою Іри (SQL 023, n8n WF-061, 10–30 с);
+//        caption — текст з поля (може бути не збережений); відео не чіпає → { ok, caption, before }
 //      { action: 'posted', id } — «✅ Виклала» (Instagram / TG вручну) → { ok, published_at }; після цього правки → 409
 // Відповідь POST → { ok, status, updated_at }. Фінальний mp4 з шарами збирає montage-test/final_worker.py (бере approved без final_path);
 // save / approve / unapprove чистять final_* — після правки воркер збирає нове відео
@@ -54,6 +56,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const r = await saveCaption(id, b.caption)
       if (!r) return void res.status(409).json({ error: PUBLISHED_ERR })
       return void res.json({ ok: true, ...r })
+    }
+    if (b.action === 'caption_ai') {
+      const { code, ...r } = await rewriteCaption(id, b, user.id)
+      return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
     }
     if (b.action === 'posted') {
       const r = await markPosted(id, user.id)

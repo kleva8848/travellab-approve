@@ -1,0 +1,122 @@
+{
+  "name": "[TravelLab] Video Caption Rewrite (Mini App)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-video-caption",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "3e8b1f62-9a4d-4c71-b2e5-tl-video-caption",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "code-build-request",
+      "name": "Code - Build Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\nconst comment = String(b.comment || '').trim();\nconst chips = Array.isArray(b.chips) ? b.chips.filter(Boolean).slice(0, 10) : [];\nif (!comment && !chips.length) throw new Error('потрібна правка');\nconst rules = Array.isArray(b.rules) ? b.rules.filter(Boolean).slice(0, 12) : [];\nconst user = [\n  (b.format === 'reel' ? 'Рілс' : 'Відео') + ' «' + (b.name || '') + '» · ' + (b.platform === 'telegram' ? 'Telegram-канал' : 'Instagram'),\n  'Місце: ' + (b.place || '—') + (b.hotel ? ' · готель ' + b.hotel : ''),\n  'Текст на екрані: ' + (b.screen || '—'),\n  b.voice ? 'Голос Іри (субтитри): ' + b.voice : '',\n  '',\n  'Поточний підпис:',\n  String(b.caption || '').trim() || '(порожньо — напиши новий)',\n  '',\n  'ПРАВКА ІРИ: ' + (comment || chips.join(' · ')),  // чіпи апка вже дописує в текст правки\n  rules.length ? '\\nПРАВИЛА ІРИ З ЇЇ ПОПЕРЕДНІХ ПРАВОК (дотримуйся; її поточна правка має пріоритет):\\n' + rules.map(r => '— ' + r).join('\\n') : '',\n].filter(s => s !== '').join('\\n');\nreturn [{ json: { body: {\n  model: 'gpt-4.1',\n  temperature: 0.6,\n  response_format: { type: 'json_object' },\n  messages: [ { role: 'system', content: \"Ти — контент-агентка Іри (TravelLab: кураторка люкс-подорожей, острівні family-резорти, Мальдіви).\\nПереписуєш підпис (caption) — текст ПІД коротким вертикальним відео — за правкою Іри.\\nТон Іри (PRMPT-011): жива проста мова, звертання на «ви», ОДНА думка на відео; не вигадуй, що Іра там була\\n(без «я була», «з власного досвіду», «ми відпочивали»); без перебільшень («найкращий», «єдиний», «мало де», «рай»);\\nне називай готель, якого нема в даних. Кожне речення — граматично правильна природна українська.\\n\\nПравила підпису: 80–600 знаків, 2–4 короткі абзаци; перший рядок — гачок; далі 1–2 живі деталі, що видно в кадрах, і що це дає людині;\\nзвертання на «ви»; без хештегів, цін, знижок, CTA, питань-опитувань, «посилання в біо»; емодзі — максимум 2 або жодного;\\nне повторюй дослівно текст з екрана.\\n\\nЯк працювати з правкою:\\n- зроби саме те, що просить Іра; її правка важливіша за правила вище (крім вигадок — нічого не вигадуй);\\n- те, про що вона не просила, лишай як було — не переписуй підпис з нуля без потреби;\\n- факти — лише з її правки, поточного підпису, тексту на екрані й голосу.\\n\\nПоверни СТРОГО JSON: {\\\"caption\\\": \\\"новий підпис\\\"}.\" }, { role: 'user', content: user } ],\n} } }];"
+      }
+    },
+    {
+      "id": "http-openai-caption",
+      "name": "HTTP - OpenAI Caption",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "code-parse-caption",
+      "name": "Code - Parse Caption",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "let o = {};\ntry { o = JSON.parse($json.choices[0].message.content); } catch (e) { o = {}; }\nconst caption = String(o.caption || '')\n  .replace(/(^|\\s)#[\\w\\u0400-\\u04FF]+/g, '$1')\n  .replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 2200);\nreturn [{ json: { caption } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP - OpenAI Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - OpenAI Caption": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

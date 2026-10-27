@@ -153,6 +153,97 @@ export async function saveCaption(id: string, raw: unknown) {
   return r.data?.length ? { caption } : null
 }
 
+// ───────────── AI-правка підпису (SQL 023, n8n WF-061) ─────────────
+
+const COMMENT_MAX = 1000
+const RULES_MAX = 12
+const SCOPE_ORDER: Record<string, number> = { hotel: 0, pillar: 1, platform: 2, global: 3 }
+type RuleRow = { rule_text: string; scope: string; scope_value: string | null; created_at: string }
+
+// Правила Іри з її правок (ira_rules active) — той самий відбір, що n8n/ira_rules.mjs pickIraRules для постів
+async function iraRules(platform: string, hotelId: string | null, planId: string | null): Promise<string[]> {
+  const [r, p] = await Promise.all([
+    db().from('ira_rules').select('rule_text, scope, scope_value, created_at').eq('status', 'active'),
+    planId ? db().from('content_plan').select('pillar').eq('id', planId).maybeSingle() : Promise.resolve({ data: null, error: null }),
+  ])
+  if (r.error) throw r.error
+  const pillar = (p.data as { pillar?: string } | null)?.pillar ?? null
+  const seen = new Set<string>()
+  return ((r.data ?? []) as RuleRow[])
+    .filter((x) => x.scope === 'global' || (x.scope === 'platform' && x.scope_value === platform)
+      || (x.scope === 'pillar' && pillar && x.scope_value === pillar) || (x.scope === 'hotel' && hotelId && x.scope_value === hotelId))
+    .sort((a, b) => (SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope]) || String(b.created_at).localeCompare(String(a.created_at)))
+    .map((x) => x.rule_text.trim())
+    .filter((t) => { const k = t.toLowerCase(); if (!t || seen.has(k)) return false; seen.add(k); return true })
+    .slice(0, RULES_MAX)
+}
+
+// Виклик n8n «Video Caption Rewrite». null — n8n не налаштований / не відповів
+async function captionHook(body: Record<string, unknown>): Promise<string | null> {
+  const secret = process.env.N8N_WEBHOOK_SECRET
+  const s = await getSettings(['n8n_webhook_base'])
+  const base = typeof s.n8n_webhook_base === 'string' ? s.n8n_webhook_base.replace(/\/$/, '') : ''
+  if (!base || !secret) return null
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 50000)
+  try {
+    const r = await fetch(`${base}/travellab-video-caption`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TL-Secret': secret },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    if (!r.ok) return null
+    const caption = String(((await r.json()) as { caption?: unknown }).caption ?? '').trim()
+    return caption || null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Іра пише правку до підпису → AI переписує лише текст (відео не перемонтовується, final_* не скидаються).
+// base — підпис з поля апки (може бути ще не збережений), інакше збережений. Правка лишається в video_caption_comments для навчання (сет 2)
+export async function rewriteCaption(id: string, b: Record<string, unknown>, userId: number) {
+  const comment = String(b.comment ?? '').trim().slice(0, COMMENT_MAX)
+  const chips = (Array.isArray(b.chips) ? b.chips : []).map((c) => String(c).trim()).filter(Boolean).slice(0, 10)
+  if (!comment && !chips.length) return { code: 400, error: 'Напиши, що змінити в підписі.' }
+  const r = await db().from('video_drafts').select('name, format, platform, place, hotel_id, plan_id, plan, caption, published_at').eq('id', id).maybeSingle()
+  if (r.error) throw r.error
+  if (!r.data) return { code: 404, error: 'not found' }
+  const d = r.data as { name: string; format: string; platform: string; place: string | null; hotel_id: string | null; plan_id: string | null; plan: Plan | null; caption: string | null; published_at: string | null }
+  if (d.published_at) return { code: 409, error: PUBLISHED_ERR }
+  const before = (typeof b.caption === 'string' ? b.caption : d.caption ?? '').trim().slice(0, CAPTION_MAX)
+
+  const c = await db().from('video_caption_comments')
+    .insert({ video_draft_id: id, body: comment || chips.join(' · '), chips, author_tg_id: userId, caption_before: before })
+    .select('id').single()
+  if (c.error) throw c.error
+
+  const texts = d.plan?.texts ?? []
+  const [rules, hotel] = await Promise.all([
+    iraRules(d.platform, d.hotel_id, d.plan_id),
+    d.hotel_id ? db().from('hotels').select('name').eq('hotel_id', d.hotel_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+  ])
+  const raw = await captionHook({
+    caption: before, comment, chips, rules,
+    name: d.name, format: d.format, platform: d.platform, place: d.place, hotel: (hotel.data as { name?: string } | null)?.name ?? null,
+    screen: texts.filter((t) => !t.sec).flatMap((t) => t.lines.map((l) => l.text)).join(' / '),
+    voice: texts.filter((t) => t.sec).flatMap((t) => t.lines.map((l) => l.text)).join(' '),
+  })
+  const caption = raw?.replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, CAPTION_MAX) ?? ''
+  if (!caption) {
+    await db().from('video_caption_comments').update({ status: 'failed' }).eq('id', c.data.id)
+    return { code: 502, error: 'Агент зараз не відповів — спробуй ще раз за хвилинку. Правку не загубила.' }
+  }
+  const u = await db().from('video_drafts').update({ caption }).eq('id', id).is('published_at', null).select('id')
+  if (u.error) throw u.error
+  if (!u.data?.length) return { code: 409, error: PUBLISHED_ERR }
+  await db().from('video_caption_comments').update({ status: 'applied', caption_after: caption }).eq('id', c.data.id)
+  return { code: 200, caption, before }
+}
+
 // ───────────── Перемонтаж кадрів (SQL 020) ─────────────
 
 const IDLE = 'remount.is.null,remount->>state.in.(done,error)'

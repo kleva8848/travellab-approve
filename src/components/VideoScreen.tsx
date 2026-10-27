@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
-import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, saveVideoCaption, videoAction, type VideoAction } from '../lib/api'
+import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, rewriteVideoCaption, saveVideoCaption, videoAction, type VideoAction } from '../lib/api'
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
   FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, lineLook, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
@@ -39,6 +39,9 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
   return <Editor initial={draft} onBack={onBack} />
 }
 
+// Підказки до «Попросити агента» під підписом — дописуються в текст правки
+const CHIPS_CAPTION = ['Коротше', 'Тепліше, більше мене', 'Інший початок', 'Без емодзі', 'Більше деталей з відео']
+
 const hhmm = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }) : '')
 
 function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }) {
@@ -56,6 +59,11 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
   // підпис до поста (SQL 022) — зберігається окремо від плану, готове відео не скидає
   const [cap, setCap] = useState(initial.caption ?? '')
   const [capSaved, setCapSaved] = useState(initial.caption ?? '')
+  // AI-правка підпису (SQL 023, WF-061): правка → агент переписує лише текст; capPrev — для «Повернути попередній»
+  const [capAsk, setCapAsk] = useState('')
+  const [capChips, setCapChips] = useState<string[]>([])
+  const [capAi, setCapAi] = useState(false)
+  const [capPrev, setCapPrev] = useState<string | null>(null)
   const vref = useRef<HTMLVideoElement>(null)
   const dirty = JSON.stringify(planOf(d)) !== saved
   const montage = d.status === 'approved' && !d.final
@@ -215,6 +223,32 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
       return false
     } finally {
       setBusy(false)
+    }
+  }
+
+  const addCapChip = (chip: string) => {
+    haptic('select')
+    setCapAsk((v) => (v ? `${v.replace(/[,\s]*$/, '')}, ${chip.toLowerCase()}` : chip))
+    if (!capChips.includes(chip)) setCapChips([...capChips, chip])
+  }
+
+  const rewriteCap = async () => {
+    if (busy || capAi || !capAsk.trim()) return
+    setCapAi(true)
+    try {
+      const r = await rewriteVideoCaption(d.id, capAsk.trim(), capChips, cap)
+      setCapPrev(r.before)
+      setCap(r.caption)
+      setCapSaved(r.caption)
+      setCapAsk('')
+      setCapChips([])
+      haptic('success')
+      setToast('Новий підпис готовий — відео не змінилось')
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCapAi(false)
     }
   }
 
@@ -384,13 +418,31 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
             <span className="text-[13px]" style={{ color: 'var(--hint)' }}>
               {d.dest === 'channel' ? 'піде в канал разом з відео' : 'бот надішле його з відео — скопіюєш в Instagram'}
             </span>
-            <textarea className="in mt-2" rows={5} value={cap} disabled={published} maxLength={2200}
+            <textarea className="in mt-2" rows={5} value={cap} disabled={published || capAi} maxLength={2200}
               placeholder={published ? '' : 'Агент ще не написав підпис — можна свій'} onChange={(e) => setCap(e.target.value)} />
             {cap !== capSaved && !published && (
               <div className="mt-2 flex gap-2">
                 <button className="btn sec" onClick={() => setCap(capSaved)}>Скинути</button>
-                <button className="btn" disabled={busy} onClick={() => void saveCap()}>Зберегти підпис</button>
+                <button className="btn" disabled={busy || capAi} onClick={() => void saveCap()}>Зберегти підпис</button>
               </div>
+            )}
+            {capPrev !== null && cap === capSaved && capPrev !== cap && !published && (
+              <button className="mt-2 block text-[13.5px]" style={{ color: 'var(--hint)' }} disabled={capAi} onClick={() => { haptic('tap'); setCap(capPrev); setCapPrev(null) }}>
+                ↩ Повернути попередній підпис
+              </button>
+            )}
+            {!published && (
+              <>
+                <div className="mt-3 mb-1.5 flex items-center justify-between text-[14px] font-semibold">
+                  Попросити агента <span className="text-[12.5px] font-normal" style={{ color: 'var(--hint)' }}>міняє лише підпис</span>
+                </div>
+                <textarea className="in" rows={2} value={capAsk} disabled={capAi} maxLength={1000}
+                  placeholder="Напр.: коротше, додай про приватний пляж" onChange={(e) => setCapAsk(e.target.value)} />
+                <div className="qchips">{CHIPS_CAPTION.map((c) => <button key={c} disabled={capAi} onClick={() => addCapChip(c)}>{c}</button>)}</div>
+                <button className="btn sec mt-2" disabled={busy || capAi || !capAsk.trim()} onClick={() => void rewriteCap()}>
+                  {capAi ? 'Переписую підпис…' : '✨ Переписати підпис'}
+                </button>
+              </>
             )}
           </div>
         )}

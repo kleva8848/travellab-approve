@@ -322,6 +322,17 @@ export async function saveVideoCaption(id: string, caption: string): Promise<{ c
   return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'caption', id, caption }) })
 }
 
+// AI-правка підпису (SQL 023, n8n WF-061): міняє лише текст під відео, саме відео не чіпає
+export async function rewriteVideoCaption(id: string, comment: string, chips: string[], caption: string): Promise<{ caption: string; before: string }> {
+  if (isDemo) {
+    await new Promise((r) => setTimeout(r, 1200))
+    const next = caption.split('\n\n').slice(0, 2).join('\n\n') || 'Тиша, вода і ніякого поспіху — так виглядає ранок тут.'
+    patchDemoVideo(id, { caption: next })
+    return { caption: next, before: caption }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'caption_ai', id, comment, chips, caption }) })
+}
+
 // «✅ Виклала» (Instagram — Іра викладає сама; те саме робить кнопка в боті)
 export async function markVideoPosted(id: string): Promise<{ published_at: string }> {
   if (isDemo) {
