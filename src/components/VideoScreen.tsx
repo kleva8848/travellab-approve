@@ -3,7 +3,7 @@ import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, saveV
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
   FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
-  type LineStyle, type RemountJob, type RemountKind, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
 
@@ -532,7 +532,7 @@ function RemountCard({ r, onOk }: { r: NonNullable<VideoDraft['remount']>; onOk:
   )
 }
 
-// ───────────── Кадри: прибрати / інший / порядок / коротше (перемонтаж, SQL 020) ─────────────
+// ───────────── Кадри: прибрати / інший / свій момент / порядок / коротше (перемонтаж, SQL 020) ─────────────
 
 type ShotsProps = {
   d: VideoDraft
@@ -547,13 +547,17 @@ function ShotsEditor({ d, t, disabled, onSeek, onRemount }: ShotsProps) {
   const [pick, setPick] = useState<number | null>(null)
   // новий порядок збираємо стрілками, перемонтовуємо один раз — кнопкою
   const [order, setOrder] = useState<number[] | null>(null)
+  // «Обрати момент»: номер кадру, для якого відкрито вихідне відео; wait — прев'ю кліпу ще готує воркер
+  const [moment, setMoment] = useState<number | null>(null)
+  const [wait, setWait] = useState(false)
   const ord = order ?? d.shots.map((_, i) => i)
   const reordered = ord.some((v, i) => v !== i)
   const name = (i: number) => `кадр ${i + 1} «${d.shots[i].label}»`
 
   // після перемонтажу кадри інші — вибір і незбережений порядок скидаємо (правки тексту/обкладинки їх не чіпають)
   const shotsKey = d.shots.map((s) => s.thumb).join('|')
-  useEffect(() => { setPick(null); setOrder(null) }, [shotsKey])
+  useEffect(() => { setPick(null); setOrder(null); setMoment(null) }, [shotsKey])
+  useEffect(() => setWait(false), [pick])
 
   const move = (dir: -1 | 1) => {
     if (pick === null) return
@@ -565,7 +569,15 @@ function ShotsEditor({ d, t, disabled, onSeek, onRemount }: ShotsProps) {
     ;[next[at], next[to]] = [next[to], next[at]]
     setOrder(next)
   }
-  const run = async (job: RemountJob, q: string) => { if (await onRemount(job, q)) { setPick(null); setOrder(null) } }
+  const run = async (job: RemountJob, q: string) => { if (await onRemount(job, q)) { setPick(null); setOrder(null); setMoment(null) } }
+
+  const src = moment !== null ? d.shots[moment]?.src : null
+  if (moment !== null && src) {
+    return (
+      <MomentPicker key={moment} src={src} title={name(moment)} disabled={disabled} onCancel={() => setMoment(null)}
+        onPick={(start) => void run({ kind: 'moment', shot: moment, start }, `Взяти ${name(moment)} з ${mmss(start)} до ${mmss(start + src.span)}?`)} />
+    )
+  }
 
   return (
     <div className="card mt-3">
@@ -606,9 +618,15 @@ function ShotsEditor({ d, t, disabled, onSeek, onRemount }: ShotsProps) {
       ) : (
         <div className="qchips">
           {n > 1 && <button disabled={disabled} onClick={() => void run({ kind: 'remove', shot: pick }, `Прибрати ${name(pick)}?`)}>Прибрати кадр</button>}
+          <button disabled={disabled} onClick={() => {
+            haptic('tap')
+            if (d.shots[pick].src) setMoment(pick)
+            else setWait(true)
+          }}>Обрати момент</button>
           <button disabled={disabled} onClick={() => void run({ kind: 'replace', shot: pick }, `Замінити ${name(pick)} іншим шматком відео?`)}>Інший кадр</button>
           {n > 1 && <button disabled={disabled || pick === 0} onClick={() => move(-1)}>← Раніше</button>}
           {n > 1 && <button disabled={disabled || pick === n - 1} onClick={() => move(1)}>Пізніше →</button>}
+          {wait && <div className="w-full text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Готую прев'ю цього відео — відкрий його ще раз за хвилину-дві.</div>}
         </div>
       )}
 
@@ -617,6 +635,91 @@ function ShotsEditor({ d, t, disabled, onSeek, onRemount }: ShotsProps) {
           <button disabled={disabled} onClick={() => void run({ kind: 'shorter' }, `Зробити коротше? Кожен кадр стане ~на чверть коротшим (зараз ${Math.round(d.dur)} с).`)}>Коротше</button>
         </div>
       )}
+    </div>
+  )
+}
+
+const mmss = (t: number) => { const s = Math.round(t); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+
+// «Обрати момент»: вихідне відео кадру цілком (легке прев'ю з тим самим кропом) + стрічка мініатюр і рамка довжиною
+// з кадр. Тягнеш рамку — прев'ю показує цей шматок і крутить його по колу; «Взяти» → перемонтаж (воркер, kind moment)
+function MomentPicker({ src, title, disabled, onCancel, onPick }: {
+  src: ShotSrc; title: string; disabled: boolean; onCancel: () => void; onPick: (start: number) => void
+}) {
+  const max = Math.max(0, src.dur - src.span - 0.5) // воркер бере span + 0.5 с оригіналу
+  const [start, setStart] = useState(Math.min(src.start, max))
+  const [drag, setDrag] = useState(false)
+  const video = useRef<HTMLVideoElement>(null)
+  const track = useRef<HTMLDivElement>(null)
+  const grab = useRef(0)
+  const startRef = useRef(start)
+  startRef.current = start
+
+  // поки не тягнемо — грає обраний шматок по колу
+  useEffect(() => {
+    const v = video.current
+    if (!v || drag) return
+    v.currentTime = start
+    void v.play().catch(() => null)
+    const loop = () => { if (v.currentTime >= startRef.current + src.span || v.currentTime < startRef.current - 0.3) v.currentTime = startRef.current }
+    v.addEventListener('timeupdate', loop)
+    return () => v.removeEventListener('timeupdate', loop)
+  }, [drag, start, src.span])
+
+  const at = (e: RPointerEvent) => {
+    const r = track.current!.getBoundingClientRect()
+    return ((e.clientX - r.left) / r.width) * src.dur
+  }
+  const down = (e: RPointerEvent<HTMLDivElement>) => {
+    if (disabled) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const t = at(e)
+    // торкнулась поза рамкою — рамка стрибає центром під палець; у рамці — тягнемо за місце, де взялась
+    grab.current = t >= start && t <= start + src.span ? t - start : src.span / 2
+    setDrag(true)
+    video.current?.pause()
+    move(e)
+  }
+  const move = (e: RPointerEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+    const s = Math.round(Math.min(max, Math.max(0, at(e) - grab.current)) * 10) / 10
+    if (s === startRef.current) return
+    setStart(s)
+    if (video.current) video.current.currentTime = s
+  }
+  const up = () => { if (drag) { setDrag(false); haptic('select') } }
+
+  const changed = Math.abs(start - src.start) >= 0.1
+  const pct = (t: number) => `${(t / src.dur) * 100}%`
+  return (
+    <div className="card mt-3">
+      <div className="text-[14.5px] font-semibold">Обрати момент</div>
+      <div className="mt-0.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+        Потягни рамку по відео — у кадр піде саме цей шматок ({src.span.toFixed(1).replace('.0', '')} с).
+      </div>
+      <div className="mt-3 flex justify-center">
+        <video ref={video} src={src.video} muted playsInline preload="auto" className="rounded-lg"
+          style={{ width: 150, height: 267, objectFit: 'cover', background: '#000' }} />
+      </div>
+      <div ref={track} className="relative mt-3 select-none" style={{ height: 56, touchAction: 'none' }}
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+        <div className="absolute inset-0 overflow-hidden rounded-lg" style={{ backgroundImage: `url(${src.strip})`, backgroundSize: '100% 100%' }} />
+        <div className="absolute inset-y-0 left-0 rounded-l-lg" style={{ width: pct(start), background: 'rgba(0,0,0,.55)' }} />
+        <div className="absolute inset-y-0 right-0 rounded-r-lg" style={{ left: pct(start + src.span), background: 'rgba(0,0,0,.55)' }} />
+        {/* де кадр зараз — тонка мітка, щоб було видно, звідки посунула */}
+        <div className="absolute" style={{ left: pct(src.start), width: 2, top: -4, bottom: -4, background: 'rgba(255,255,255,.8)' }} />
+        <div className="absolute inset-y-0 rounded-md" style={{ left: pct(start), width: pct(src.span), border: `3px solid ${GOLD}`, boxShadow: '0 0 0 1px rgba(0,0,0,.35)' }} />
+      </div>
+      <div className="mt-1.5 flex justify-between text-[12px]" style={{ color: 'var(--hint)' }}>
+        <span>0:00</span>
+        <span style={{ color: 'var(--text)' }}>{mmss(start)} – {mmss(start + src.span)}</span>
+        <span>{mmss(src.dur)}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button className="btn sec" disabled={disabled} onClick={onCancel}>Скасувати</button>
+        <button className="btn" disabled={disabled || !changed} onClick={() => onPick(start)}>Взяти цей момент</button>
+      </div>
+      <div className="mt-2 text-center text-[12px]" style={{ color: 'var(--hint)' }}>{title} · біла риска — де він зараз</div>
     </div>
   )
 }

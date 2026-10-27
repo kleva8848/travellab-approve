@@ -31,7 +31,10 @@ export type VLine = { text: string; style: LineStyle; gold: number[]; maxW?: num
 export type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type WmKind = 'wm2' | 'wm1' | 'wm3' | 'off'
 export type WmPos = 'br' | 'tr' | 'bl' | 'tl'
-export type Shot = { t0: number; t1: number; label: string; thumb: string }
+// src — вихідний кліп кадру для «Обрати момент»: легке прев'ю (з кропом як у кадрі) + стрічка мініатюр;
+// start — звідки зараз узято кадр, span — скільки секунд оригіналу він бере (секунди кліпу). null — прев'ю ще готується
+export type ShotSrc = { video: string; strip: string; dur: number; start: number; span: number }
+export type Shot = { t0: number; t1: number; label: string; thumb: string; src?: ShotSrc | null }
 
 export type VideoDraft = {
   id: string
@@ -67,9 +70,9 @@ export type VideoDraft = {
   published_at?: string | null
 }
 export type Dest = 'channel' | 'chat'
-export type RemountKind = 'remove' | 'replace' | 'reorder' | 'shorter' | 'music' | 'voice' | 'novoice'
+export type RemountKind = 'remove' | 'replace' | 'moment' | 'reorder' | 'shorter' | 'music' | 'voice' | 'novoice'
 export type RemountState = 'queued' | 'running' | 'done' | 'error'
-export type RemountJob = { kind: Exclude<RemountKind, 'voice'>; shot?: number; order?: number[] }
+export type RemountJob = { kind: Exclude<RemountKind, 'voice'>; shot?: number; start?: number; order?: number[] }
 export const MOOD: Record<string, string> = { calm: 'спокійна', romantic: 'ніжна', lounge: 'лаунж', breezy: 'легка' }
 export const remounting = (d: Pick<VideoDraft, 'remount'>) => d.remount?.state === 'queued' || d.remount?.state === 'running'
 

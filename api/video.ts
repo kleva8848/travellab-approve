@@ -11,7 +11,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // POST { action: 'save', id, plan, expected_updated_at? } — правки тексту / знака / обкладинки
 //      { action: 'approve', id, plan? } — затвердити (з планом — спершу зберегти) · 'unapprove' · 'skip' — не публікувати
 //      { action: 'resend', id } — готове відео (SQL 019) ще раз у чат того, хто натиснув → { ok, sent_at }
-//      { action: 'remount', id, kind: 'remove'|'replace'|'reorder'|'shorter'|'music'|'novoice', shot?, order?, mood?, expected_updated_at? } —
+//      { action: 'remount', id, kind: 'remove'|'replace'|'moment'|'reorder'|'shorter'|'music'|'novoice', shot?, start?, order?, mood?, expected_updated_at? } —
 //        перемонтаж кадрів (SQL 020, воркер montage-test/remount_worker.py, 30–90 с); поки йде — save / approve → 409.
 //        music — інший трек (сет 6), novoice — прибрати голос; голос (kind 'voice') кладе бот WF-055 сам, не апка
 //      { action: 'remount_ok', id } — Іра прочитала підсумок перемонтажу (remount.note / error)

@@ -14,7 +14,12 @@ const STYLES = new Set(['hook', 'title', 'word', 'num', 'sub', 'label'])
 const WM_KINDS = new Set(['wm2', 'wm1', 'wm3', 'off'])
 const WM_POS = new Set(['br', 'tr', 'bl', 'tl'])
 
-type ShotRow = { t0: number; t1: number; label: string; file?: string; thumb_path: string }
+// start / dur / speed — шматок оригіналу (секунди вихідного кліпу); src_* — легке прев'ю всього кліпу з тим самим кропом
+// і стрічка мініатюр (воркер montage-test/remount_worker.py, src_pass) — для «Обрати момент»
+type ShotRow = {
+  t0: number; t1: number; label: string; file?: string; thumb_path: string
+  start?: number; dur?: number; speed?: number; src_path?: string; src_strip?: string; src_dur?: number
+}
 type DraftRow = {
   id: string; name: string; format: string; platform: string; place: string; hotel_id: string | null; dur: number | string
   web_path: string; poster_path: string; shots: ShotRow[]; plan: Plan; status: string; scheduled_for: string | null; updated_at: string
@@ -28,7 +33,7 @@ type DraftRow = {
 // Звук (сет 6, montage-test/music.py): трек Mixkit + точка старту; голос Іри з бота (file_id, тривалість після очистки)
 type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
 // Заявка на перемонтаж кадрів (SQL 020) — виконує montage-test/remount_worker.py
-type Remount = { kind: string; shot?: number; order?: number[]; state: 'queued' | 'running' | 'done' | 'error'; at: string; by: number; error?: string; note?: string[] }
+type Remount = { kind: string; shot?: number; order?: number[]; start?: number; state: 'queued' | 'running' | 'done' | 'error'; at: string; by: number; error?: string; note?: string[] }
 type VLine = { text: string; style: string; gold: number[]; maxW?: number }
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
@@ -63,7 +68,13 @@ function view(d: DraftRow, urls: Map<string, string>, channel: boolean) {
   return {
     id: d.id, name: d.name, format: d.format, platform: d.platform, place: d.place, hotel_id: d.hotel_id, dur: Number(d.dur),
     video: urls.get(d.web_path) ?? '', poster: urls.get(d.poster_path) ?? '',
-    shots: (d.shots ?? []).map((s) => ({ t0: s.t0, t1: s.t1, label: s.label, thumb: urls.get(s.thumb_path) ?? '' })),
+    shots: (d.shots ?? []).map((s) => ({
+      t0: s.t0, t1: s.t1, label: s.label, thumb: urls.get(s.thumb_path) ?? '',
+      src: s.src_path && s.src_strip && urls.has(s.src_path) && s.start != null && s.dur != null ? {
+        video: urls.get(s.src_path) ?? '', strip: urls.get(s.src_strip) ?? '', dur: Number(s.src_dur),
+        start: Number(s.start), span: Math.round(Number(s.dur) * Number(s.speed ?? 1) * 100) / 100,
+      } : null,
+    })),
     texts: plan.texts ?? [], wm: plan.wm ?? { kind: 'wm2', pos: 'br', color: 'white' }, cover: plan.cover ?? 0,
     status: d.status, scheduled_for: d.scheduled_for, updated_at: d.updated_at,
     // готове відео з текстом: rendered_at — зібрано, sent_at — бот надіслав у чат; error — воркер упав (бачить Влад)
@@ -118,7 +129,7 @@ export async function getVideo(id: string) {
   if (r.error) throw r.error
   if (!r.data) return 'not_found'
   const d = r.data as DraftRow
-  const [urls, voice_link, channel] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).map((s) => s.thumb_path)]), voiceLink(d.id), channelOn()])
+  const [urls, voice_link, channel] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).flatMap((s) => [s.thumb_path, s.src_path ?? '', s.src_strip ?? ''])]), voiceLink(d.id), channelOn()])
   return { ...view(d, urls, channel), voice_link }
 }
 
@@ -153,11 +164,17 @@ export async function requestRemount(id: string, b: Record<string, unknown>, use
   if (meta.remounting) return { code: 409, error: 'Уже перемонтовую — зачекай хвилинку.' }
   if (meta.published) return { code: 409, error: PUBLISHED_ERR }
   const job: Record<string, unknown> = { kind: b.kind }
-  if (b.kind === 'remove' || b.kind === 'replace') {
+  if (b.kind === 'remove' || b.kind === 'replace' || b.kind === 'moment') {
     const shot = Number(b.shot)
     if (!Number.isInteger(shot) || shot < 0 || shot >= meta.n) return { code: 400, error: 'bad shot' }
     if (b.kind === 'remove' && meta.n < 2) return { code: 400, error: 'Це єдиний кадр — прибрати не можна.' }
     job.shot = shot
+    // «Обрати момент»: секунда вихідного кліпу, з якої брати кадр (воркер підріже, щоб не вилізти за кінець)
+    if (b.kind === 'moment') {
+      const start = Number(b.start)
+      if (!Number.isFinite(start) || start < 0 || start > 3600) return { code: 400, error: 'bad start' }
+      job.start = Math.round(start * 100) / 100
+    }
   } else if (b.kind === 'reorder') {
     const order = Array.isArray(b.order) ? b.order.map(Number) : []
     const perm = [...order].sort((x, y) => x - y).every((v, i) => v === i) && order.length === meta.n
