@@ -110,6 +110,7 @@ async function namesFor(rows: Pick<PlanRow, 'hotel_id' | 'tour_id'>[]) {
 }
 
 const PUBLISHED_DAYS = 30
+const APPROVED_GRACE_DAYS = 2
 
 // «💬 Написали з цього поста»: скільки звернень Іра відмітила по кожному опублікованому посту.
 // null — таблиці ще нема (SQL 014) → кнопку в апці не показуємо
@@ -137,7 +138,11 @@ export async function loadQueue() {
     const slot = await scheduleIfNeeded(x.id).catch(() => null)
     if (slot) Object.assign(x, slot)
   }
-  const rows = sortPlan([...(r.data ?? []), ...(pub.data ?? [])] as PlanRow[])
+  // Затверджений, але так і не опублікований: ховаємо, коли і дата поста, і день затвердження старші за APPROVED_GRACE_DAYS
+  const staleBefore = addDays(kyivNow().date, -APPROVED_GRACE_DAYS)
+  const stale = (x: PlanRow) => x.review_status === 'approved' && !!x.scheduled_for && x.scheduled_for < staleBefore
+    && (!x.approved_at || x.approved_at.slice(0, 10) < staleBefore)
+  const rows = sortPlan([...((r.data ?? []) as PlanRow[]).filter((x) => !stale(x)), ...(pub.data ?? [])] as PlanRow[])
   const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]
   const v = versionIds.length
     ? await db().from('post_versions').select('id, text, form, key_idea').in('id', versionIds)
