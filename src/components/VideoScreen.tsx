@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
-import { ackRemount, coverPreview, getVideo, markVideoPosted, remountVideo, resendVideo, rewriteVideoCaption, saveCover, saveVideoCaption, sendCover, videoAction, type VideoAction } from '../lib/api'
+import { ackRemount, coverMedia, coverPreview, coverTitles, getVideo, markVideoPosted, remountVideo, resendVideo, rewriteVideoCaption, saveCover, saveVideoCaption, sendCover, videoAction, type VideoAction } from '../lib/api'
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
   COVER_STEP, COVER_Y, COVER_Y_MAX, COVER_Y_MIN, FONT, GOLD, GRID, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM,
   fmtTitle, lineGap, lineLook, newId, parseTitle, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
-  type CoverSpec, type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  type CoverMedia, type CoverSpec, type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
 
@@ -886,8 +886,45 @@ function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend
     return () => clearTimeout(x)
   }, [key, d.id]) // прев'ю залежить лише від спеки й відео (d — для демо)
 
-  const cands = d.cover_cands?.length ? d.cover_cands : [{ t: spec.bg.t, url: d.poster }]
-  const bg = cands.reduce((b, c) => (Math.abs(c.t - spec.bg.t) < Math.abs(b.t - spec.bg.t) ? c : b), cands[0])
+  // фон: кадр із відео або фото з бази (сет 3). Перемкнулась на фото й назад — повертаємо той самий кадр
+  const isMedia = spec.bg.kind === 'media'
+  const lastT = useRef(spec.bg.kind === 'frame' ? spec.bg.t : (d.cover_cands?.[0]?.t ?? d.cover))
+  if (spec.bg.kind === 'frame') lastT.current = spec.bg.t
+  const frameT = lastT.current
+  const cands = d.cover_cands?.length ? d.cover_cands : [{ t: frameT, url: d.poster }]
+  const bg = cands.reduce((b, c) => (Math.abs(c.t - frameT) < Math.abs(b.t - frameT) ? c : b), cands[0])
+  const [src, setSrc] = useState<'frame' | 'media'>(isMedia ? 'media' : 'frame')
+  // «Скинути» / відповідь сервера змінили вид фону — перемикач за ним
+  useEffect(() => { setSrc(spec.bg.kind) }, [spec.bg.kind])
+  const [media, setMedia] = useState<CoverMedia[] | null>(null)
+  const [mediaErr, setMediaErr] = useState('')
+  const loadMedia = () => {
+    setMediaErr('')
+    coverMedia(d).then(setMedia).catch((e: unknown) => setMediaErr(e instanceof Error ? e.message : String(e)))
+  }
+  useEffect(() => { if (src === 'media' && !media) loadMedia() }, [src]) // eslint-disable-line react-hooks/exhaustive-deps -- список вантажимо раз
+  const pickSrc = (k: 'frame' | 'media') => {
+    haptic('select')
+    setSrc(k)
+    if (k === 'frame' && isMedia) set({ bg: { kind: 'frame', t: frameT } })
+  }
+  const here = media?.filter((m) => m.here) ?? []
+  const elsewhere = media?.filter((m) => !m.here) ?? []
+  const chosenMedia = spec.bg.kind === 'media' ? spec.bg.media_id : null
+
+  // «✨ Варіанти» заголовка від агента: тап — підставити в поле (далі Іра править як звичайно)
+  const [ideas, setIdeas] = useState<string[]>([])
+  const [ideasBusy, setIdeasBusy] = useState(false)
+  const [ideasErr, setIdeasErr] = useState('')
+  const askIdeas = () => {
+    haptic('select')
+    setIdeasBusy(true)
+    setIdeasErr('')
+    coverTitles(d, spec)
+      .then((t) => setIdeas(t))
+      .catch((e: unknown) => setIdeasErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setIdeasBusy(false))
+  }
   const title = parseTitle(spec.title)
   const set = (p: Partial<CoverSpec>) => onChange({ ...spec, ...p })
   const setTitle = (text: string, gold: number[]) => set({ title: fmtTitle(text, gold) })
@@ -901,7 +938,7 @@ function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend
   return (
     <div className="card mt-3">
       <b className="block text-[14.5px]">Обкладинка</b>
-      <span className="text-[13px]" style={{ color: 'var(--hint)' }}>окремий файл: чистий кадр без субтитрів + твій текст</span>
+      <span className="text-[13px]" style={{ color: 'var(--hint)' }}>окремий файл: чистий кадр без субтитрів або фото з бази + твій текст</span>
 
       <div className="mx-auto mt-3" style={{ maxWidth: 210 }}>
         <div className="relative w-full overflow-hidden rounded-xl" style={{ aspectRatio: '9 / 16', background: '#000', boxShadow: 'var(--shadow)' }}>
@@ -925,10 +962,16 @@ function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend
       </div>
       {g && <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Затемнене Instagram зріже в сітці профілю — текст має бути між пунктирами.</div>}
 
-      <div className="mt-4 text-[13px] font-semibold">Фон — торкнись кадру</div>
+      <div className="mt-4 text-[13px] font-semibold">Фон</div>
+      <div className="seg mt-1.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <button className={src === 'frame' ? 'on' : ''} disabled={disabled} onClick={() => pickSrc('frame')}>Кадр з відео</button>
+        <button className={src === 'media' ? 'on' : ''} disabled={disabled} onClick={() => pickSrc('media')}>Фото з бази</button>
+      </div>
+      {src === 'frame' ? (<>
+      <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>Торкнись кадру:</div>
       <div className="-mx-1.5 mt-1 flex gap-2 overflow-x-auto px-1.5 pt-1 pb-1">
         {cands.map((c) => {
-          const on = c === bg
+          const on = !isMedia && c === bg
           return (
             <button key={c.url} className="shrink-0 text-center" disabled={disabled} onClick={() => { haptic('select'); set({ bg: { kind: 'frame', t: c.t } }) }}>
               <img src={c.url} alt="" className="block rounded-md object-cover"
@@ -941,13 +984,72 @@ function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend
       {!d.cover_cands?.length && (
         <div className="mt-1 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Інші чисті кадри з'являться, щойно відео перемонтується або змонтується фінал.</div>
       )}
+      </>) : (
+        <>
+          {!media && !mediaErr && <div className="mt-3 flex justify-center"><Spinner /></div>}
+          {mediaErr && (
+            <div className="mt-2 text-[12.5px]" style={{ color: 'var(--bad)' }}>
+              Фото не завантажились: {mediaErr} <button className="underline" onClick={loadMedia}>Ще раз</button>
+            </div>
+          )}
+          {media && !media.length && <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>У базі ще нема фото.</div>}
+          {media && media.length > 0 && (
+            <>
+              {[{ name: d.place ? `Фото: ${d.place}` : 'Фото цього місця', list: here }, { name: here.length ? 'Інші фото з бази' : 'Фото з бази', list: elsewhere }]
+                .filter((g) => g.list.length).map((g) => (
+                  <div key={g.name}>
+                    <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>{g.name}:</div>
+                    <div className="-mx-1.5 mt-1 flex gap-2 overflow-x-auto px-1.5 pt-1 pb-1">
+                      {g.list.map((m) => {
+                        const on = chosenMedia === m.media_id
+                        return (
+                          <button key={m.media_id} className="relative shrink-0" disabled={disabled} aria-label={`Фото ${m.media_id}`}
+                            onClick={() => { haptic('select'); set({ bg: { kind: 'media', media_id: m.media_id } }) }}>
+                            <img src={m.url} alt="" loading="lazy" className="block rounded-md object-cover"
+                              style={{ width: 54, height: 96, background: 'var(--bg2)', outline: on ? '2.5px solid var(--accent)' : 'none', outlineOffset: 1, opacity: on ? 1 : 0.85 }} />
+                            {!m.vertical && <span className="absolute right-0.5 bottom-0.5 rounded px-1 text-[10px] leading-4" style={{ background: 'rgba(0,0,0,.6)', color: '#fff' }}>↔</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              <div className="mt-1 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>↔ — горизонтальне фото: краї обріжуться, лишиться середина.</div>
+            </>
+          )}
+        </>
+      )}
 
       <div className="mt-4 text-[13px] font-semibold">Надпис зверху</div>
       <input className="in mt-1.5" style={{ height: 40 }} value={spec.kicker} maxLength={40} disabled={disabled} placeholder="Напр.: Мальдіви"
         onChange={(e) => set({ kicker: e.target.value })} />
-      <div className="mt-3 text-[13px] font-semibold">Заголовок</div>
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-[13px] font-semibold">Заголовок</span>
+        <button className="chip" disabled={disabled || ideasBusy} onClick={askIdeas}>
+          {ideasBusy ? '⏳ Думаю… до 20 с' : ideas.length ? '✨ Ще варіанти' : '✨ Варіанти'}
+        </button>
+      </div>
       <input className="in mt-1.5" style={{ height: 40 }} value={title.text} maxLength={80} disabled={disabled} placeholder="Коротко, 2–6 слів"
         onChange={(e) => typeTitle(e.target.value)} />
+      {ideasErr && <div className="mt-1.5 text-[12.5px]" style={{ color: 'var(--bad)' }}>{ideasErr}</div>}
+      {ideas.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[12.5px]" style={{ color: 'var(--hint)' }}>Варіанти агента — торкнись, далі можна правити:</div>
+          <div className="mt-1 flex flex-col gap-1.5">
+            {ideas.map((v) => {
+              const p = parseTitle(v)
+              const on = v === spec.title
+              return (
+                <button key={v} className="rounded-lg px-3 py-2 text-left text-[14.5px]" disabled={disabled}
+                  style={{ background: 'var(--bg2)', outline: on ? '2px solid var(--accent)' : 'none' }}
+                  onClick={() => { haptic('select'); set({ title: v }) }}>
+                  {words(p.text).map((w, wi) => <span key={wi} style={p.gold.includes(wi) ? { color: GOLD, fontWeight: 600 } : undefined}>{wi ? ' ' : ''}{w}</span>)}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {words(title.text).length > 1 && (
         <>
           <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>Золотом — торкнись слова:</div>

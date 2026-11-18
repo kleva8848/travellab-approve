@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { failSchema } from '../server/schema.js'
-import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, draftMeta, getVideo, listVideoGaps, listVideos, previewCover, requestRemount, resendFinal, rewriteCaption, saveCaption, saveCover, sendCover } from '../server/video.js'
+import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, coverMedia, coverTitles, draftMeta, getVideo, listVideoGaps, listVideos, previewCover, requestRemount, resendFinal, rewriteCaption, saveCaption, saveCover, sendCover } from '../server/video.js'
 import { markPosted } from '../server/video_publish.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -20,9 +20,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 //        caption — текст з поля (може бути не збережений); відео не чіпає → { ok, caption, before }
 //      { action: 'posted', id } — «✅ Виклала» (Instagram / TG вручну) → { ok, published_at }; після цього правки → 409
 //      { action: 'cover_preview', id, spec } — обкладинка (SQL 025, сет 2) 540×960 тим самим satori, що файл → { ok, jpg: data URL, t }
-//      { action: 'cover', id, spec } — зберегти cover_spec {bg: {kind: 'frame', t}, kicker, title, y, wm}; затвердження не скидає,
+//      { action: 'cover', id, spec } — зберегти cover_spec {bg: {kind: 'frame', t} | {kind: 'media', media_id}, kicker, title, y, wm}; затвердження не скидає,
 //        готове відео вже є — cover.jpg перемальовується тут же → { ok, cover_spec, updated_at, file }
 //      { action: 'cover_send', id } — обкладинка файлом у чат того, хто натиснув → { ok, sent_at }
+//      { action: 'cover_media', id } — фото з бази для фону (сет 3): цього місця першими, вертикальні першими → { ok, items: [{media_id, url, here, vertical}] }
+//      { action: 'cover_titles', id, spec? } — 3–4 AI-варіанти заголовка (n8n «Video Cover Titles», 5–20 с); нічого не зберігає → { ok, titles }
 // Відповідь POST → { ok, status, updated_at }. Фінальний mp4 з шарами збирає montage-test/final_worker.py (бере approved без final_path);
 // save / approve / unapprove чистять final_* — після правки воркер збирає нове відео
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -68,6 +70,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (b.action === 'cover_preview' || b.action === 'cover' || b.action === 'cover_send') {
       const { code, ...r } = b.action === 'cover_preview' ? await previewCover(id, b.spec)
         : b.action === 'cover' ? await saveCover(id, b.spec) : await sendCover(id, user.id)
+      return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
+    }
+    if (b.action === 'cover_media' || b.action === 'cover_titles') {
+      const { code, ...r } = b.action === 'cover_media' ? await coverMedia(id) : await coverTitles(id, b.spec)
       return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
     }
     if (b.action === 'posted') {

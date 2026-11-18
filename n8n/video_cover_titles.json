@@ -1,0 +1,122 @@
+{
+  "name": "[TravelLab] Video Cover Titles (Mini App)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travellab-video-cover-titles",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "5f0c6a8e-2d47-4b9e-9c13-8a6e2f4b7d21",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "code-build-request",
+      "name": "Code - Build Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\nconst rules = Array.isArray(b.rules) ? b.rules.filter(Boolean).slice(0, 12) : [];\nconst user = [\n  (b.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + (b.name || '') + '» · ' + (b.platform === 'telegram' ? 'Telegram-канал' : 'Instagram'),\n  'Місце: ' + (b.place || '—') + (b.hotel ? ' · готель ' + b.hotel : ''),\n  'Надпис зверху (kicker): ' + (b.kicker || '—'),\n  'Поточний заголовок: ' + (b.title || '—'),\n  'Текст на екрані: ' + (b.screen || '—'),\n  b.voice ? 'Голос Іри (субтитри): ' + b.voice : '',\n  b.caption ? 'Підпис до поста: ' + b.caption : '',\n  rules.length ? '\\nПРАВИЛА ІРИ З ЇЇ ПОПЕРЕДНІХ ПРАВОК (дотримуйся):\\n' + rules.map(r => '— ' + r).join('\\n') : '',\n].filter(s => s !== '').join('\\n');\nreturn [{ json: { body: {\n  model: 'gpt-4.1',\n  temperature: 0.9,\n  response_format: { type: 'json_object' },\n  messages: [ { role: 'system', content: \"Ти — контент-агентка Іри (TravelLab: кураторка люкс-подорожей, острівні family-резорти, Мальдіви).\\nПишеш ЗАГОЛОВОК ДЛЯ ОБКЛАДИНКИ короткого вертикального відео (рілс / сторіз) — великий напис на першому кадрі, який видно в сітці профілю.\\nТон Іри (PRMPT-011): жива проста мова, ОДНА думка; не вигадуй, що Іра там була (без «я була», «ми відпочивали»);\\nбез перебільшень («найкращий», «єдиний», «мало де», «рай», «казка»); не називай готель, якого нема в даних. Природна граматично правильна українська.\\n\\nПравила заголовка:\\n- 2–6 слів, без крапки в кінці, без лапок, без емодзі, без хештегів, без питань-опитувань і CTA;\\n- один смисл: настрій або деталь, яку видно у відео (з тексту на екрані / голосу / підпису), а не загальник;\\n- у кожному варіанті рівно ОДНЕ ключове слово познач *зірочками* (воно буде золотим) — це іменник або дієслово, не прийменник;\\n- не повторюй дослівно поточний заголовок і текст з екрана; варіанти мають бути різні між собою (різний кут: місце, відчуття, деталь, дія);\\n- надпис зверху (kicker) уже є окремо — не дублюй його в заголовку.\\n\\nПоверни СТРОГО JSON: {\\\"titles\\\": [\\\"…\\\", \\\"…\\\", \\\"…\\\", \\\"…\\\"]} — 4 варіанти.\" }, { role: 'user', content: user } ],\n} } }];"
+      }
+    },
+    {
+      "id": "http-openai-titles",
+      "name": "HTTP - OpenAI Titles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 35000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "code-parse-titles",
+      "name": "Code - Parse Titles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "let o = {};\ntry { o = JSON.parse($json.choices[0].message.content); } catch (e) { o = {}; }\nconst titles = (Array.isArray(o.titles) ? o.titles : [])\n  .map(t => String(t || '').replace(/#[\\w\\u0400-\\u04FF]+/g, '').replace(/\\s+/g, ' ').trim())\n  .filter(Boolean).slice(0, 6);\nreturn [{ json: { titles } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP - OpenAI Titles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - OpenAI Titles": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Titles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  }
+}

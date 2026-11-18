@@ -42,8 +42,9 @@ type VLine = { text: string; style: string; gold: number[]; maxW?: number; font?
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
 // Обкладинка (SQL 025, сет 2): фон — чистий кадр (t секунд clean.mp4), kicker — надпис зверху, title — «*золоте* слово», y — висота центру тексту.
-// bg.kind 'media' (фото з бази) — сет 3
-export type CoverSpec = { bg: { kind: 'frame'; t: number }; kicker: string; title: string; y: number; wm: Plan['wm'] }
+// bg.kind 'media' (сет 3) — фото з бази (таблиця media, bucket post-media) замість кадру відео
+export type CoverBg = { kind: 'frame'; t: number } | { kind: 'media'; media_id: string }
+export type CoverSpec = { bg: CoverBg; kicker: string; title: string; y: number; wm: Plan['wm'] }
 type CoverCand = { path: string; t: number; sharp?: number }
 
 const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage, caption, nomusic_path, delivered_at, published_at, published_ref, cover_spec, cover_cands'
@@ -189,29 +190,34 @@ async function iraRules(platform: string, hotelId: string | null, planId: string
     .slice(0, RULES_MAX)
 }
 
-// Виклик n8n «Video Caption Rewrite». null — n8n не налаштований / не відповів
-async function captionHook(body: Record<string, unknown>): Promise<string | null> {
+// Синхронний вебхук n8n (відповідь — JSON останнього вузла). null — n8n не налаштований / не відповів
+async function n8nJson(path: string, body: Record<string, unknown>, ms: number): Promise<Record<string, unknown> | null> {
   const secret = process.env.N8N_WEBHOOK_SECRET
   const s = await getSettings(['n8n_webhook_base'])
   const base = typeof s.n8n_webhook_base === 'string' ? s.n8n_webhook_base.replace(/\/$/, '') : ''
   if (!base || !secret) return null
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 50000)
+  const timer = setTimeout(() => ctrl.abort(), ms)
   try {
-    const r = await fetch(`${base}/travellab-video-caption`, {
+    const r = await fetch(`${base}/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-TL-Secret': secret },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     })
     if (!r.ok) return null
-    const caption = String(((await r.json()) as { caption?: unknown }).caption ?? '').trim()
-    return caption || null
+    return (await r.json()) as Record<string, unknown>
   } catch {
     return null
   } finally {
     clearTimeout(timer)
   }
+}
+
+// Виклик n8n «Video Caption Rewrite» (WF-061)
+async function captionHook(body: Record<string, unknown>): Promise<string | null> {
+  const caption = String((await n8nJson('travellab-video-caption', body, 50000))?.caption ?? '').trim()
+  return caption || null
 }
 
 // Іра пише правку до підпису → AI переписує лише текст (відео не перемонтовується, final_* не скидаються).
@@ -411,6 +417,8 @@ const COVER_TEXT = new Set(['hook', 'title', 'word'])
 const KICKER_MAX = 40
 const TITLE_MAX = 80
 const PREVIEW_W = 540
+const MEDIA_BUCKET = 'post-media'   // фото з бази (server/media.ts)
+const MEDIA_ID = /^[A-Za-z0-9_-]{1,40}$/
 const COVER_COLS = 'name, format, place, plan, dur, status, poster_path, cover_spec, cover_cands, final_path, cover_path, remount, published_at, updated_at'
 type CoverRow = Pick<DraftRow, 'name' | 'format' | 'place' | 'plan' | 'dur' | 'status' | 'poster_path' | 'cover_spec' | 'cover_cands' | 'final_path' | 'cover_path' | 'remount' | 'published_at' | 'updated_at'>
 
@@ -424,7 +432,7 @@ function coverCands(d: Pick<DraftRow, 'cover_cands' | 'poster_path' | 'plan'>): 
 // Найближчий за часом кандидат: після перемонтажу bg.t іде за своїм кадром і може не збігтися з жодним
 const nearest = (cands: CoverCand[], t: number) => cands.reduce<CoverCand | null>((b, c) => (!b || Math.abs(c.t - t) < Math.abs(b.t - t) ? c : b), null)
 
-// Як default_spec у montage-test/cover.py (без AI-заголовка — він у воркері / сеті 3): хук плану, його мітка або місце, знак плану
+// Як default_spec у montage-test/cover.py (без AI-заголовка — він у воркері; в апці — «✨ Варіанти»): хук плану, його мітка або місце, знак плану
 function defaultCover(d: Pick<DraftRow, 'plan' | 'name' | 'place' | 'cover_cands' | 'poster_path'>): CoverSpec {
   let title = '', kicker = ''
   for (const t of d.plan?.texts ?? []) {
@@ -442,15 +450,25 @@ function defaultCover(d: Pick<DraftRow, 'plan' | 'name' | 'place' | 'cover_cands
   }
 }
 
-// Спека з апки → чиста: фон — найближчий кандидат, тексти обрізані, y у безпечній зоні, знак — відомі значення. null — не схоже на спеку
+// Спека з апки → чиста: фон — найближчий кандидат або фото з бази (номер media), тексти обрізані, y у безпечній зоні,
+// знак — відомі значення. null — не схоже на спеку. Чи є таке фото в базі — перевіряє coverBg
 function cleanCover(raw: unknown, cands: CoverCand[]): CoverSpec | null {
   if (!raw || typeof raw !== 'object') return null
   const s = raw as Record<string, unknown>
-  const bg = nearest(cands, num((s.bg as Record<string, unknown> | undefined)?.t, 0, 3600, 0))
-  if (!bg) return null
+  const rb = (s.bg && typeof s.bg === 'object' ? s.bg : {}) as Record<string, unknown>
+  let bg: CoverBg
+  if (rb.kind === 'media') {
+    const mid = String(rb.media_id ?? '')
+    if (!MEDIA_ID.test(mid)) return null
+    bg = { kind: 'media', media_id: mid }
+  } else {
+    const c = nearest(cands, num(rb.t, 0, 3600, 0))
+    if (!c) return null
+    bg = { kind: 'frame', t: c.t }
+  }
   const txt = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
   return {
-    bg: { kind: 'frame', t: bg.t },
+    bg,
     kicker: txt(s.kicker, KICKER_MAX),
     // золото — *слово*; «слова» з самих зірочок прибираємо, інакше рендер зсуне номери золотих слів
     title: txt(s.title, TITLE_MAX).split(' ').filter((w) => w.replace(/\*/g, '')).join(' '),
@@ -459,30 +477,38 @@ function cleanCover(raw: unknown, cands: CoverCand[]): CoverSpec | null {
   }
 }
 
-// Кадри-кандидати кешуємо в теплому інстансі: Іра перебирає фон і текст — щоб не качати той самий JPEG на кожне прев'ю
+// Фони кешуємо в теплому інстансі: Іра перебирає фон і текст — щоб не качати той самий JPEG на кожне прев'ю
 const BG_TTL_MS = 10 * 60_000
 const bgCache = new Map<string, { at: number; buf: Buffer }>()
-async function bgFile(path: string) {
-  const hit = bgCache.get(path)
+async function bgFile(bucket: string, path: string) {
+  const key = `${bucket}/${path}`
+  const hit = bgCache.get(key)
   if (hit && Date.now() - hit.at < BG_TTL_MS) return hit.buf
-  const r = await db().storage.from(BUCKET).download(path)
+  const r = await db().storage.from(bucket).download(path)
   if (r.error) throw r.error
   const buf = Buffer.from(await r.data.arrayBuffer())
   if (bgCache.size >= 12) bgCache.delete(bgCache.keys().next().value as string)
-  bgCache.set(path, { at: Date.now(), buf })
+  bgCache.set(key, { at: Date.now(), buf })
   return buf
 }
+
+// Файл фону: кадр-кандидат (bucket video) або фото з бази (bucket post-media). null — фото вже нема в базі / кадрів ще нема
+async function coverBg(d: CoverRow, bg: CoverBg): Promise<Buffer | null> {
+  if (bg.kind === 'media') {
+    const m = await db().from('media').select('storage_path').eq('media_id', bg.media_id).maybeSingle()
+    if (m.error) throw m.error
+    const path = (m.data as { storage_path?: string | null } | null)?.storage_path
+    return path ? bgFile(MEDIA_BUCKET, path) : null
+  }
+  const c = nearest(coverCands(d), bg.t)
+  return c ? bgFile(BUCKET, c.path) : null
+}
+const NO_MEDIA = 'Цього фото вже нема в базі — обери інше.'
 
 async function coverRow(id: string) {
   const r = await db().from('video_drafts').select(COVER_COLS).eq('id', id).maybeSingle()
   if (r.error) throw r.error
   return r.data as CoverRow | null
-}
-
-async function renderCover(d: CoverRow, spec: CoverSpec, width?: number) {
-  const bg = nearest(coverCands(d), spec.bg.t)
-  if (!bg) throw new Error('Немає кадру для обкладинки')
-  return coverJpeg(await bgFile(bg.path), spec, width)
 }
 
 // Готове відео вже є → cover.jpg поруч з ним теж новий: його бот шле в слот (server/video_publish.ts) і «Надіслати ще раз»
@@ -499,8 +525,10 @@ export async function previewCover(id: string, raw: unknown) {
   if (!d) return { code: 404, error: 'not found' }
   const spec = cleanCover(raw, coverCands(d))
   if (!spec) return { code: 400, error: 'bad cover' }
-  const buf = await renderCover(d, spec, PREVIEW_W)
-  return { code: 200, jpg: `data:image/jpeg;base64,${buf.toString('base64')}`, t: spec.bg.t }
+  const bg = await coverBg(d, spec.bg)
+  if (!bg) return { code: 400, error: spec.bg.kind === 'media' ? NO_MEDIA : 'Немає кадру для обкладинки' }
+  const buf = await coverJpeg(bg, spec, PREVIEW_W)
+  return { code: 200, jpg: `data:image/jpeg;base64,${buf.toString('base64')}`, bg: spec.bg }
 }
 
 // Зберегти обкладинку: затвердження й готове відео НЕ скидаємо. Відео вже змонтоване — перемальовуємо cover.jpg тут же.
@@ -512,6 +540,8 @@ export async function saveCover(id: string, raw: unknown) {
   if (d.remount?.state === 'queued' || d.remount?.state === 'running') return { code: 409, error: 'Перемонтовую кадри — зачекай хвилинку, потім зміниш обкладинку.' }
   const spec = cleanCover(raw, coverCands(d))
   if (!spec) return { code: 400, error: 'bad cover' }
+  const bg = await coverBg(d, spec.bg)
+  if (!bg) return { code: 400, error: spec.bg.kind === 'media' ? NO_MEDIA : 'Немає кадру для обкладинки' }
   const rendering = d.status === 'approved' && !d.final_path
   const row: Record<string, unknown> = { cover_spec: spec }
   if (rendering) row.updated_at = new Date().toISOString()
@@ -519,7 +549,7 @@ export async function saveCover(id: string, raw: unknown) {
   if (r.error) throw r.error
   if (!r.data?.length) return { code: 409, error: PUBLISHED_ERR }
   const cur = r.data[0] as { updated_at: string; final_path: string | null }
-  if (cur.final_path) await uploadCover({ ...d, final_path: cur.final_path }, await renderCover(d, spec))
+  if (cur.final_path) await uploadCover({ ...d, final_path: cur.final_path }, await coverJpeg(bg, spec))
   return { code: 200, cover_spec: spec, updated_at: cur.updated_at, file: Boolean(cur.final_path) }
 }
 
@@ -529,7 +559,9 @@ export async function sendCover(id: string, chatId: number) {
   if (!d) return { code: 404, error: 'not found' }
   const spec = cleanCover(d.cover_spec ? { ...defaultCover(d), ...d.cover_spec } : defaultCover(d), coverCands(d))
   if (!spec) return { code: 409, error: 'Кадрів для обкладинки ще нема — зачекай, поки відео змонтується.' }
-  const buf = await renderCover(d, spec)
+  const bg = await coverBg(d, spec.bg)
+  if (!bg) return { code: 409, error: spec.bg.kind === 'media' ? NO_MEDIA : 'Кадрів для обкладинки ще нема — зачекай, поки відео змонтується.' }
+  const buf = await coverJpeg(bg, spec)
   await uploadCover(d, buf)
   const f = new FormData()
   f.append('chat_id', String(chatId))
@@ -537,4 +569,111 @@ export async function sendCover(id: string, chatId: number) {
   f.append('document', new Blob([new Uint8Array(buf)], { type: 'image/jpeg' }), 'cover.jpg')
   await tgCall('sendDocument', f)
   return { code: 200, sent_at: new Date().toISOString() }
+}
+
+// ───────────── Обкладинка, сет 3: фон — фото з бази · AI-варіанти заголовка ─────────────
+
+const HERE_MAX = 60      // фото цього місця
+const OTHER_MAX = 24     // решта бази — після них
+// Місце відео пишемо українською («Мальдіви», «Англія · Касл-Кум»), а в базі країна — англійською (hotels.country, media.destination).
+// У відео hotel_id майже завжди порожній — тому «фото цього місця» шукаємо ще й за країною
+const PLACE_COUNTRY: [RegExp, string][] = [
+  [/мальдів/i, 'maldives'], [/греці|пелопон|наварин|кріт/i, 'greece'], [/сейшел/i, 'seychelles'],
+  [/полінез|бора[\s-]?бора|таїт/i, 'french polynesia'], [/коста[\s-]?рік/i, 'costa rica'],
+]
+type MediaRow = { media_id: string; hotel_id: string | null; destination: string | null; width: number | null; height: number | null; usage_count: number | null; storage_path: string }
+
+// «Фото з бази» для фону: спершу цього готелю / країни, у них — вертикальні (9:16 без обрізки), далі менш викладені й новіші; потім решта бази.
+// Обране зараз фото — завжди в списку. here — фото цього місця, vertical — не обріжеться по боках
+export async function coverMedia(id: string) {
+  const r = await db().from('video_drafts').select('place, hotel_id, cover_spec').eq('id', id).maybeSingle()
+  if (r.error) throw r.error
+  if (!r.data) return { code: 404, error: 'not found' }
+  const d = r.data as { place: string | null; hotel_id: string | null; cover_spec: CoverSpec | null }
+  const [h, m] = await Promise.all([
+    db().from('hotels').select('hotel_id, name, country'),
+    db().from('media').select('media_id, hotel_id, destination, width, height, usage_count, storage_path')
+      .not('storage_path', 'is', null).or('type.is.null,type.eq.photo').limit(1000),
+  ])
+  if (h.error) throw h.error
+  if (m.error) throw m.error
+  const lc = (s: string | null | undefined) => String(s ?? '').trim().toLowerCase()
+  const place = lc(d.place)
+  const countries = new Set(PLACE_COUNTRY.filter(([re]) => re.test(place)).map(([, c]) => c))
+  const hotels = new Set(((h.data ?? []) as { hotel_id: string; name: string | null; country: string | null }[])
+    .filter((x) => x.hotel_id === d.hotel_id || countries.has(lc(x.country)) || (place && lc(x.name) && place.includes(lc(x.name))))
+    .map((x) => x.hotel_id))
+  const rows = ((m.data ?? []) as MediaRow[]).map((x) => ({
+    ...x,
+    here: Boolean((x.hotel_id && hotels.has(x.hotel_id)) || countries.has(lc(x.destination))),
+    vertical: Boolean(x.width && x.height && x.height > x.width * 1.05),
+  }))
+  rows.sort((a, b) => Number(b.here) - Number(a.here) || Number(b.vertical) - Number(a.vertical)
+    || (a.usage_count ?? 0) - (b.usage_count ?? 0) || b.media_id.localeCompare(a.media_id, 'en', { numeric: true }))
+  const chosen = d.cover_spec?.bg?.kind === 'media' ? d.cover_spec.bg.media_id : null
+  const here = rows.filter((x) => x.here).slice(0, HERE_MAX)
+  // свого місця в базі нема (Англія, Альпи) — тоді вся база, вертикальні першими
+  const list = [...here, ...rows.filter((x) => !x.here).slice(0, here.length ? OTHER_MAX : HERE_MAX)]
+  const cur = chosen && !list.some((x) => x.media_id === chosen) ? rows.find((x) => x.media_id === chosen) : undefined
+  if (cur) list.unshift(cur)
+  const signed = list.length ? await db().storage.from(MEDIA_BUCKET).createSignedUrls(list.map((x) => x.storage_path), TTL_SEC) : { data: [], error: null }
+  if (signed.error) throw signed.error
+  const urls = new Map((signed.data ?? []).filter((s) => s.path && s.signedUrl).map((s) => [s.path as string, s.signedUrl as string]))
+  return {
+    code: 200,
+    items: list.flatMap((x) => (urls.has(x.storage_path) ? [{ media_id: x.media_id, url: urls.get(x.storage_path) as string, here: x.here, vertical: x.vertical }] : [])),
+  }
+}
+
+const TITLES_MAX = 4
+// Варіант від агента → «слова з *золотим* словом»: 2–7 слів (просимо 2–6, одне зайве — не привід викидати), без крапки й лапок;
+// золото — перший *позначений* шматок, не більше 2 слів, кожне слово в зірочках окремо (як fmtTitle в апці). Не підходить — ''
+export function cleanTitle(x: unknown): string {
+  const raw = String((x && typeof x === 'object' ? (x as { title?: unknown }).title : x) ?? '')
+    .replace(/\s+/g, ' ').trim().replace(/^["'«“„]+|["'»”]+$/g, '').replace(/[.。]+$/, '').trim()
+  const m = /\*([^*]+)\*/.exec(raw)
+  const gold = m ? m[1].trim().split(' ').filter(Boolean) : []
+  const ws = raw.replace(/\*/g, '').split(' ').filter(Boolean)
+  if (ws.length < 2 || ws.length > 7 || ws.join(' ').length > TITLE_MAX) return ''
+  let at = -1
+  if (gold.length && gold.length <= 2) {
+    for (let i = 0; i + gold.length <= ws.length && at < 0; i++) if (gold.every((g, k) => ws[i + k] === g)) at = i
+  }
+  return ws.map((w, i) => (at >= 0 && i >= at && i < at + gold.length ? `*${w}*` : w)).join(' ')
+}
+
+// «✨ Варіанти»: 3–4 короткі заголовки обкладинки від агента (n8n WF «Video Cover Titles», тон PRMPT-011 + правила Іри).
+// spec — те, що зараз у полях (може бути не збережене): поточний заголовок агент не повторює. Нічого не зберігаємо — Іра тапає варіант
+export async function coverTitles(id: string, raw: unknown) {
+  const r = await db().from('video_drafts').select('name, format, platform, place, hotel_id, plan_id, plan, caption, published_at').eq('id', id).maybeSingle()
+  if (r.error) throw r.error
+  if (!r.data) return { code: 404, error: 'not found' }
+  const d = r.data as { name: string; format: string; platform: string; place: string | null; hotel_id: string | null; plan_id: string | null; plan: Plan | null; caption: string | null; published_at: string | null }
+  if (d.published_at) return { code: 409, error: PUBLISHED_ERR }
+  const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const cur = String(s.title ?? '').replace(/\*/g, '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX)
+  const texts = d.plan?.texts ?? []
+  const [rules, hotel] = await Promise.all([
+    iraRules(d.platform, d.hotel_id, d.plan_id),
+    d.hotel_id ? db().from('hotels').select('name').eq('hotel_id', d.hotel_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+  ])
+  const j = await n8nJson('travellab-video-cover-titles', {
+    name: d.name, format: d.format, platform: d.platform, place: d.place, hotel: (hotel.data as { name?: string } | null)?.name ?? null,
+    kicker: String(s.kicker ?? '').replace(/\s+/g, ' ').trim().slice(0, KICKER_MAX), title: cur,
+    screen: texts.filter((t) => !t.sec).flatMap((t) => t.lines.map((l) => l.text)).join(' / '),
+    voice: texts.filter((t) => t.sec).flatMap((t) => t.lines.map((l) => l.text)).join(' ').slice(0, 1200),
+    caption: (d.caption ?? '').slice(0, 800), rules,
+  }, 40000)
+  const seen = new Set([cur.toLowerCase()])
+  const titles: string[] = []
+  for (const x of Array.isArray(j?.titles) ? j.titles : []) {
+    const t = cleanTitle(x)
+    const k = t.replace(/\*/g, '').toLowerCase()
+    if (!t || seen.has(k)) continue
+    seen.add(k)
+    titles.push(t)
+    if (titles.length >= TITLES_MAX) break
+  }
+  if (!titles.length) return { code: 502, error: 'Агент зараз не відповів — спробуй ще раз за хвилинку.' }
+  return { code: 200, titles }
 }

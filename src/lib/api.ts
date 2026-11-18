@@ -1,5 +1,5 @@
 import { isDemo, tg } from './tg'
-import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type CoverSpec, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
+import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type CoverMedia, type CoverSpec, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
 export class ApiError extends Error {
   status: number
@@ -349,7 +349,9 @@ export async function markVideoPosted(id: string): Promise<{ published_at: strin
 export async function coverPreview(d: VideoDraft, spec: CoverSpec): Promise<string> {
   if (isDemo) {
     await wait(200)
-    return d.cover_cands?.find((c) => Math.abs(c.t - spec.bg.t) < 0.05)?.url ?? d.poster
+    const bg = spec.bg
+    if (bg.kind === 'media') return DEMO_MEDIA.find((m) => m.media_id === bg.media_id)?.url ?? d.poster
+    return d.cover_cands?.find((c) => Math.abs(c.t - bg.t) < 0.05)?.url ?? d.poster
   }
   const r = await call<{ jpg: string }>('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover_preview', id: d.id, spec }) })
   return r.jpg
@@ -363,6 +365,27 @@ export async function saveCover(d: VideoDraft, spec: CoverSpec): Promise<{ cover
     return { cover_spec: spec, updated_at: d.updated_at ?? new Date().toISOString(), file: Boolean(d.final) }
   }
   return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover', id: d.id, spec }) })
+}
+
+// Демо: «фото з бази» — постери демо-відео
+const DEMO_MEDIA: CoverMedia[] = [1, 2, 3].map((n) => ({ media_id: `MED-D${n}`, url: `/demo/video/poster_d${n}.jpg`, here: n < 3, vertical: true }))
+
+// Фото з бази для фону обкладинки (сет 3): цього місця й вертикальні — першими
+export async function coverMedia(d: VideoDraft): Promise<CoverMedia[]> {
+  if (isDemo) {
+    await wait(300)
+    return DEMO_MEDIA
+  }
+  return (await call<{ items: CoverMedia[] }>('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover_media', id: d.id }) })).items
+}
+
+// «✨ Варіанти»: 3–4 заголовки від агента (5–20 с); spec — що зараз у полях, щоб не повторив поточний
+export async function coverTitles(d: VideoDraft, spec: CoverSpec): Promise<string[]> {
+  if (isDemo) {
+    await wait(1200)
+    return ['Острів, де *час* повільніший', 'Ранок без *поспіху*', 'Тиша над *лагуною*', 'Тут легко *видихнути*']
+  }
+  return (await call<{ titles: string[] }>('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover_titles', id: d.id, spec: { title: spec.title, kicker: spec.kicker } }) })).titles
 }
 
 // «Надіслати обкладинку ще раз» — файлом у чат того, хто натиснув

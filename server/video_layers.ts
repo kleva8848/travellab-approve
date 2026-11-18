@@ -227,7 +227,9 @@ export async function coverJpeg(bg: Buffer, spec: CoverSpec, width?: number): Pr
     const png = await wmPng(w.kind, w.pos, w.color)
     if (png) layers.push({ input: png })
   }
-  const full = sharp(bg).resize(VW, VH, { fit: 'cover' }).composite(layers)
+  // bg — чистий кадр 1080×1920 або фото з бази (сет 3: будь-який розмір, часто горизонтальне → обрізаємо по центру до 9:16;
+  // rotate() — EXIF-поворот фото з телефона, кадрам з ffmpeg нічого не робить)
+  const full = sharp(bg).rotate().resize(VW, VH, { fit: 'cover' }).composite(layers)
   if (!width) return full.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
   // sharp робить resize до composite — тому спершу склеюємо в повному розмірі, потім окремо зменшуємо
   const { data, info } = await full.raw().toBuffer({ resolveWithObject: true })

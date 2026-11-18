@@ -86,9 +86,12 @@ export type VideoDraft = {
   cover_spec?: CoverSpec
   cover_cands?: { t: number; url: string }[]
 }
-// Обкладинка: фон — чистий кадр на t с, kicker — надпис зверху, title — «*золоте* слово», y — висота центру тексту (1080×1920).
-// Малює сервер (server/video_layers.ts coverJpeg) — і прев'ю, і файл у чат
-export type CoverSpec = { bg: { kind: 'frame'; t: number }; kicker: string; title: string; y: number; wm: VideoDraft['wm'] }
+// Обкладинка: фон — чистий кадр на t с або фото з бази (media_id, сет 3), kicker — надпис зверху, title — «*золоте* слово»,
+// y — висота центру тексту (1080×1920). Малює сервер (server/video_layers.ts coverJpeg) — і прев'ю, і файл у чат
+export type CoverBg = { kind: 'frame'; t: number } | { kind: 'media'; media_id: string }
+export type CoverSpec = { bg: CoverBg; kicker: string; title: string; y: number; wm: VideoDraft['wm'] }
+// Фото з бази для фону: here — цього місця (готель / країна), vertical — 9:16 без обрізки по боках
+export type CoverMedia = { media_id: string; url: string; here: boolean; vertical: boolean }
 export const COVER_Y = 1180
 export const COVER_Y_MIN = 580
 export const COVER_Y_MAX = 1380
