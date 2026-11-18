@@ -94,7 +94,7 @@ export type Version = {
   created_at: string
 }
 
-export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string; veil?: 'more' | 'less'; bright?: 'up' | 'down'; size?: 'bigger' | 'smaller'; width?: 'wide' | 'narrow' }
 // Водяний знак на фото поста: wm1 — горизонтальний (дефолт), wm3 — рукописний, off — без
 export type PostWm = 'wm1' | 'wm3' | 'off'
 export type RenderParams = {

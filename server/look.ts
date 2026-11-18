@@ -51,7 +51,7 @@ export type Band = { y0: number; y1: number }
 // З band: під текстом вуаль на повну силу, а сила — від яскравості фото саме під текстом (біла піна / пісок / небо
 // під кремовим текстом → темніше, до 70%); далі м'яко сходить до центру кадру
 // tone: false — «без обробки»: кольори й яскравість як в оригіналі, лишається лише вуаль під текстом (щоб читався)
-export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null, tone = true): Buffer {
+export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null, tone = true, adj: { veil?: 'more' | 'less'; bright?: 'up' | 'down' } = {}): Buffer {
   const px = w * h
   const y = new Float32Array(px)
   for (let i = 0; i < px; i++) y[i] = lum(rgb[i * 3] / 255, rgb[i * 3 + 1] / 255, rgb[i * 3 + 2] / 255)
@@ -68,6 +68,7 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
   let hot = 0
   for (let i = 0; i < px; i++) if (y[i] > 0.97) hot++
   if (hot / px > 0.02) g = Math.max(g, 0.97) // сонце в кадрі не роздуваємо
+  if (adj.bright) g *= adj.bright === 'up' ? 0.8 : 1.25 // явна правка Іри «світліше / темніше» — після всіх обмежень
   const lift = !tone ? 0 : Math.min(Math.max(percentile(sorted, 0.5) - 0.04, 0), 0.06) * 0.5 // серпанок — половину, не більше 3%
 
   const toned = (yi: number) => Math.pow(Math.min(1, Math.max(0, (yi - lift) / (1 - lift))), g)
@@ -91,6 +92,7 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
       zone.zone === 'top' ? (row <= y1 ? 1 : 1 - smooth(row, y1, y1 + feather)) : row >= y0 ? 1 : smooth(row, y0 - feather, y0)
   }
 
+  if (adj.veil) strength = Math.min(0.9, adj.veil === 'more' ? strength * 1.45 : strength * 0.55) // «більше / менше затемнення» під текстом
   const out = Buffer.alloc(px * 3)
   for (let row = 0; row < h; row++) {
     const m = zone ? weight(row) * strength : 0

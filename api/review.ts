@@ -38,7 +38,7 @@ const MAX_PHOTO_TEXT = 140
 // Чипи під фото: кожне поле — значення або null (= прибрати правку, як вирішив агент)
 function parseEdit(raw: Record<string, unknown>): Record<string, string | null> | null {
   const out: Record<string, string | null> = {}
-  const allowed: Record<string, string[] | 'text'> = { text: ['off', 'top', 'bottom'], look: ['none'], crop: ['centre', 'north', 'south'], title: 'text', kicker: 'text' }
+  const allowed: Record<string, string[] | 'text'> = { text: ['off', 'top', 'bottom'], look: ['none'], crop: ['centre', 'north', 'south'], title: 'text', kicker: 'text', veil: ['more', 'less'], bright: ['up', 'down'], size: ['bigger', 'smaller'], width: ['wide', 'narrow'] }
   for (const [k, v] of Object.entries(raw)) {
     const rule = allowed[k]
     if (!rule) return null

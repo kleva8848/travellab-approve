@@ -24,7 +24,7 @@ const REV = 'r5'
 const exportPath = (planId: string, versionNo: number, i: number, tag = '') => `exports/${planId}/v${versionNo}${REV}${tag}_${i + 1}.jpg`
 
 // Ручні правки Іри до конкретного фото (чипи під фото) — render_params.photo_edits[media_id]
-export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string }
+export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string; veil?: 'more' | 'less'; bright?: 'up' | 'down'; size?: 'bigger' | 'smaller'; width?: 'wide' | 'narrow' }
 // Знак на фото поста — вибір Іри на весь пост (render_params.wm). Дефолт — горизонтальний wm1:
 // рукописний wm3 Іра 19.10 назвала громіздким. 'off' — без знака
 export type PostWm = 'wm1' | 'wm3' | 'off'
@@ -53,8 +53,8 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position }).removeAlpha().toColourspace('srgb').raw().toBuffer()
   const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
   // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
-  const layer = zone && text ? await textLayer(w, h, text, zone, pad, inset) : null
-  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none')
+  const layer = zone && text ? await textLayer(w, h, text, zone, pad, inset, { size: edit.size, width: edit.width }) : null
+  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { veil: edit.veil, bright: edit.bright })
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
   if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
   if (wm) img = sharp(await addWatermark(await img.png().toBuffer(), wm, zone?.zone ?? null, pad, inset))

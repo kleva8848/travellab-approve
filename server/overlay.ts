@@ -72,12 +72,14 @@ const el = (type: string, style: Record<string, unknown>, children?: unknown): E
 
 // Прозорий PNG w×h з текстом — кладемо поверх фото (sharp composite)
 // inset — додатковий відступ згори/знизу (сторіз: там лежать аватар і поле відповіді Instagram)
-export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, frame: number, inset = 0): Promise<Buffer> {
+// opts — правки Іри: size (розмір рядка), width (поля з боків: wide — текст на всю ширину, narrow — вужчий стовпчик)
+export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, frame: number, inset = 0, opts: { size?: 'bigger' | 'smaller'; width?: 'wide' | 'narrow' } = {}): Promise<Buffer> {
   const color = zone.text === 'light' ? CREAM : GRAPH
   const shadow = zone.text === 'light' ? '0 1px 3px rgba(0,0,0,0.45), 0 2px 18px rgba(0,0,0,0.45)' : 'none'
   const inner = w - 2 * frame
   // × 1.1 — Cormorant має менше очко, ніж був Prata (той самий scale, що у відео)
-  const titleSize = Math.round(inner * (t.small ? 0.05 : t.title.length > 34 ? 0.058 : 0.068) * 1.1)
+  const titleSize = Math.round(inner * (t.small ? 0.05 : t.title.length > 34 ? 0.058 : 0.068) * 1.1 * (opts.size === 'bigger' ? 1.2 : opts.size === 'smaller' ? 0.85 : 1))
+  const side = opts.width === 'wide' ? 0.035 : opts.width === 'narrow' ? 0.18 : 0.09
   const kids: El[] = []
   if (t.kicker) {
     kids.push(el('div', {
@@ -91,7 +93,7 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
   const root = el('div', {
     width: w, height: h, display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: zone.zone === 'top' ? 'flex-start' : 'flex-end',
-    paddingLeft: Math.round(frame + inner * 0.09), paddingRight: Math.round(frame + inner * 0.09), ...pad,
+    paddingLeft: Math.round(frame + inner * side), paddingRight: Math.round(frame + inner * side), ...pad,
     color, textAlign: 'center',
   }, kids)
 
