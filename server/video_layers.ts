@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import satori from 'satori'
-import sharp from 'sharp'
+import sharp, { type OverlayOptions } from 'sharp'
 import type { Plan } from './video.js'
 
 // Фінальний рендер сторіз / рілс (сет 3): шари плану → прозорі PNG 1080×1920, які воркер кладе на clean.mp4 (ffmpeg overlay + fade).
@@ -107,7 +107,7 @@ function line(l: VLine, gap: number): El {
 const lineGap = (prev: VLine | undefined, l: VLine) => (!prev ? 0 : prev.style === l.style ? 4 : (STYLES[l.style] ?? STYLES.sub).gap * 2)
 
 // Один текст → PNG на весь кадр: смуга затемнення ±150px на всю ширину + рядки по центру (ширина 900, відступ 90)
-async function textPng(t: VText): Promise<Buffer> {
+async function textPng(t: VText, centerY?: number): Promise<Buffer> {
   const a = t.scrim
   const fade = (dirTo: 'bottom' | 'top') => el('div', {
     width: VW, height: 150,
@@ -117,9 +117,15 @@ async function textPng(t: VText): Promise<Buffer> {
     display: 'flex', flexDirection: 'column', alignItems: 'center', width: VW, paddingLeft: 90, paddingRight: 90,
     ...(a > 0 ? { backgroundColor: `rgba(0,0,0,${a})` } : {}),
   }, t.lines.map((l, i) => line(l, lineGap(t.lines[i - 1], l))))
-  const root = el('div', { display: 'flex', width: VW, height: VH, position: 'relative' }, [
-    el('div', { position: 'absolute', left: 0, top: t.y - 150, display: 'flex', flexDirection: 'column', width: VW }, [fade('bottom'), body, fade('top')]),
-  ])
+  const block = [fade('bottom'), body, fade('top')]
+  // centerY (обкладинка): блок по центру на висоті centerY — відступ зверху 2·centerY − VH, flex центрує в решті кадру
+  const root = centerY === undefined
+    ? el('div', { display: 'flex', width: VW, height: VH, position: 'relative' }, [
+      el('div', { position: 'absolute', left: 0, top: t.y - 150, display: 'flex', flexDirection: 'column', width: VW }, block),
+    ])
+    : el('div', { display: 'flex', flexDirection: 'column', justifyContent: 'center', width: VW, height: VH, paddingTop: Math.max(0, 2 * centerY - VH) }, [
+      el('div', { display: 'flex', flexDirection: 'column', width: VW }, block),
+    ])
   const svg = await satori(root as unknown as Parameters<typeof satori>[0], { width: VW, height: VH, fonts: loadFonts() })
   return sharp(Buffer.from(svg)).png().toBuffer()
 }
@@ -180,4 +186,25 @@ export async function videoLayers(plan: Plan, shots: Shot[], dur: number): Promi
   }
   const w = plan.wm ?? { kind: 'wm2', pos: 'br', color: 'white' }
   return { texts, wm: w.kind === 'off' ? null : await wmPng(w.kind, w.pos, w.color) }
+}
+
+// Обкладинка (сет 1, обкладинки): чистий кадр 1080×1920 + kicker + заголовок (*золоте* слово) + знак → JPEG.
+// Текст — той самий textPng, що в шарах відео; блок по центру на COVER_Y (центральна зона, щоб сітка профілю 3:4 не зрізала)
+export type CoverSpec = { kicker?: string; title: string; wm?: { kind: string; pos: string; color: string } }
+const COVER_Y = 1180   // нижче за обличчя в центрі кадру, але в зоні сітки профілю 3:4 (y 240–1680)
+
+export async function coverJpeg(bg: Buffer, spec: CoverSpec): Promise<Buffer> {
+  const goldIdx = (text: string) => text.split(/\s+/).filter(Boolean).flatMap((w, i) => (w.startsWith('*') || w.endsWith('*') ? [i] : []))
+  const clean = (text: string) => text.replace(/\*/g, '')
+  const lines: VLine[] = []
+  if (spec.kicker?.trim()) lines.push({ text: clean(spec.kicker.trim()), style: 'label', gold: [] })
+  if (spec.title?.trim()) lines.push({ text: clean(spec.title.trim()), style: 'hook', gold: goldIdx(spec.title.trim()) })
+  const layers: OverlayOptions[] = []
+  if (lines.length) layers.push({ input: await textPng({ id: 'cover', from: 0, to: 0, y: 0, scrim: 0.42, lines } as VText, COVER_Y) })
+  const w = spec.wm
+  if (w && w.kind !== 'off') {
+    const png = await wmPng(w.kind, w.pos, w.color)
+    if (png) layers.push({ input: png })
+  }
+  return sharp(bg).resize(VW, VH, { fit: 'cover' }).composite(layers).jpeg({ quality: 92, mozjpeg: true }).toBuffer()
 }
