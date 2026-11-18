@@ -82,6 +82,28 @@ export type VideoDraft = {
   dest?: Dest
   delivered_at?: string | null
   published_at?: string | null
+  // окрема обкладинка (SQL 025, сет 2): що намальовано (або що намалює воркер) + чисті кадри-кандидати для фону
+  cover_spec?: CoverSpec
+  cover_cands?: { t: number; url: string }[]
+}
+// Обкладинка: фон — чистий кадр на t с, kicker — надпис зверху, title — «*золоте* слово», y — висота центру тексту (1080×1920).
+// Малює сервер (server/video_layers.ts coverJpeg) — і прев'ю, і файл у чат
+export type CoverSpec = { bg: { kind: 'frame'; t: number }; kicker: string; title: string; y: number; wm: VideoDraft['wm'] }
+export const COVER_Y = 1180
+export const COVER_Y_MIN = 580
+export const COVER_Y_MAX = 1380
+export const COVER_STEP = 100
+// Сітка профілю Instagram обрізає обкладинку рілс по центру: 3:4 (1080×1440) і 4:5 (1080×1350) → видимий шматок по висоті
+export const GRID: Record<'3:4' | '4:5', { top: number; bottom: number }> = { '3:4': { top: 240, bottom: 1680 }, '4:5': { top: 285, bottom: 1635 } }
+
+// «Острів, де *час* повільніший» ↔ рядок + номери золотих слів (як VLine.gold у текстах відео).
+// Пробіли лишаємо як набрала — інакше в полі не поставити пробіл перед наступним словом
+export function parseTitle(s: string) {
+  return { text: s.replace(/\*/g, ''), gold: words(s).filter((w) => w.replace(/\*/g, '')).flatMap((w, i) => (w.startsWith('*') || w.endsWith('*') ? [i] : [])) }
+}
+export function fmtTitle(text: string, gold: number[]) {
+  let i = -1
+  return text.split(/(\s+)/).map((p) => (!p.trim() ? p : gold.includes(++i) ? `*${p}*` : p)).join('')
 }
 export type Dest = 'channel' | 'chat'
 export type RemountKind = 'remove' | 'replace' | 'moment' | 'reorder' | 'shorter' | 'music' | 'voice' | 'novoice'

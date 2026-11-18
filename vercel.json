@@ -20,6 +20,7 @@
       "maxDuration": 60
     },
     "api/video.ts": {
+      "includeFiles": "server/**",
       "maxDuration": 60
     }
   }

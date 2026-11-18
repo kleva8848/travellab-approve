@@ -1,5 +1,5 @@
 import { isDemo, tg } from './tg'
-import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
+import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type CoverSpec, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
 export class ApiError extends Error {
   status: number
@@ -342,6 +342,36 @@ export async function markVideoPosted(id: string): Promise<{ published_at: strin
     return { published_at }
   }
   return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'posted', id }) })
+}
+
+// Обкладинка (SQL 025, сет 2): прев'ю 540×960 малює сервер тим самим satori, що файл у чаті → data URL.
+// Демо без сервера — просто кадр-фон (тексту не буде)
+export async function coverPreview(d: VideoDraft, spec: CoverSpec): Promise<string> {
+  if (isDemo) {
+    await wait(200)
+    return d.cover_cands?.find((c) => Math.abs(c.t - spec.bg.t) < 0.05)?.url ?? d.poster
+  }
+  const r = await call<{ jpg: string }>('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover_preview', id: d.id, spec }) })
+  return r.jpg
+}
+
+// Зберегти обкладинку — затвердження не скидає; готове відео вже є → сервер одразу перемальовує cover.jpg
+export async function saveCover(d: VideoDraft, spec: CoverSpec): Promise<{ cover_spec: CoverSpec; updated_at: string; file: boolean }> {
+  if (isDemo) {
+    await wait()
+    patchDemoVideo(d.id, { cover_spec: spec })
+    return { cover_spec: spec, updated_at: d.updated_at ?? new Date().toISOString(), file: Boolean(d.final) }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover', id: d.id, spec }) })
+}
+
+// «Надіслати обкладинку ще раз» — файлом у чат того, хто натиснув
+export async function sendCover(id: string): Promise<{ sent_at: string }> {
+  if (isDemo) {
+    await wait()
+    return { sent_at: new Date().toISOString() }
+  }
+  return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'cover_send', id }) })
 }
 
 // Перемонтаж кадрів (SQL 020): заявка воркеру → { status, updated_at }; стан потім — getVideo(id).remount

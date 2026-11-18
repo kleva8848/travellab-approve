@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import satori from 'satori'
 import sharp, { type OverlayOptions } from 'sharp'
@@ -32,7 +33,11 @@ const FONT: Record<string, { name: string; file: string; weight: 400 | 500; lh: 
 }
 const WM: Record<string, { w: number; h: number }> = { wm2: { w: 150, h: 150 }, wm1: { w: 330, h: 110 }, wm3: { w: 225, h: 150 } }
 
-const dir = (sub: string) => fileURLToPath(new URL(`./${sub}/`, import.meta.url))
+// Воркер запускає файл напряму (import.meta.url = server/), на Vercel — із кореня проєкту (includeFiles server/**, як overlay.ts)
+const dir = (sub: string) => {
+  const cwd = join(process.cwd(), 'server', sub)
+  return existsSync(cwd) ? `${cwd}/` : fileURLToPath(new URL(`./${sub}/`, import.meta.url))
+}
 
 let fonts: { name: string; data: Buffer; weight: 400 | 500; style: 'normal' }[] | null = null
 function loadFonts() {
@@ -91,7 +96,8 @@ function line(l: VLine, gap: number): El {
   const f = FONT[l.font ?? ''] ?? FONT[st.font]
   const size = Math.round(st.size * f.scale)
   const track = f.script ? 0 : st.track
-  const words = l.text.split(/\s+/).filter(Boolean)
+  // пробіли, але не нерозривний: обкладинка клеїть «у\u00A0воду» в одне ціле, щоб коротке слово не висіло в кінці рядка
+  const words = l.text.split(/[^\S\u00A0]+/).filter(Boolean)
   const base = {
     marginTop: gap, width: Math.min(l.maxW ?? 900, 900),
     fontFamily: f.name, fontWeight: f.weight, fontSize: size, lineHeight: f.lh, letterSpacing: track,
@@ -99,9 +105,13 @@ function line(l: VLine, gap: number): El {
     textShadow: '0 4px 7px rgba(0,0,0,0.75)',
   }
   if (!l.gold.length) return el('div', { ...base, display: 'flex', justifyContent: 'center', textAlign: 'center' }, words.join(' '))
+  // l.gold — номери окремих слів; склеєне «у\u00A0воду» — кілька слів в одному непереносному блоці
   const gold = new Set(l.gold)
-  return el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: space(f.name) * size + track },
-    words.map((w, i) => el('div', gold.has(i) ? { color: GOLD } : {}, w)))
+  const sp = space(f.name) * size + track
+  let n = -1
+  const word = (w: string) => el('div', gold.has(++n) ? { color: GOLD } : {}, w)
+  return el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp },
+    words.map((w) => (w.includes('\u00A0') ? el('div', { display: 'flex', columnGap: sp }, w.split('\u00A0').map(word)) : word(w))))
 }
 
 const lineGap = (prev: VLine | undefined, l: VLine) => (!prev ? 0 : prev.style === l.style ? 4 : (STYLES[l.style] ?? STYLES.sub).gap * 2)
@@ -118,12 +128,16 @@ async function textPng(t: VText, centerY?: number): Promise<Buffer> {
     ...(a > 0 ? { backgroundColor: `rgba(0,0,0,${a})` } : {}),
   }, t.lines.map((l, i) => line(l, lineGap(t.lines[i - 1], l))))
   const block = [fade('bottom'), body, fade('top')]
-  // centerY (обкладинка): блок по центру на висоті centerY — відступ зверху 2·centerY − VH, flex центрує в решті кадру
+  // centerY (обкладинка): блок по центру на висоті centerY — нижче середини відступ зверху 2·centerY − VH, вище — знизу VH − 2·centerY;
+  // flex центрує в решті кадру
   const root = centerY === undefined
     ? el('div', { display: 'flex', width: VW, height: VH, position: 'relative' }, [
       el('div', { position: 'absolute', left: 0, top: t.y - 150, display: 'flex', flexDirection: 'column', width: VW }, block),
     ])
-    : el('div', { display: 'flex', flexDirection: 'column', justifyContent: 'center', width: VW, height: VH, paddingTop: Math.max(0, 2 * centerY - VH) }, [
+    : el('div', {
+      display: 'flex', flexDirection: 'column', justifyContent: 'center', width: VW, height: VH,
+      paddingTop: Math.max(0, 2 * centerY - VH), paddingBottom: Math.max(0, VH - 2 * centerY),
+    }, [
       el('div', { display: 'flex', flexDirection: 'column', width: VW }, block),
     ])
   const svg = await satori(root as unknown as Parameters<typeof satori>[0], { width: VW, height: VH, fonts: loadFonts() })
@@ -189,22 +203,33 @@ export async function videoLayers(plan: Plan, shots: Shot[], dur: number): Promi
 }
 
 // Обкладинка (сет 1, обкладинки): чистий кадр 1080×1920 + kicker + заголовок (*золоте* слово) + знак → JPEG.
-// Текст — той самий textPng, що в шарах відео; блок по центру на COVER_Y (центральна зона, щоб сітка профілю 3:4 не зрізала)
-export type CoverSpec = { kicker?: string; title: string; wm?: { kind: string; pos: string; color: string } }
-const COVER_Y = 1180   // нижче за обличчя в центрі кадру, але в зоні сітки профілю 3:4 (y 240–1680)
+// Текст — той самий textPng, що в шарах відео; блок по центру на y (за замовчуванням COVER_Y — центральна зона, щоб сітка профілю 3:4 не зрізала).
+// y Іра посуває в апці (сет 2: на деяких кадрах текст лягає на обличчя) — у межах COVER_Y_MIN…MAX, тобто в сітці 4:5 (y 285–1635)
+export type CoverSpec = { kicker?: string; title: string; y?: number; wm?: { kind: string; pos: string; color: string } }
+export const COVER_Y = 1180   // нижче за обличчя в центрі кадру, але в зоні сітки профілю 3:4 (y 240–1680)
+export const COVER_Y_MIN = 580
+export const COVER_Y_MAX = 1380
 
-export async function coverJpeg(bg: Buffer, spec: CoverSpec): Promise<Buffer> {
+// width — прев'ю в апці (540): малюємо в повному 1080×1920 (той самий layout, що файл у чаті) і лише потім зменшуємо
+export async function coverJpeg(bg: Buffer, spec: CoverSpec, width?: number): Promise<Buffer> {
   const goldIdx = (text: string) => text.split(/\s+/).filter(Boolean).flatMap((w, i) => (w.startsWith('*') || w.endsWith('*') ? [i] : []))
-  const clean = (text: string) => text.replace(/\*/g, '')
+  // короткі слова («у», «на», «де») не висять у кінці рядка — нерозривний пробіл після них, як typo() у server/overlay.ts
+  const clean = (text: string) => text.split(/\s+/).filter(Boolean).map((w) => w.replace(/\*/g, ''))
+    .map((w, i, a) => w + (i === a.length - 1 ? '' : /^\p{L}{1,2}$/u.test(w) ? '\u00A0' : ' ')).join('')
   const lines: VLine[] = []
   if (spec.kicker?.trim()) lines.push({ text: clean(spec.kicker.trim()), style: 'label', gold: [] })
   if (spec.title?.trim()) lines.push({ text: clean(spec.title.trim()), style: 'hook', gold: goldIdx(spec.title.trim()) })
   const layers: OverlayOptions[] = []
-  if (lines.length) layers.push({ input: await textPng({ id: 'cover', from: 0, to: 0, y: 0, scrim: 0.42, lines } as VText, COVER_Y) })
+  const y = Math.max(COVER_Y_MIN, Math.min(COVER_Y_MAX, Math.round(Number(spec.y ?? COVER_Y)) || COVER_Y))
+  if (lines.length) layers.push({ input: await textPng({ id: 'cover', from: 0, to: 0, y: 0, scrim: 0.42, lines } as VText, y) })
   const w = spec.wm
   if (w && w.kind !== 'off') {
     const png = await wmPng(w.kind, w.pos, w.color)
     if (png) layers.push({ input: png })
   }
-  return sharp(bg).resize(VW, VH, { fit: 'cover' }).composite(layers).jpeg({ quality: 92, mozjpeg: true }).toBuffer()
+  const full = sharp(bg).resize(VW, VH, { fit: 'cover' }).composite(layers)
+  if (!width) return full.jpeg({ quality: 92, mozjpeg: true }).toBuffer()
+  // sharp робить resize до composite — тому спершу склеюємо в повному розмірі, потім окремо зменшуємо
+  const { data, info } = await full.raw().toBuffer({ resolveWithObject: true })
+  return sharp(data, { raw: info }).resize(width).jpeg({ quality: 82 }).toBuffer()
 }

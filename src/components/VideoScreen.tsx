@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
-import { ackRemount, getVideo, markVideoPosted, remountVideo, resendVideo, rewriteVideoCaption, saveVideoCaption, videoAction, type VideoAction } from '../lib/api'
+import { ackRemount, coverPreview, getVideo, markVideoPosted, remountVideo, resendVideo, rewriteVideoCaption, saveCover, saveVideoCaption, sendCover, videoAction, type VideoAction } from '../lib/api'
 import { confirmAction, haptic, isDemo, openTelegram, useBackButton } from '../lib/tg'
 import {
-  FONT, GOLD, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM, lineGap, lineLook, newId, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
-  type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
+  COVER_STEP, COVER_Y, COVER_Y_MAX, COVER_Y_MIN, FONT, GOLD, GRID, MOOD, SAFE_BOTTOM, SAFE_TOP, STYLES, VH, VW, WM,
+  fmtTitle, lineGap, lineLook, newId, parseTitle, planOf, pubState, remounting, slotLabel, textTimes, wmBox, words,
+  type CoverSpec, type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
 
@@ -42,6 +43,9 @@ export function VideoScreen({ id, onBack }: { id: string; onBack: () => void }) 
 // Підказки до «Попросити агента» під підписом — дописуються в текст правки
 const CHIPS_CAPTION = ['Коротше', 'Тепліше, більше мене', 'Інший початок', 'Без емодзі', 'Більше деталей з відео']
 
+// Обкладинка: збережена / за замовчуванням з сервера; демо без сервера — назва, місце й знак відео
+const coverOf = (v: VideoDraft): CoverSpec => v.cover_spec ?? { bg: { kind: 'frame', t: v.cover }, kicker: v.place, title: v.name, y: COVER_Y, wm: v.wm }
+
 const hhmm = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }) : '')
 
 function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }) {
@@ -64,6 +68,12 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
   const [capChips, setCapChips] = useState<string[]>([])
   const [capAi, setCapAi] = useState(false)
   const [capPrev, setCapPrev] = useState<string | null>(null)
+  // обкладинка (SQL 025, сет 2) — своя кнопка «Зберегти», затвердження відео не скидає. Скидаємо чернетку, лише коли прийшла інша з сервера
+  const srvCover = JSON.stringify(coverOf(d))
+  const [cs, setCs] = useState<CoverSpec>(() => coverOf(initial))
+  const [csSaved, setCsSaved] = useState(srvCover)
+  useEffect(() => { setCs(JSON.parse(srvCover) as CoverSpec); setCsSaved(srvCover) }, [srvCover])
+  const coverDirty = JSON.stringify(cs) !== csSaved
   const vref = useRef<HTMLVideoElement>(null)
   const dirty = JSON.stringify(planOf(d)) !== saved
   const montage = d.status === 'approved' && !d.final
@@ -252,9 +262,43 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
     }
   }
 
-  // Затвердити разом з незбереженим підписом — щоб у слот пішов саме він
+  const saveCs = async () => {
+    if (busy) return false
+    setBusy(true)
+    try {
+      const r = await saveCover(d, cs)
+      setD((cur) => ({ ...cur, cover_spec: r.cover_spec, updated_at: r.updated_at }))
+      haptic('success')
+      setToast(r.file ? 'Обкладинку збережено — файл оновила, відео лишилось затвердженим' : 'Обкладинку збережено')
+      return true
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sendCs = async () => {
+    if (coverDirty && !(await saveCs())) return
+    setBusy(true)
+    try {
+      await sendCover(d.id)
+      haptic('success')
+      setToast('Обкладинку надіслала в чат ✓')
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Затвердити разом з незбереженим підписом і обкладинкою — щоб у слот пішли саме вони
   const approve = async () => {
     if (cap !== capSaved && !(await saveCap())) return
+    if (coverDirty && !(await saveCs())) return
     await act('approve', d.scheduled_for ? `Затверджено ✓ Відео змонтую, а ${slotLabel(d.scheduled_for).date} о ${slotLabel(d.scheduled_for).time} ${d.dest === 'channel' ? 'викладу в канал' : 'надішлю в чат'}` : 'Затверджено ✓ Готове відео з цим текстом прийде в чат')
   }
 
@@ -397,18 +441,8 @@ function Editor({ initial, onBack }: { initial: VideoDraft; onBack: () => void }
           <>
             <ShotsEditor d={d} t={t} disabled={busy || locked} onSeek={(s) => seek(s)} onRemount={remount} />
             <SoundCard d={d} disabled={busy || locked} onRemount={remount} onVoice={voice} />
-            <div className="card mt-3">
-              <div className="flex items-center gap-3">
-                <img src={d.poster} alt="" className="rounded-md object-cover" style={{ width: 54, height: 96 }} />
-                <div className="min-w-0 flex-1">
-                  <b className="block text-[14.5px]">Обкладинка</b>
-                  <span className="text-[13px]" style={{ color: 'var(--hint)' }}>кадр на {d.cover.toFixed(1)} с</span>
-                </div>
-              </div>
-              <button className="btn sec mt-3" onClick={() => { upd((n) => { n.cover = Math.round(t * 10) / 10 }); setToast(`Обкладинка — кадр на ${t.toFixed(1)} с`) }}>
-                Зробити обкладинкою цей кадр
-              </button>
-            </div>
+            <CoverCard d={d} spec={cs} dirty={coverDirty} disabled={busy || locked || published} onChange={setCs}
+              onReset={() => setCs(JSON.parse(csSaved) as CoverSpec)} onSave={() => void saveCs()} onSend={() => void sendCs()} />
           </>
         )}
 
@@ -815,6 +849,144 @@ function SoundCard({ d, disabled, onRemount, onVoice }: { d: VideoDraft; disable
   )
 }
 
+// ───────────── Обкладинка (SQL 025, сет 2): чистий кадр + надпис + заголовок + знак ─────────────
+
+type CoverProps = {
+  d: VideoDraft
+  spec: CoverSpec
+  dirty: boolean
+  disabled: boolean
+  onChange: (s: CoverSpec) => void
+  onReset: () => void
+  onSave: () => void
+  onSend: () => void
+}
+
+// Прев'ю малює сервер тим самим satori, що файл у чаті (прев'ю = файл); правки збираємо 350 мс, щоб не слати запит на кожну літеру
+function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend }: CoverProps) {
+  const [img, setImg] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+  // «Як у сітці профілю»: Instagram показує обкладинку рілс у профілі обрізаною до 3:4 / 4:5 — затемнюємо те, що зріжеться
+  const [grid, setGrid] = useState<'off' | keyof typeof GRID>(d.format === 'reel' ? '3:4' : 'off')
+  const seq = useRef(0)
+  const first = useRef(true)
+  const key = JSON.stringify(spec)
+
+  useEffect(() => {
+    const n = ++seq.current
+    setLoading(true)
+    const x = setTimeout(() => {
+      coverPreview(d, JSON.parse(key) as CoverSpec)
+        .then((u) => { if (n === seq.current) { setImg(u); setErr('') } })
+        .catch((e: unknown) => { if (n === seq.current) setErr(e instanceof Error ? e.message : String(e)) })
+        .finally(() => { if (n === seq.current) setLoading(false) })
+    }, first.current ? 0 : 350)
+    first.current = false
+    return () => clearTimeout(x)
+  }, [key, d.id]) // прев'ю залежить лише від спеки й відео (d — для демо)
+
+  const cands = d.cover_cands?.length ? d.cover_cands : [{ t: spec.bg.t, url: d.poster }]
+  const bg = cands.reduce((b, c) => (Math.abs(c.t - spec.bg.t) < Math.abs(b.t - spec.bg.t) ? c : b), cands[0])
+  const title = parseTitle(spec.title)
+  const set = (p: Partial<CoverSpec>) => onChange({ ...spec, ...p })
+  const setTitle = (text: string, gold: number[]) => set({ title: fmtTitle(text, gold) })
+  // переписала заголовок — золото лишається на тих самих словах, а не на тих самих номерах (інакше переїде на «у»)
+  const typeTitle = (text: string) => {
+    const was = new Set(title.gold.map((i) => words(title.text)[i]))
+    setTitle(text, words(text).flatMap((w, i) => (was.has(w) ? [i] : [])))
+  }
+  const g = grid === 'off' ? null : GRID[grid]
+
+  return (
+    <div className="card mt-3">
+      <b className="block text-[14.5px]">Обкладинка</b>
+      <span className="text-[13px]" style={{ color: 'var(--hint)' }}>окремий файл: чистий кадр без субтитрів + твій текст</span>
+
+      <div className="mx-auto mt-3" style={{ maxWidth: 210 }}>
+        <div className="relative w-full overflow-hidden rounded-xl" style={{ aspectRatio: '9 / 16', background: '#000', boxShadow: 'var(--shadow)' }}>
+          {img && <img src={img} alt="Обкладинка" className="absolute inset-0 h-full w-full object-cover" style={{ opacity: loading ? 0.75 : 1, transition: 'opacity .15s' }} />}
+          {g && (
+            <>
+              <div className="pointer-events-none absolute inset-x-0 top-0" style={{ height: `${(g.top / VH) * 100}%`, background: 'rgba(0,0,0,.55)', borderBottom: '1.5px dashed rgba(255,255,255,.7)' }} />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ height: `${((VH - g.bottom) / VH) * 100}%`, background: 'rgba(0,0,0,.55)', borderTop: '1.5px dashed rgba(255,255,255,.7)' }} />
+            </>
+          )}
+          {loading && <div className="absolute top-2 right-2"><Spinner /></div>}
+        </div>
+      </div>
+      {err && <div className="mt-2 text-center text-[12.5px]" style={{ color: 'var(--bad)' }}>Прев'ю не вийшло: {err}</div>}
+
+      <div className="mt-3 text-[13px] font-semibold">Як у сітці профілю</div>
+      <div className="seg mt-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+        {(['off', '3:4', '4:5'] as const).map((k) => (
+          <button key={k} className={grid === k ? 'on' : ''} onClick={() => { haptic('select'); setGrid(k) }}>{k === 'off' ? 'Весь кадр' : k}</button>
+        ))}
+      </div>
+      {g && <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Затемнене Instagram зріже в сітці профілю — текст має бути між пунктирами.</div>}
+
+      <div className="mt-4 text-[13px] font-semibold">Фон — торкнись кадру</div>
+      <div className="-mx-1.5 mt-1 flex gap-2 overflow-x-auto px-1.5 pt-1 pb-1">
+        {cands.map((c) => {
+          const on = c === bg
+          return (
+            <button key={c.url} className="shrink-0 text-center" disabled={disabled} onClick={() => { haptic('select'); set({ bg: { kind: 'frame', t: c.t } }) }}>
+              <img src={c.url} alt="" className="block rounded-md object-cover"
+                style={{ width: 54, height: 96, outline: on ? '2.5px solid var(--accent)' : 'none', outlineOffset: 1, opacity: on ? 1 : 0.85 }} />
+              <span className="mt-0.5 block text-[11.5px] tabular-nums" style={{ color: on ? 'var(--text)' : 'var(--hint)' }}>{c.t.toFixed(1)} с</span>
+            </button>
+          )
+        })}
+      </div>
+      {!d.cover_cands?.length && (
+        <div className="mt-1 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Інші чисті кадри з'являться, щойно відео перемонтується або змонтується фінал.</div>
+      )}
+
+      <div className="mt-4 text-[13px] font-semibold">Надпис зверху</div>
+      <input className="in mt-1.5" style={{ height: 40 }} value={spec.kicker} maxLength={40} disabled={disabled} placeholder="Напр.: Мальдіви"
+        onChange={(e) => set({ kicker: e.target.value })} />
+      <div className="mt-3 text-[13px] font-semibold">Заголовок</div>
+      <input className="in mt-1.5" style={{ height: 40 }} value={title.text} maxLength={80} disabled={disabled} placeholder="Коротко, 2–6 слів"
+        onChange={(e) => typeTitle(e.target.value)} />
+      {words(title.text).length > 1 && (
+        <>
+          <div className="mt-2 text-[12.5px]" style={{ color: 'var(--hint)' }}>Золотом — торкнись слова:</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {words(title.text).map((w, wi) => {
+              const on = title.gold.includes(wi)
+              return (
+                <button key={wi} className="rounded-md px-2 py-0.5 text-[14px]" disabled={disabled} style={{ background: on ? GOLD : 'var(--bg2)', color: on ? '#2A211B' : 'var(--text)' }}
+                  onClick={() => setTitle(title.text, on ? title.gold.filter((z) => z !== wi) : [...title.gold, wi])}>{w}</button>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      <div className="mt-4 text-[13px] font-semibold">Де текст</div>
+      <div className="qchips" style={{ marginTop: 6 }}>
+        <button disabled={disabled || spec.y <= COVER_Y_MIN} onClick={() => { haptic('select'); set({ y: Math.max(COVER_Y_MIN, spec.y - COVER_STEP) }) }}>↑ Вище</button>
+        <button disabled={disabled || spec.y >= COVER_Y_MAX} onClick={() => { haptic('select'); set({ y: Math.min(COVER_Y_MAX, spec.y + COVER_STEP) }) }}>↓ Нижче</button>
+        {spec.y !== COVER_Y && <button disabled={disabled} onClick={() => set({ y: COVER_Y })}>Як було</button>}
+      </div>
+      <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Якщо текст ліг на обличчя — посунь вище чи нижче.</div>
+
+      <div className="mt-4"><WmFields wm={spec.wm} disabled={disabled} onChange={(fn) => { const wm = { ...spec.wm }; fn(wm); set({ wm }) }} /></div>
+      <div className="mt-2 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Для обкладинок радимо «Довгий» — так сітка профілю виглядає однаково.</div>
+
+      {dirty ? (
+        <div className="mt-4 flex gap-2">
+          <button className="btn sec" disabled={disabled} onClick={onReset}>Скинути</button>
+          <button className="btn" disabled={disabled} onClick={onSave}>Зберегти обкладинку</button>
+        </div>
+      ) : (
+        <button className="btn sec mt-4" disabled={disabled} onClick={onSend}>{d.final ? 'Надіслати обкладинку ще раз' : 'Надіслати обкладинку в чат'}</button>
+      )}
+      <div className="mt-2 text-center text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Обкладинка не скидає затвердження відео.</div>
+    </div>
+  )
+}
+
 // ───────────── Прев'ю 9:16: відео + шар 1080×1920, масштабований під ширину ─────────────
 
 type PreviewProps = {
@@ -1082,30 +1254,41 @@ function TextEditor({ d, x, onChange, onRemove }: { d: VideoDraft; x: VText; onC
 // ───────────── Водяний знак ─────────────
 
 function WmEditor({ d, onChange }: { d: VideoDraft; onChange: (fn: (x: VideoDraft) => void) => void }) {
-  const kinds: WmKind[] = ['wm2', 'wm1', 'wm3', 'off']
   return (
     <div className="card mt-3">
+      <WmFields wm={d.wm} onChange={(fn) => onChange((n) => fn(n.wm))} />
+      {d.wm.kind !== 'off' && (
+        <div className="mt-3 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+          Для сторіз радимо коло внизу праворуч. Якщо внизу буде стікер-опитування — переклади знак вгору.
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Вид / місце / колір знака — і для відео (вкладка «Знак»), і для обкладинки
+function WmFields({ wm, disabled, onChange }: { wm: VideoDraft['wm']; disabled?: boolean; onChange: (fn: (w: VideoDraft['wm']) => void) => void }) {
+  const kinds: WmKind[] = ['wm2', 'wm1', 'wm3', 'off']
+  return (
+    <>
       <div className="text-[13px] font-semibold">Який знак</div>
       <div className="seg mt-1.5" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        {kinds.map((k) => <button key={k} className={d.wm.kind === k ? 'on' : ''} onClick={() => { haptic('select'); onChange((n) => { n.wm.kind = k }) }}>{k === 'off' ? 'Без' : WM[k].name}</button>)}
+        {kinds.map((k) => <button key={k} disabled={disabled} className={wm.kind === k ? 'on' : ''} onClick={() => { haptic('select'); onChange((w) => { w.kind = k }) }}>{k === 'off' ? 'Без' : WM[k].name}</button>)}
       </div>
-      {d.wm.kind !== 'off' && (
+      {wm.kind !== 'off' && (
         <>
           <div className="mt-4 text-[13px] font-semibold">Де</div>
           <div className="qchips" style={{ marginTop: 6 }}>
-            {WM_POS.map((p) => <button key={p.id} className={d.wm.pos === p.id ? 'on' : ''} onClick={() => onChange((n) => { n.wm.pos = p.id })}>{p.name}</button>)}
+            {WM_POS.map((p) => <button key={p.id} disabled={disabled} className={wm.pos === p.id ? 'on' : ''} onClick={() => onChange((w) => { w.pos = p.id })}>{p.name}</button>)}
           </div>
           <div className="mt-4 text-[13px] font-semibold">Колір</div>
           <div className="seg mt-1.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <button className={d.wm.color === 'white' ? 'on' : ''} onClick={() => onChange((n) => { n.wm.color = 'white' })}>Білий</button>
-            <button className={d.wm.color === 'gold' ? 'on' : ''} onClick={() => onChange((n) => { n.wm.color = 'gold' })}>Золотий</button>
-          </div>
-          <div className="mt-3 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
-            Для сторіз радимо коло внизу праворуч. Якщо внизу буде стікер-опитування — переклади знак вгору.
+            <button disabled={disabled} className={wm.color === 'white' ? 'on' : ''} onClick={() => onChange((w) => { w.color = 'white' })}>Білий</button>
+            <button disabled={disabled} className={wm.color === 'gold' ? 'on' : ''} onClick={() => onChange((w) => { w.color = 'gold' })}>Золотий</button>
           </div>
         </>
       )}
-    </div>
+    </>
   )
 }
 

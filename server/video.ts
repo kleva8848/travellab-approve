@@ -2,6 +2,7 @@ import { db, getSettings } from './http.js'
 import { tgCall } from './publish.js'
 import { videoMode } from './publish_plan.js'
 import { kyivNow } from './schedule.js'
+import { COVER_Y, COVER_Y_MAX, COVER_Y_MIN, coverJpeg } from './video_layers.js'
 
 // Сторіз / рілс: чернетки з таблиці video_drafts (SQL 018). Файли — у приватному bucket `video` (signed URL на 2 год).
 // План шарів (texts / wm / cover) — той самий формат, що src/lib/video.ts (VideoDraft без файлів і статусу).
@@ -30,6 +31,8 @@ type DraftRow = {
   // публікація (сет 7, SQL 022, server/video_publish.ts)
   caption: string | null; nomusic_path: string | null; delivered_at: string | null; published_at: string | null
   published_ref: { via?: string; posted_via?: string } | null
+  // окрема обкладинка (SQL 025): що намальовано + чисті кадри-кандидати (montage-test/cover.py)
+  cover_spec: CoverSpec | null; cover_cands: CoverCand[] | null
 }
 // Звук (сет 6, montage-test/music.py): трек Mixkit + точка старту; голос Іри з бота (file_id, тривалість після очистки)
 type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
@@ -38,8 +41,12 @@ type Remount = { kind: string; shot?: number; order?: number[]; start?: number; 
 type VLine = { text: string; style: string; gold: number[]; maxW?: number; font?: string }
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
+// Обкладинка (SQL 025, сет 2): фон — чистий кадр (t секунд clean.mp4), kicker — надпис зверху, title — «*золоте* слово», y — висота центру тексту.
+// bg.kind 'media' (фото з бази) — сет 3
+export type CoverSpec = { bg: { kind: 'frame'; t: number }; kicker: string; title: string; y: number; wm: Plan['wm'] }
+type CoverCand = { path: string; t: number; sharp?: number }
 
-const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage, caption, nomusic_path, delivered_at, published_at, published_ref'
+const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage, caption, nomusic_path, delivered_at, published_at, published_ref, cover_spec, cover_cands'
 
 // Фінал (SQL 019, montage-test/final_worker.py) застарів після будь-якої правки / зміни статусу → воркер рендерить заново
 // (і надіслане Ірі в чат для Instagram — нове відео прийде ще раз; SQL 022)
@@ -89,6 +96,9 @@ function view(d: DraftRow, urls: Map<string, string>, channel: boolean) {
     // delivered_at — надіслано в чат; published_at — вийшло (канал) або Іра натиснула «✅ Виклала»
     caption: d.caption ?? '', nomusic: Boolean(d.nomusic_path), dest: videoMode(d, channel),
     delivered_at: d.delivered_at ?? null, published_at: d.published_at ?? null,
+    // обкладинка: збережена спека або та, що намалював би воркер; кандидати — лише ті, що вже підписані (у списку — нема)
+    cover_spec: d.cover_spec ? { ...defaultCover(d), ...d.cover_spec, y: d.cover_spec.y ?? COVER_Y } : defaultCover(d),
+    cover_cands: coverCands(d).flatMap((c) => (urls.has(c.path) ? [{ t: c.t, url: urls.get(c.path) as string }] : [])),
   }
 }
 
@@ -130,7 +140,8 @@ export async function getVideo(id: string) {
   if (r.error) throw r.error
   if (!r.data) return 'not_found'
   const d = r.data as DraftRow
-  const [urls, voice_link, channel] = await Promise.all([sign([d.web_path, d.poster_path, ...(d.shots ?? []).flatMap((s) => [s.thumb_path, s.src_path ?? '', s.src_strip ?? ''])]), voiceLink(d.id), channelOn()])
+  const paths = [d.web_path, d.poster_path, ...(d.shots ?? []).flatMap((s) => [s.thumb_path, s.src_path ?? '', s.src_strip ?? '']), ...coverCands(d).map((c) => c.path)]
+  const [urls, voice_link, channel] = await Promise.all([sign(paths), voiceLink(d.id), channelOn()])
   return { ...view(d, urls, channel), voice_link }
 }
 
@@ -337,15 +348,20 @@ export function cleanPlan(raw: unknown, shots: number, dur: number): Plan | null
     }
     texts.push(x)
   }
-  const w = (p.wm ?? {}) as Record<string, unknown>
   return {
     texts,
-    wm: {
-      kind: WM_KINDS.has(String(w.kind)) ? String(w.kind) : 'wm2',
-      pos: WM_POS.has(String(w.pos)) ? String(w.pos) : 'br',
-      color: w.color === 'gold' ? 'gold' : 'white',
-    },
+    wm: cleanWm(p.wm),
     cover: Math.round(num(p.cover, 0, Math.max(0, dur - 0.1), 0) * 10) / 10,
+  }
+}
+
+// Знак з апки — лише відомі вид / місце / колір (план відео і обкладинка)
+function cleanWm(raw: unknown): Plan['wm'] {
+  const w = (raw ?? {}) as Record<string, unknown>
+  return {
+    kind: WM_KINDS.has(String(w.kind)) ? String(w.kind) : 'wm2',
+    pos: WM_POS.has(String(w.pos)) ? String(w.pos) : 'br',
+    color: w.color === 'gold' ? 'gold' : 'white',
   }
 }
 
@@ -387,4 +403,138 @@ export async function resendFinal(id: string, chatId: number): Promise<{ sent_at
   // updated_at не чіпаємо: відправка — не правка (інакше відкритий редактор отримав би 409)
   await db().from('video_drafts').update({ tg_file_id: fileId, sent_at, sent_to: chatId }).eq('id', id).eq('final_path', d.final_path)
   return { sent_at }
+}
+
+// ───────────── Обкладинка (SQL 025, сет 2): прев'ю й файл малює Vercel тим самим satori, що воркер — миттєво, без воркера ─────────────
+
+const COVER_TEXT = new Set(['hook', 'title', 'word'])
+const KICKER_MAX = 40
+const TITLE_MAX = 80
+const PREVIEW_W = 540
+const COVER_COLS = 'name, format, place, plan, dur, status, poster_path, cover_spec, cover_cands, final_path, cover_path, remount, published_at, updated_at'
+type CoverRow = Pick<DraftRow, 'name' | 'format' | 'place' | 'plan' | 'dur' | 'status' | 'poster_path' | 'cover_spec' | 'cover_cands' | 'final_path' | 'cover_path' | 'remount' | 'published_at' | 'updated_at'>
+
+// Фон — лише чисті кадри воркера (Vercel кадр з відео не витягне). Чернетка без них (до SQL 025 / воркер ще не пройшов) —
+// постер: він теж чистий кадр clean.mp4 на plan.cover
+function coverCands(d: Pick<DraftRow, 'cover_cands' | 'poster_path' | 'plan'>): CoverCand[] {
+  const c = (d.cover_cands ?? []).filter((x) => x?.path && Number.isFinite(Number(x.t)))
+  if (c.length) return c.map((x) => ({ path: x.path, t: Number(x.t) }))
+  return d.poster_path ? [{ path: d.poster_path, t: Number(d.plan?.cover ?? 0) }] : []
+}
+// Найближчий за часом кандидат: після перемонтажу bg.t іде за своїм кадром і може не збігтися з жодним
+const nearest = (cands: CoverCand[], t: number) => cands.reduce<CoverCand | null>((b, c) => (!b || Math.abs(c.t - t) < Math.abs(b.t - t) ? c : b), null)
+
+// Як default_spec у montage-test/cover.py (без AI-заголовка — він у воркері / сеті 3): хук плану, його мітка або місце, знак плану
+function defaultCover(d: Pick<DraftRow, 'plan' | 'name' | 'place' | 'cover_cands' | 'poster_path'>): CoverSpec {
+  let title = '', kicker = ''
+  for (const t of d.plan?.texts ?? []) {
+    const head = t.sec ? undefined : t.lines.find((l) => COVER_TEXT.has(l.style))
+    if (!head) continue
+    const gold = new Set(head.gold)
+    title = head.text.split(/\s+/).filter(Boolean).map((w, i) => (gold.has(i) ? `*${w}*` : w)).join(' ')
+    kicker = t.lines.find((l) => l.style === 'label')?.text ?? ''
+    break
+  }
+  return {
+    bg: { kind: 'frame', t: coverCands(d)[0]?.t ?? Number(d.plan?.cover ?? 0) },
+    kicker: kicker || d.place || '', title: title || d.name || '', y: COVER_Y,
+    wm: d.plan?.wm ?? { kind: 'wm2', pos: 'br', color: 'white' },
+  }
+}
+
+// Спека з апки → чиста: фон — найближчий кандидат, тексти обрізані, y у безпечній зоні, знак — відомі значення. null — не схоже на спеку
+function cleanCover(raw: unknown, cands: CoverCand[]): CoverSpec | null {
+  if (!raw || typeof raw !== 'object') return null
+  const s = raw as Record<string, unknown>
+  const bg = nearest(cands, num((s.bg as Record<string, unknown> | undefined)?.t, 0, 3600, 0))
+  if (!bg) return null
+  const txt = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
+  return {
+    bg: { kind: 'frame', t: bg.t },
+    kicker: txt(s.kicker, KICKER_MAX),
+    // золото — *слово*; «слова» з самих зірочок прибираємо, інакше рендер зсуне номери золотих слів
+    title: txt(s.title, TITLE_MAX).split(' ').filter((w) => w.replace(/\*/g, '')).join(' '),
+    y: int(s.y, COVER_Y_MIN, COVER_Y_MAX, COVER_Y),
+    wm: cleanWm(s.wm),
+  }
+}
+
+// Кадри-кандидати кешуємо в теплому інстансі: Іра перебирає фон і текст — щоб не качати той самий JPEG на кожне прев'ю
+const BG_TTL_MS = 10 * 60_000
+const bgCache = new Map<string, { at: number; buf: Buffer }>()
+async function bgFile(path: string) {
+  const hit = bgCache.get(path)
+  if (hit && Date.now() - hit.at < BG_TTL_MS) return hit.buf
+  const r = await db().storage.from(BUCKET).download(path)
+  if (r.error) throw r.error
+  const buf = Buffer.from(await r.data.arrayBuffer())
+  if (bgCache.size >= 12) bgCache.delete(bgCache.keys().next().value as string)
+  bgCache.set(path, { at: Date.now(), buf })
+  return buf
+}
+
+async function coverRow(id: string) {
+  const r = await db().from('video_drafts').select(COVER_COLS).eq('id', id).maybeSingle()
+  if (r.error) throw r.error
+  return r.data as CoverRow | null
+}
+
+async function renderCover(d: CoverRow, spec: CoverSpec, width?: number) {
+  const bg = nearest(coverCands(d), spec.bg.t)
+  if (!bg) throw new Error('Немає кадру для обкладинки')
+  return coverJpeg(await bgFile(bg.path), spec, width)
+}
+
+// Готове відео вже є → cover.jpg поруч з ним теж новий: його бот шле в слот (server/video_publish.ts) і «Надіслати ще раз»
+async function uploadCover(d: CoverRow, buf: Buffer) {
+  if (!d.final_path) return
+  const path = d.cover_path ?? d.final_path.replace(/[^/]+$/, 'cover.jpg')
+  const u = await db().storage.from(BUCKET).upload(path, buf, { contentType: 'image/jpeg', upsert: true })
+  if (u.error) throw u.error
+}
+
+// Прев'ю 540×960 — той самий layout, що файл у чаті (малюємо 1080×1920 і зменшуємо)
+export async function previewCover(id: string, raw: unknown) {
+  const d = await coverRow(id)
+  if (!d) return { code: 404, error: 'not found' }
+  const spec = cleanCover(raw, coverCands(d))
+  if (!spec) return { code: 400, error: 'bad cover' }
+  const buf = await renderCover(d, spec, PREVIEW_W)
+  return { code: 200, jpg: `data:image/jpeg;base64,${buf.toString('base64')}`, t: spec.bg.t }
+}
+
+// Зберегти обкладинку: затвердження й готове відео НЕ скидаємо. Відео вже змонтоване — перемальовуємо cover.jpg тут же.
+// Затверджено, а воркер ще монтує — рухаємо updated_at: його запис фіналу не пройде (план «змінився»), і він змонтує ще раз уже з новою обкладинкою
+export async function saveCover(id: string, raw: unknown) {
+  const d = await coverRow(id)
+  if (!d) return { code: 404, error: 'not found' }
+  if (d.published_at) return { code: 409, error: PUBLISHED_ERR }
+  if (d.remount?.state === 'queued' || d.remount?.state === 'running') return { code: 409, error: 'Перемонтовую кадри — зачекай хвилинку, потім зміниш обкладинку.' }
+  const spec = cleanCover(raw, coverCands(d))
+  if (!spec) return { code: 400, error: 'bad cover' }
+  const rendering = d.status === 'approved' && !d.final_path
+  const row: Record<string, unknown> = { cover_spec: spec }
+  if (rendering) row.updated_at = new Date().toISOString()
+  const r = await db().from('video_drafts').update(row).eq('id', id).is('published_at', null).select('updated_at, final_path')
+  if (r.error) throw r.error
+  if (!r.data?.length) return { code: 409, error: PUBLISHED_ERR }
+  const cur = r.data[0] as { updated_at: string; final_path: string | null }
+  if (cur.final_path) await uploadCover({ ...d, final_path: cur.final_path }, await renderCover(d, spec))
+  return { code: 200, cover_spec: spec, updated_at: cur.updated_at, file: Boolean(cur.final_path) }
+}
+
+// «Надіслати обкладинку ще раз»: свіжий рендер збереженої спеки файлом (Instagram просить обкладинку окремо, без стиснення) у чат того, хто натиснув
+export async function sendCover(id: string, chatId: number) {
+  const d = await coverRow(id)
+  if (!d) return { code: 404, error: 'not found' }
+  const spec = cleanCover(d.cover_spec ? { ...defaultCover(d), ...d.cover_spec } : defaultCover(d), coverCands(d))
+  if (!spec) return { code: 409, error: 'Кадрів для обкладинки ще нема — зачекай, поки відео змонтується.' }
+  const buf = await renderCover(d, spec)
+  await uploadCover(d, buf)
+  const f = new FormData()
+  f.append('chat_id', String(chatId))
+  f.append('caption', `🖼 Обкладинка «${d.name}» · ${FORMAT[d.format] ?? 'відео'}\n\nЗбережи й постав обкладинкою в Instagram.`)
+  f.append('document', new Blob([new Uint8Array(buf)], { type: 'image/jpeg' }), 'cover.jpg')
+  await tgCall('sendDocument', f)
+  return { code: 200, sent_at: new Date().toISOString() }
 }
