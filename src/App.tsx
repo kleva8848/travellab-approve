@@ -134,8 +134,8 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 overflow-y-auto overscroll-contain">
-        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} filter={filter} setFilter={setFilter} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} />}
-        {tab === 'plan' && <PlanScreen onOpen={open} />}
+        {tab === 'today' && <TodayScreen me={auth.me} queue={queue} filter={filter} setFilter={setFilter} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} onChanged={() => void refresh()} />}
+        {tab === 'plan' && <PlanScreen onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} filter={filter} setFilter={setFilter} onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'audiences' && <AudiencesScreen me={auth.me} />}
       </main>

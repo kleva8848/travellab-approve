@@ -5,6 +5,7 @@ import { AudienceCard } from './AudienceCard'
 import { Inquiries } from './Inquiries'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Label } from './ui'
+import { usePublished } from '../lib/usePublished'
 
 export type Filter = 'all' | 'telegram' | 'instagram' | 'threads'
 
@@ -58,24 +59,30 @@ const overdue = (q: QueueItem) => Boolean(q.scheduled_for && `${q.scheduled_for}
 // Фаза 5: затверджені пости по платформах + ручна публікація. Текст і фото забирає з поста («Надіслати в чат»), тут — позначка «опубліковано»
 export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: { queue: QueueItem[] | null; filter: Filter; setFilter: (f: Filter) => void; onOpen: (id: string) => void; onChanged: () => void }) {
   const [busyId, setBusyId] = useState<string | null>(null)
+  const pub = usePublished(onChanged)
+  const [showPub, setShowPub] = useState(false)
   const [toast, setToast] = useState('')
   // Зміна дати: id поста, який зараз редагуємо, + чернетка дати/часу
   const [edit, setEdit] = useState<{ id: string; date: string; time: string } | null>(null)
 
   const items = (queue ?? []).filter((q) => matchFilter(filter, q))
   const toPublish = items
-    .filter((q) => q.review_status === 'approved')
+    .filter((q) => q.review_status === 'approved' && !pub.hidden.has(q.id))
     .sort((a, b) => `${a.scheduled_for ?? '9999'}${a.slot_time ?? ''}`.localeCompare(`${b.scheduled_for ?? '9999'}${b.slot_time ?? ''}`))
   const published = items
     .filter((q) => q.review_status === 'published')
     .sort((a, b) => (b.published_at ?? '').localeCompare(a.published_at ?? ''))
 
-  const mark = async (q: QueueItem, action: 'publish' | 'unpublish') => {
+  const missed = items
+    .filter((q) => q.review_status === 'missed')
+    .sort((a, b) => (b.scheduled_for ?? '').localeCompare(a.scheduled_for ?? ''))
+
+  const mark = async (q: QueueItem, action: 'publish' | 'unpublish' | 'unmiss') => {
     setBusyId(q.id)
     try {
       await reviewAction(q.id, q.version_no, action)
       haptic('success')
-      setToast(action === 'publish' ? 'Позначила опублікованим' : 'Повернула в «До публікації»')
+      setToast(action === 'unmiss' ? 'Повернула в «До публікації» на сьогодні' : 'Повернула в «До публікації»')
       setTimeout(() => setToast(''), 2000)
       onChanged()
     } catch (e) {
@@ -107,7 +114,8 @@ export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: 
     }
   }
 
-  const row = (q: QueueItem, i: number, isPublished: boolean) => {
+  const row = (q: QueueItem, i: number, kind: 'todo' | 'published' | 'missed') => {
+    const isPublished = kind === 'published'
     const plat = PLATFORM[q.platform] ?? { name: q.platform, cls: '' }
     const editing = edit?.id === q.id
     return (
@@ -116,7 +124,9 @@ export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: 
         <button className="min-w-0 flex-1 text-left" onClick={() => { haptic('tap'); onOpen(q.id) }}>
           <span className="flex items-center gap-1.5">
             <span className={`chip ${plat.cls}`}>{plat.name}</span>
-            {isPublished && q.published_at ? (
+            {kind === 'missed' ? (
+              <span className="text-[12.5px]" style={{ color: 'var(--hint)' }}>не вийшов · було на {whenLabel(q.scheduled_for ?? '', null)}</span>
+            ) : isPublished && q.published_at ? (
               <span className="text-[12.5px]" style={{ color: 'var(--hint)' }}>
                 виклала {new Date(q.published_at).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}
               </span>
@@ -139,11 +149,15 @@ export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: 
           <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>
           <AudienceCard plan={q} compact />
         </button>
-        {isPublished ? (
+        {kind === 'missed' ? (
+          <button className="btn sec" style={{ width: 'auto', height: 34, padding: '0 10px', fontSize: 13 }} disabled={busyId === q.id} onClick={() => void mark(q, 'unmiss')}>
+            {busyId === q.id ? '…' : 'Повернути'}
+          </button>
+        ) : isPublished ? (
           <button className="chip okc" disabled={busyId === q.id} onClick={() => void mark(q, 'unpublish')} title="Повернути">✓ викладено</button>
         ) : (
-          <button className="btn sec" style={{ width: 'auto', height: 34, padding: '0 10px', fontSize: 13 }} disabled={busyId === q.id} onClick={() => void mark(q, 'publish')}>
-            {busyId === q.id ? '…' : 'Виклала'}
+          <button className="btn sec" style={{ width: 'auto', height: 34, padding: '0 10px', fontSize: 13 }} disabled={busyId === q.id} onClick={() => void pub.mark(q)}>
+            {busyId === q.id ? '…' : '✓ Виклала'}
           </button>
         )}
       </div>
@@ -167,7 +181,7 @@ export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: 
       <h1 className="serif mt-1.5 mb-3 text-[28px]">Календар</h1>
       <PlatformFilter value={filter} onChange={setFilter} />
 
-      {queue === null ? null : !toPublish.length && !published.length ? (
+      {queue === null ? null : !toPublish.length && !published.length && !missed.length ? (
         <div className="card mt-4 text-center text-[14px] leading-snug" style={{ color: 'var(--hint)' }}>
           Тут з'являться затверджені пости. Відкрий пост → «Надіслати в чат» → виклади → «Виклала».
         </div>
@@ -175,20 +189,30 @@ export function CalendarScreen({ queue, filter, setFilter, onOpen, onChanged }: 
         <>
           <Label>До публікації · {toPublish.length}</Label>
           {toPublish.length ? (
-            <div className="card" style={{ padding: '4px 14px' }}>{toPublish.map((q, i) => row(q, i, false))}</div>
+            <div className="card" style={{ padding: '4px 14px' }}>{toPublish.map((q, i) => row(q, i, 'todo'))}</div>
           ) : (
             <div className="card text-[14px]" style={{ color: 'var(--hint)' }}>Усе затверджене вже викладено</div>
           )}
+          {missed.length > 0 && (
+            <>
+              <Label>Не вийшли · {missed.length}</Label>
+              <div className="card" style={{ padding: '4px 14px' }}>{missed.map((q, i) => row(q, i, 'missed'))}</div>
+            </>
+          )}
           {published.length > 0 && (
             <>
-              <Label>Викладено · 30 днів</Label>
-              <div className="card" style={{ padding: '4px 14px' }}>{published.map((q, i) => row(q, i, true))}</div>
+              <button className="card mt-4 flex w-full items-center justify-between text-left text-[14px]" onClick={() => { haptic('tap'); setShowPub(!showPub) }}>
+                <span>Викладено за 30 днів · <b>{published.length}</b></span>
+                <span style={{ color: 'var(--hint)', transform: showPub ? 'rotate(90deg)' : undefined }}>›</span>
+              </button>
+              {showPub && <div className="card" style={{ padding: '4px 14px' }}>{published.map((q, i) => row(q, i, 'published'))}</div>}
             </>
           )}
           <div className="mx-2 mt-3 text-center text-[12.5px]" style={{ color: 'var(--hint)' }}>Тапни дату, щоб перенести. Текст і фото — у пості: «Копіювати текст» або «Надіслати в чат».</div>
         </>
       )}
       {toast && <div className="toast">{toast}</div>}
+      {pub.node}
     </div>
   )
 }

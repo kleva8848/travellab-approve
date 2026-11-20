@@ -7,6 +7,8 @@
 // (n8n/story_prompt.mjs) і друга кнопка «🎙 Розповісти історію» → бот (?start=story). Якщо в story_queue уже є нова
 // історія — лише «історія на суботу вже є», без питання.
 // Відео (26.10, сет 5): «🎬 Відео готово на перегляд: N» (video_drafts) і «📹 Бракує кадрів: <тема>» (video_slots, SQL 021).
+// «Пост виклала?» (21.11, сет 1, SQL 026): у день публікації з 21:00 і наступного ранку з 10:00 — Ірі «Пост «…» — виклала?»
+// [✅ Виклала] [📅 На завтра] [⏭ Не буду]; callback ppub_/ptmr_/pskip_ обробляє WF-055. content_plan.publish_ask = «дата:eve|morn» — вже питали.
 // Сет 7 (SQL 022): «🎬 Відео сьогодні: 19:00 рілс «…» — о 19:00 надішлю в чат / викладу в канал / ще не затверджено / чекає «✅ Виклала»».
 import { readFileSync, writeFileSync } from 'node:fs'
 import { STORY_HINT_JS } from './story_prompt.mjs'
@@ -55,6 +57,18 @@ const slotAt = p => (p.scheduled_for && p.slot_time) ? DateTime.fromISO(p.schedu
 const postUrl = p => base + '/?startapp=post_' + p.id;
 const out = [];
 
+// Разово (вебхук mode=ask_now): усі затверджені й ще не викладені пости — Владу (admin_chat_id) з кнопками «виклала?»; publish_ask не чіпаємо
+if (mode === 'ask_now') {
+  const adm = String(s.admin_chat_id || '');
+  if (!adm) throw new Error('settings.admin_chat_id порожній');
+  const list = plans.filter(p => p.review_status === 'approved' && !p.published_at).sort((a, b) => slotKey(a).localeCompare(slotKey(b)));
+  for (const p of list) {
+    const when = p.scheduled_for ? DateTime.fromISO(p.scheduled_for).toFormat('dd.MM') + (hhmm(p) ? ' ' + hhmm(p) : '') : 'без дати';
+    out.push({ json: { kind: 'ask', chat_id: adm, text: 'Затверджений пост «' + title(p) + '» (' + (PLAT[p.platform] || p.platform) + ', ' + when + ') — виклала?', url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, ask_key: '' } });
+  }
+  if (!out.length) out.push({ json: { kind: 'digest', chat_id: adm, text: 'Затверджених і не викладених постів немає ✅', url: base, button: 'Відкрити застосунок', story_url: '' } });
+  return out;
+}
 if (mode === 'remind') {
   const before = Number(s.remind_before_min) || 30;
   for (const p of plans) {
@@ -65,6 +79,20 @@ if (mode === 'remind') {
     if (mins <= 0 || mins > before || p.reminded_slot === slotKey(p)) continue;
     const text = '⏰ Через ' + Math.ceil(mins) + ' хв публікація\\n' + hhmm(p) + ' · ' + (PLAT[p.platform] || p.platform) + '\\n' + title(p) + '\\n\\nТекст і фото готові — відкрий, скопіюй і виклади. Після публікації тисни «Виклала».';
     for (const chat_id of chats) out.push({ json: { kind: 'remind', chat_id, text, url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, slot: slotKey(p) } });
+  }
+  // «Виклала?»: ввечері в день публікації (≥21:00) і зранку наступного дня (≥10:00), поки пост лишається approved без published_at
+  const todayK = now.toFormat('yyyy-MM-dd'), yestK = now.minus({ days: 1 }).toFormat('yyyy-MM-dd'), hm = now.toFormat('HH:mm');
+  for (const p of plans) {
+    if (p.review_status !== 'approved' || p.published_at || !p.scheduled_for) continue;
+    if (!('publish_ask' in p)) continue; // SQL 026 ще не запущено — інакше питали б кожні 5 хв
+    const stage = p.scheduled_for === todayK && hm >= '21:00' ? 'eve' : p.scheduled_for === yestK && hm >= '10:00' ? 'morn' : null;
+    if (!stage) continue;
+    const at = slotAt(p);
+    if (stage === 'eve' && at && at > now) continue;
+    const key = p.scheduled_for + ':' + stage;
+    if (p.publish_ask === key) continue;
+    const text = (stage === 'eve' ? 'Пост «' + title(p) + '» на сьогодні' : 'Вчора мав вийти пост «' + title(p) + '»') + ' (' + (PLAT[p.platform] || p.platform) + (hhmm(p) ? ', ' + hhmm(p) : '') + ') — виклала?';
+    for (const chat_id of chats) out.push({ json: { kind: 'ask', chat_id, text, url: postUrl(p), button: 'Відкрити пост', plan_id: p.id, ask_key: key } });
   }
   return out;
 }
@@ -151,6 +179,34 @@ const nodes = [
     operation: 'getAll', tableId: 'video_slots', returnAll: true, filterType: 'string', filterString: 'state=eq.gap',
   }, { credentials: sb, ...always, onError: 'continueRegularOutput' }),
   node('Code - Build Messages', 'n8n-nodes-base.code', 2, { jsCode: build }, { executeOnce: true }),
+  node('IF - Ask?', 'n8n-nodes-base.if', 2.2, {
+    conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
+      conditions: [{ id: 'ask', leftValue: '={{ $json.kind }}', rightValue: 'ask', operator: { type: 'string', operation: 'equals' } }] },
+    options: {},
+  }),
+  // «Виклала?»: три callback-кнопки (обробляє WF-055) + web_app «Відкрити пост»
+  node('Telegram - Send Ask', 'n8n-nodes-base.telegram', 1.2, {
+    chatId: '={{ $json.chat_id }}', text: TEXT_HTML, replyMarkup: 'inlineKeyboard',
+    inlineKeyboard: { rows: [
+      { row: { buttons: [
+        { text: '✅ Виклала', additionalFields: { callback_data: "={{ 'ppub_' + $json.plan_id }}" } },
+        { text: '📅 На завтра', additionalFields: { callback_data: "={{ 'ptmr_' + $json.plan_id }}" } },
+        { text: '⏭ Не буду', additionalFields: { callback_data: "={{ 'pskip_' + $json.plan_id }}" } },
+      ] } },
+      { row: { buttons: [{ text: '={{ $json.button }}', additionalFields: { web_app: { url: '={{ $json.url }}' } } }] } },
+    ] },
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML' },
+  }, { ...tgCreds, onError: 'continueRegularOutput' }),
+  node('IF - Ask Sent?', 'n8n-nodes-base.if', 2.2, {
+    conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
+      conditions: [{ id: 'ok', leftValue: "={{ !$json.error && !!$('Code - Build Messages').item.json.ask_key }}", rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }] },
+    options: {},
+  }),
+  node('Supabase - Mark Asked', 'n8n-nodes-base.supabase', 1, {
+    operation: 'update', tableId: 'content_plan', filterType: 'manual', matchType: 'allFilters',
+    filters: { conditions: [{ keyName: 'id', condition: 'eq', keyValue: "={{ $('Code - Build Messages').item.json.plan_id }}" }] },
+    dataToSend: 'defineBelow', fieldsUi: { fieldValues: [{ fieldId: 'publish_ask', fieldValue: "={{ $('Code - Build Messages').item.json.ask_key }}" }] },
+  }, { credentials: sb }),
   node('IF - Story Button?', 'n8n-nodes-base.if', 2.2, {
     conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
       conditions: [{ id: 'story', leftValue: '={{ !!$json.story_url }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }] },
@@ -198,7 +254,10 @@ const connections = {
   'Supabase - Get Audiences': to('Supabase - Get Video Drafts'),
   'Supabase - Get Video Drafts': to('Supabase - Get Video Gaps'),
   'Supabase - Get Video Gaps': to('Code - Build Messages'),
-  'Code - Build Messages': to('IF - Story Button?'),
+  'Code - Build Messages': to('IF - Ask?'),
+  'IF - Ask?': { main: [[{ node: 'Telegram - Send Ask', type: 'main', index: 0 }], [{ node: 'IF - Story Button?', type: 'main', index: 0 }]] },
+  'Telegram - Send Ask': to('IF - Ask Sent?'),
+  'IF - Ask Sent?': to('Supabase - Mark Asked'),
   'IF - Story Button?': { main: [[{ node: 'Telegram - Send With Story', type: 'main', index: 0 }], [{ node: 'Telegram - Send', type: 'main', index: 0 }]] },
   'Telegram - Send': to('IF - Reminder Sent?'),
   'IF - Reminder Sent?': to('Supabase - Mark Reminded'),

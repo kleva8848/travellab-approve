@@ -6,6 +6,7 @@ import { matchFilter, PlatformFilter, type Filter } from './CalendarScreen'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
+import { PublishedButton, usePublished } from '../lib/usePublished'
 
 const DAYS = ['неділя', 'понеділок', 'вівторок', 'середа', 'четвер', 'пʼятниця', 'субота']
 const MONTHS = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня']
@@ -20,12 +21,13 @@ function greeting(h: number) {
 // Звертання в кличному відмінку для відомих імен, інакше як є
 const VOCATIVE: Record<string, string> = { 'Іра': 'Іро', 'Ira': 'Іро', 'Ірина': 'Ірино', 'Влад': 'Владе', 'Vlad': 'Владе' }
 
-type Props = { me: Me; queue: QueueItem[] | null; filter: Filter; setFilter: (f: Filter) => void; story: StoryInfo | null; videos: VideoList | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void }
+type Props = { me: Me; queue: QueueItem[] | null; filter: Filter; setFilter: (f: Filter) => void; story: StoryInfo | null; videos: VideoList | null; queueError: string; onOpen: (id: string) => void; onOpenVideo: (id: string) => void; onRetry: () => void; onChanged: () => void }
 
 const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
-export function TodayScreen({ me, queue, filter, setFilter, story, videos, queueError, onOpen, onOpenVideo, onRetry }: Props) {
+export function TodayScreen({ me, queue, filter, setFilter, story, videos, queueError, onOpen, onOpenVideo, onRetry, onChanged }: Props) {
+  const pub = usePublished(onChanged)
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
@@ -35,7 +37,7 @@ export function TodayScreen({ me, queue, filter, setFilter, story, videos, queue
   const asking = waiting.filter((q) => q.review_status === 'needs_data' && q.questions)
   const reviewing = waiting.filter((q) => !asking.includes(q))
   const working = posts.filter((q) => q.review_status === 'regenerating')
-  const approved = posts.filter((q) => q.review_status === 'approved')
+  const approved = posts.filter((q) => q.review_status === 'approved' && !pub.hidden.has(q.id))
   // чекає Іру: перегляд або «надіслано в чат — виклади»
   const videosWaiting = (videos?.items ?? []).some((v) => v.status === 'ready_for_review' || (v.delivered_at && !v.published_at))
   const allDone = queue && !waiting.length && !working.length && !videosWaiting
@@ -89,11 +91,12 @@ export function TodayScreen({ me, queue, filter, setFilter, story, videos, queue
           <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
           <List title="Агент переробляє" items={working} onOpen={onOpen} badge={<span className="chip warn">переробляю</span>} />
-          <List title="Затверджено" items={approved} onOpen={onOpen} badge={<span className="chip okc">в календарі</span>} />
+          <List title="Затверджено" items={approved} onOpen={onOpen} action={(q) => <PublishedButton onClick={() => void pub.mark(q)} />} />
           {story && <StoryCard story={story} />}
         </>
       )}
       {me.is_admin && <RulesAdmin />}
+      {pub.node}
     </div>
   )
 }
@@ -186,7 +189,7 @@ function VideoGaps({ gaps }: { gaps: VideoGap[] }) {
   )
 }
 
-function List({ title, items, onOpen, badge }: { title: string; items: QueueItem[]; onOpen: (id: string) => void; badge?: React.ReactNode }) {
+function List({ title, items, onOpen, badge, action }: { title: string; items: QueueItem[]; onOpen: (id: string) => void; badge?: React.ReactNode; action?: (q: QueueItem) => React.ReactNode }) {
   if (!items.length) return null
   return (
     <>
@@ -205,7 +208,7 @@ function List({ title, items, onOpen, badge }: { title: string; items: QueueItem
                 <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>
                 <AudienceCard plan={q} compact />
               </span>
-              {badge ?? <span style={{ color: 'var(--hint)' }}>›</span>}
+              {action ? action(q) : badge ?? <span style={{ color: 'var(--hint)' }}>›</span>}
             </button>
           )
         })}

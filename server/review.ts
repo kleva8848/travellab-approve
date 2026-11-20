@@ -126,23 +126,40 @@ export async function inquiryCounts(ids: string[]): Promise<Map<string, number> 
 export async function loadQueue() {
   // + опубліковані за останні 30 днів — для календаря
   const since = new Date(Date.now() - PUBLISHED_DAYS * 864e5).toISOString()
-  const [r, pub] = await Promise.all([
+  const missedFrom = addDays(kyivNow().date, -PUBLISHED_DAYS)
+  const [r, pub, mis] = await Promise.all([
     db().from('content_plan').select(PLAN_COLS).in('review_status', [...ACTIVE_STATUSES]),
     db().from('content_plan').select(PLAN_COLS).eq('review_status', 'published').gte('published_at', since),
+    db().from('content_plan').select(PLAN_COLS).eq('review_status', 'missed').gte('scheduled_for', missedFrom),
   ])
   if (r.error) throw r.error
   if (pub.error) throw pub.error
+  if (mis.error) throw mis.error
   // Затверджені до появи дат (до 09.10) — ставимо в календар один раз, по черзі (щоб не зайняли один день)
   for (const x of (r.data ?? []) as PlanRow[]) {
     if (x.review_status !== 'approved' || x.scheduled_for) continue
     const slot = await scheduleIfNeeded(x.id).catch(() => null)
     if (slot) Object.assign(x, slot)
   }
-  // Затверджений, але так і не опублікований: ховаємо, коли і дата поста, і день затвердження старші за APPROVED_GRACE_DAYS
+  // Затверджений, але так і не опублікований: коли і дата поста, і день затвердження старші за APPROVED_GRACE_DAYS —
+  // ставимо 'missed' у базі (план і генератор бачать правду); в Календарі лишається «Не вийшли» з кнопкою «Повернути»
   const staleBefore = addDays(kyivNow().date, -APPROVED_GRACE_DAYS)
   const stale = (x: PlanRow) => x.review_status === 'approved' && !!x.scheduled_for && x.scheduled_for < staleBefore
     && (!x.approved_at || x.approved_at.slice(0, 10) < staleBefore)
-  const rows = sortPlan([...((r.data ?? []) as PlanRow[]).filter((x) => !stale(x)), ...(pub.data ?? [])] as PlanRow[])
+  const staleRows = ((r.data ?? []) as PlanRow[]).filter(stale)
+  const newlyMissed: PlanRow[] = []
+  if (staleRows.length) {
+    const u = await db()
+      .from('content_plan')
+      .update({ review_status: 'missed', updated_at: new Date().toISOString() })
+      .in('id', staleRows.map((x) => x.id))
+      .eq('review_status', 'approved')
+      .is('published_at', null)
+      .select('id')
+    // не вдалось записати — просто ховаємо, як раніше; наступне відкриття спробує ще
+    if (!u.error) for (const x of staleRows) newlyMissed.push({ ...x, review_status: 'missed' })
+  }
+  const rows = sortPlan([...((r.data ?? []) as PlanRow[]).filter((x) => !stale(x)), ...(pub.data ?? []), ...(mis.data ?? []), ...newlyMissed] as PlanRow[])
   const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]
   const v = versionIds.length
     ? await db().from('post_versions').select('id, text, form, key_idea').in('id', versionIds)
@@ -258,7 +275,8 @@ export async function loadWeekPlan(week: number) {
   const dow = (new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7
   const from = addDays(today, -dow + 7 * week)
   const to = addDays(from, 6)
-  const r = await db().from('content_plan').select(PLAN_COLS).gte('scheduled_for', from).lte('scheduled_for', to).neq('review_status', 'backlog')
+  // викладені в «План» не показуємо — вони вже зроблені й не займають місце
+  const r = await db().from('content_plan').select(PLAN_COLS).gte('scheduled_for', from).lte('scheduled_for', to).not('review_status', 'in', '(backlog,published)')
   if (r.error) throw r.error
   const rows = sortPlan((r.data ?? []) as PlanRow[])
   const versionIds = rows.map((x) => x.current_version_id).filter(Boolean) as string[]

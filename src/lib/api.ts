@@ -166,7 +166,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -575,6 +575,7 @@ const demo = (() => {
       }
       if (action === 'inquiry') { p.inquiries = Math.max(0, (p.inquiries ?? 0) + (extra.on === false ? -1 : 1)); return { ok: true as const, inquiries: p.inquiries } }
       if (action === 'skip') p.plan.review_status = 'skipped'
+      if (action === 'unmiss') p.plan.review_status = 'approved'
       if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }
       if (action === 'restore') {

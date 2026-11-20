@@ -5,6 +5,7 @@ import { haptic } from '../lib/tg'
 import { AudienceCard } from './AudienceCard'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Spinner } from './ui'
+import { PublishedButton, usePublished } from '../lib/usePublished'
 
 // Вкладка «План»: увесь тиждень наперед — що, де, коли, в якому форматі, для кого і на яке питання.
 // На відміну від «Календаря» (лише затверджене) тут і слоти, які агент ще не написав
@@ -34,11 +35,12 @@ const dayTitle = (date: string, today: string) => {
   return cap(d) + (date === today ? ' · сьогодні' : '')
 }
 
-export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
+export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void; onChanged: () => void }) {
   const [week, setWeek] = useState(0)
   const [data, setData] = useState<WeekPlan | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(null)
+  const pub = usePublished(onChanged)
 
   useEffect(() => {
     let live = true
@@ -51,7 +53,7 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
   }, [week])
 
   const days = new Map<string, PlanItem[]>()
-  for (const x of data?.items ?? []) {
+  for (const x of (data?.items ?? []).filter((i) => !pub.hidden.has(i.id))) {
     const k = x.scheduled_for ?? ''
     days.set(k, [...(days.get(k) ?? []), x])
   }
@@ -62,6 +64,7 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
     if (p) counts.set(p, (counts.get(p) ?? 0) + 1)
   }
   const focus = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  const shown = (data?.items ?? []).filter((i) => !pub.hidden.has(i.id))
   const fmtRange = (d: WeekPlan) =>
     `${new Date(`${d.from}T12:00:00`).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} – ${new Date(`${d.to}T12:00:00`).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}`
 
@@ -72,8 +75,9 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
     const expanded = open === q.id
     return (
       <div key={q.id} style={{ borderTop: i ? '.5px solid var(--line)' : 0 }}>
+        <div className="flex items-center gap-2">
         <button
-          className="block w-full py-2.5 text-left"
+          className="block min-w-0 flex-1 py-2.5 text-left"
           onClick={() => {
             haptic('tap')
             if (canOpen) onOpen(q.id)
@@ -90,6 +94,8 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
           {q.preview && <span className="block truncate text-[13px]" style={{ color: 'var(--hint)' }}>{q.preview}</span>}
           <AudienceCard plan={q} compact />
         </button>
+        {q.review_status === 'approved' && <PublishedButton onClick={() => void pub.mark(q)} />}
+        </div>
         {expanded && (
           <div className="pb-3">
             <AudienceCard plan={q} />
@@ -118,14 +124,14 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
       ) : (
         <>
           <div className="mx-0.5 mt-3 text-[13px]" style={{ color: 'var(--hint)' }}>
-            {fmtRange(data)} · {data.items.length} {data.items.length === 1 ? 'публікація' : 'публікацій'}
+            {fmtRange(data)} · {shown.length} {shown.length === 1 ? 'публікація' : 'публікацій'}
           </div>
           {focus && (
             <div className="card mt-2.5 text-[14px] leading-snug" style={{ boxShadow: 'none', background: 'var(--bg2)' }}>
               🎯 Фокус тижня: <b>{focus}</b>
             </div>
           )}
-          {!data.items.length ? (
+          {!shown.length ? (
             <div className="card mt-4 text-center text-[14px] leading-snug" style={{ color: 'var(--hint)' }}>
               {week > 0 ? 'План наступного тижня агент складає в неділю ввечері.' : 'На цей тиждень публікацій немає.'}
             </div>
@@ -144,6 +150,7 @@ export function PlanScreen({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         </>
       )}
+      {pub.node}
     </div>
   )
 }

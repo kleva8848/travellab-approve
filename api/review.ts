@@ -3,7 +3,7 @@ import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { POST_WM, previewUrls, sendStory, sendToChat, type PhotoEdit, type PostWm } from '../server/render.js'
 import { inquiryCounts, notifyN8n, openQuestions } from '../server/review.js'
-import { DATE_RE, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
+import { DATE_RE, kyivNow, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
   id?: string
   expected_version_no?: number
   text?: string
@@ -332,6 +332,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', b.id)
         .in('review_status', ['ready_for_review', 'changes_requested', 'needs_data', 'approved'])
         .is('published_at', null)
+        .select('id')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true }) : void conflict()
+    }
+
+    // «Повернути» не вийшов пост: назад в approved, дата — сьогодні (інакше його знову відмітить missed)
+    if (b.action === 'unmiss') {
+      const r = await db()
+        .from('content_plan')
+        .update({ review_status: 'approved', scheduled_for: kyivNow().date, updated_at: new Date().toISOString() })
+        .eq('id', b.id)
+        .eq('review_status', 'missed')
         .select('id')
       if (r.error) throw r.error
       return r.data?.length ? void res.json({ ok: true }) : void conflict()
