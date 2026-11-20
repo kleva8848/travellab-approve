@@ -130,7 +130,7 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
               Пост ще не написано — агент підготує його приблизно за 3 дні до дати, тоді він з'явиться в «Сьогодні» на перегляд.
             </div>
             {q.review_status === 'planned' && (
-              <button className="mt-2 text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy === q.id} onClick={() => void skip(q, false)}>Пропустити цей слот</button>
+              <button className="btn sec mt-3" style={{ height: 42, fontSize: 14.5 }} disabled={busy === q.id} onClick={() => void skip(q, false)}>⏭ Пропустити цей слот</button>
             )}
           </div>
         )}
@@ -177,8 +177,8 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
           )}
           {skipped.length > 0 && (
             <div className="mt-5">
-              <button className="mx-0.5 text-[13px] font-semibold" style={{ color: 'var(--hint)' }} onClick={() => { haptic('tap'); setShowSkipped(!showSkipped) }}>
-                Пропущені · {skipped.length} {showSkipped ? '▴' : '▾'}
+              <button className="btn sec" style={{ height: 42, fontSize: 14.5 }} onClick={() => { haptic('tap'); setShowSkipped(!showSkipped) }}>
+                ⏭ Пропущені · {skipped.length} {showSkipped ? '▴' : '▾'}
               </button>
               {showSkipped && (
                 <div className="card mt-2" style={{ padding: '2px 14px' }}>
