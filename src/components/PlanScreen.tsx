@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { getPlan, type PlanItem, type WeekPlan } from '../lib/api'
+import { getPlan, reviewAction, type PlanItem, type WeekPlan } from '../lib/api'
 import { audienceOf, formatOf } from '../lib/audience'
-import { haptic } from '../lib/tg'
+import { confirmAction, haptic } from '../lib/tg'
 import { AudienceCard } from './AudienceCard'
 import { PILLAR, PLATFORM } from './PostScreen'
 import { Spinner } from './ui'
@@ -40,6 +40,10 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
   const [data, setData] = useState<WeekPlan | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
+  const [showSkipped, setShowSkipped] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [toast, setToast] = useState('')
   const pub = usePublished(onChanged)
 
   useEffect(() => {
@@ -50,10 +54,33 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
       .then((d) => { if (live) setData(d) })
       .catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)) })
     return () => { live = false }
-  }, [week])
+  }, [week, reload])
 
+  // Пропустити слот / повернути пропущений. Пост без тексту → planned, з текстом → туди, звідки пропустили
+  const skip = async (q: PlanItem, undo: boolean) => {
+    if (busy) return
+    if (!undo && !(await confirmAction('Пропустити цей слот? Агент його не писатиме. Повернути можна внизу в «Пропущених».'))) return
+    setBusy(q.id)
+    try {
+      await reviewAction(q.id, q.version_no, undo ? 'unskip' : 'skip')
+      haptic('success')
+      setToast(undo ? 'Повернула в план' : 'Пропустила')
+      setTimeout(() => setToast(''), 1800)
+      setOpen(null)
+      setReload((n) => n + 1)
+      onChanged()
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? e.message : 'Помилка')
+      setTimeout(() => setToast(''), 3000)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const skipped = (data?.items ?? []).filter((i) => i.review_status === 'skipped')
   const days = new Map<string, PlanItem[]>()
-  for (const x of (data?.items ?? []).filter((i) => !pub.hidden.has(i.id))) {
+  for (const x of (data?.items ?? []).filter((i) => !pub.hidden.has(i.id) && i.review_status !== 'skipped')) {
     const k = x.scheduled_for ?? ''
     days.set(k, [...(days.get(k) ?? []), x])
   }
@@ -64,7 +91,7 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
     if (p) counts.set(p, (counts.get(p) ?? 0) + 1)
   }
   const focus = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
-  const shown = (data?.items ?? []).filter((i) => !pub.hidden.has(i.id))
+  const shown = (data?.items ?? []).filter((i) => !pub.hidden.has(i.id) && i.review_status !== 'skipped')
   const fmtRange = (d: WeekPlan) =>
     `${new Date(`${d.from}T12:00:00`).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} – ${new Date(`${d.to}T12:00:00`).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}`
 
@@ -102,6 +129,9 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
             <div className="text-[13px]" style={{ color: 'var(--hint)' }}>
               Пост ще не написано — агент підготує його приблизно за 3 дні до дати, тоді він з'явиться в «Сьогодні» на перегляд.
             </div>
+            {q.review_status === 'planned' && (
+              <button className="mt-2 text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy === q.id} onClick={() => void skip(q, false)}>Пропустити цей слот</button>
+            )}
           </div>
         )}
       </div>
@@ -145,12 +175,36 @@ export function PlanScreen({ onOpen, onChanged }: { onOpen: (id: string) => void
               </div>
             ))
           )}
+          {skipped.length > 0 && (
+            <div className="mt-5">
+              <button className="mx-0.5 text-[13px] font-semibold" style={{ color: 'var(--hint)' }} onClick={() => { haptic('tap'); setShowSkipped(!showSkipped) }}>
+                Пропущені · {skipped.length} {showSkipped ? '▴' : '▾'}
+              </button>
+              {showSkipped && (
+                <div className="card mt-2" style={{ padding: '2px 14px' }}>
+                  {skipped.map((q, i) => (
+                    <div key={q.id} className="flex items-center gap-2" style={{ borderTop: i ? '.5px solid var(--line)' : 0 }}>
+                      <div className="min-w-0 flex-1 py-2.5">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[13px] tabular-nums" style={{ color: 'var(--hint)' }}>{q.scheduled_for ? dayTitle(q.scheduled_for, data.today).split(',')[0] : ''}</span>
+                          <span className={`chip ${(PLATFORM[q.platform] ?? { cls: '' }).cls}`}>{(PLATFORM[q.platform] ?? { name: q.platform }).name}</span>
+                        </span>
+                        <b className="mt-1 block truncate text-[14.5px]">{q.hotel_name ?? q.tour_title ?? cap(PILLAR[q.pillar] ?? q.pillar)}</b>
+                      </div>
+                      <button className="chip" disabled={busy === q.id} onClick={() => void skip(q, true)}>Повернути</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="mx-2 mt-3 text-center text-[12.5px]" style={{ color: 'var(--hint)' }}>
             Тапни пост, щоб відкрити. Дату переносиш у «Календарі» після затвердження.
           </div>
         </>
       )}
       {pub.node}
+      {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }

@@ -11,7 +11,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
   id?: string
   expected_version_no?: number
   text?: string
@@ -30,6 +30,7 @@ type Body = {
   media_id?: string
   edit?: Record<string, unknown>
   wm?: string
+  reason?: string
   answers?: { id?: string; answer?: string }[]
 }
 
@@ -324,14 +325,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return void res.json({ ok: true, inquiries: counts?.get(b.id) ?? 0 })
     }
 
-    // Іра пропускає пост: зникає з черги й календаря (статус skipped — кінцевий)
+    // Іра пропускає будь-який пост (і ненаписаний слот «planned»): зникає з черги й календаря, лишається в «Пропущені» (План).
+    // skipped_from — статус до пропуску, з нього «Повернути» (unskip) відновлює пост. Причина — необовʼязкова
     if (b.action === 'skip') {
+      const cur = await db().from('content_plan').select('review_status, published_at').eq('id', b.id).maybeSingle()
+      if (cur.error) throw cur.error
+      const from = cur.data?.review_status as string | undefined
+      if (!from || cur.data?.published_at || !['planned', 'ready_for_review', 'changes_requested', 'needs_data', 'approved'].includes(from)) return void conflict()
+      const reason = String(b.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200) || null
       const r = await db()
         .from('content_plan')
-        .update({ review_status: 'skipped', updated_at: new Date().toISOString() })
+        .update({ review_status: 'skipped', skipped_from: from, skip_reason: reason, updated_at: new Date().toISOString() })
         .eq('id', b.id)
-        .in('review_status', ['ready_for_review', 'changes_requested', 'needs_data', 'approved'])
+        .eq('review_status', from)
         .is('published_at', null)
+        .select('id')
+      if (r.error) throw r.error
+      return r.data?.length ? void res.json({ ok: true }) : void conflict()
+    }
+
+    // «Повернути» пропущений пост: назад у статус, з якого пропустили (затверджений — лише якщо дата не минула)
+    if (b.action === 'unskip') {
+      const cur = await db().from('content_plan').select('review_status, skipped_from, current_version_id, scheduled_for').eq('id', b.id).maybeSingle()
+      if (cur.error) throw cur.error
+      if (cur.data?.review_status !== 'skipped') return void conflict()
+      let back = String(cur.data.skipped_from ?? '')
+      if (!['planned', 'ready_for_review', 'changes_requested', 'needs_data', 'approved'].includes(back)) back = cur.data.current_version_id ? 'ready_for_review' : 'planned'
+      if (back === 'approved' && cur.data.scheduled_for && cur.data.scheduled_for < kyivNow().date) back = 'ready_for_review'
+      const r = await db()
+        .from('content_plan')
+        .update({ review_status: back, skipped_from: null, skip_reason: null, review_note: null, updated_at: new Date().toISOString() })
+        .eq('id', b.id)
+        .eq('review_status', 'skipped')
         .select('id')
       if (r.error) throw r.error
       return r.data?.length ? void res.json({ ok: true }) : void conflict()

@@ -128,7 +128,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm }
+type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm }
 type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 // «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
@@ -166,7 +166,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -174,6 +174,42 @@ export async function reviewAction(
     return demo.act(id, action, extra)
   }
   return call('/api/review', { method: 'POST', body: JSON.stringify({ id, expected_version_no, action, ...extra }) })
+}
+
+// ───────────── Готелі: пауза / повернення (сет 3) ─────────────
+
+export type HotelItem = { hotel_id: string; name: string; country: string | null; paused: boolean; paused_at: string | null; photos: number; last_post: string | null; upcoming: number }
+export type HotelsResult = { hotels: HotelItem[]; ok?: boolean; skipped?: number; restored?: number }
+
+const demoHotels: HotelItem[] = [
+  { hotel_id: 'HTL-001', name: 'Ikos Aria', country: 'Греція', paused: false, paused_at: null, photos: 24, last_post: '2026-11-10', upcoming: 2 },
+  { hotel_id: 'HTL-002', name: 'Westin Costa Navarino', country: 'Греція', paused: false, paused_at: null, photos: 12, last_post: null, upcoming: 1 },
+  { hotel_id: 'HTL-003', name: 'Four Seasons Seychelles', country: 'Сейшели', paused: false, paused_at: null, photos: 0, last_post: '2026-10-28', upcoming: 0 },
+  { hotel_id: 'HTL-004', name: 'Avani Fares', country: 'Мальдіви', paused: true, paused_at: '2026-11-18T10:00:00Z', photos: 8, last_post: '2026-09-30', upcoming: 0 },
+]
+
+export async function getHotels(): Promise<HotelsResult> {
+  if (isDemo) {
+    await wait()
+    return { hotels: structuredClone(demoHotels) }
+  }
+  return call('/api/hotels')
+}
+
+export async function hotelAction(action: 'pause' | 'resume', hotel_id: string): Promise<HotelsResult> {
+  if (isDemo) {
+    await wait(300)
+    const h = demoHotels.find((x) => x.hotel_id === hotel_id)
+    let n = 0
+    if (h) {
+      h.paused = action === 'pause'
+      h.paused_at = h.paused ? new Date().toISOString() : null
+      n = h.upcoming
+      if (h.paused) h.upcoming = 0
+    }
+    return { hotels: structuredClone(demoHotels), ok: true, ...(action === 'pause' ? { skipped: n } : { restored: 0 }) }
+  }
+  return call('/api/hotels', { method: 'POST', body: JSON.stringify({ action, hotel_id }) })
 }
 
 // ───────────── Фаза 7: правила з правок Іри (лише адмін) ─────────────
@@ -427,6 +463,7 @@ const DEMO_NOTE: Record<string, string> = {
   d1: 'Для кого: P2 Багатодітна сім\'я (сім\'я з 2–4 дітьми; потрібна сімейна інфраструктура, вілли / connecting rooms). Питання клієнта: «Чим будуть зайняті діти різного віку, поки батьки відпочивають?» — відповідай цій людині на прикладі цього готелю. Поїздки на 1–3 міс.',
   d2: 'Для кого: P3 Жінки в подорожі (дві подруги або мама з дочкою; короткі поїздки, комфорт, spa). Питання клієнта: «Куди поїхати з подругою на 5 днів, щоб відпочити по-справжньому?» — відповідай цій людині на прикладі цього готелю.',
 }
+const demoSkippedSlots = new Set<string>()
 const demo = (() => {
   const now = new Date().toISOString()
   // Демо-фото: градієнти замість справжніх (url null → плейсхолдер у каруселі)
@@ -504,10 +541,16 @@ const demo = (() => {
         empty('p1', 'Вт', 'instagram', 'reel', 'video', null, null),
         empty('p2', 'Сб', 'telegram', 'feed_carousel', 'unusual_hotels', 'Демо-готель на дереві', 'Для кого: P2 Багатодітна сім\'я (сім\'я з 2–4 дітьми). рубрика «Незвичайні готелі», карусель'),
       )
+      for (const x of items) if (demoSkippedSlots.has(x.id)) x.review_status = 'skipped'
       items.sort((a, b) => `${a.scheduled_for}${a.slot_time}`.localeCompare(`${b.scheduled_for}${b.slot_time}`))
       return { from: day(0), to: day(6), today: new Date().toISOString().slice(0, 10), items }
     },
     act: (id: string, action: string, extra: Partial<CommentInput> & ActionExtra): ActionResult => {
+      if (/^p\d$/.test(id)) {
+        if (action === 'skip') demoSkippedSlots.add(id)
+        if (action === 'unskip') demoSkippedSlots.delete(id)
+        return { ok: true as const }
+      }
       const p = byId(id)
       if (action === 'approve') {
         p.plan.review_status = 'approved'; p.plan.approved_at = new Date().toISOString()
@@ -585,6 +628,7 @@ const demo = (() => {
       }
       if (action === 'inquiry') { p.inquiries = Math.max(0, (p.inquiries ?? 0) + (extra.on === false ? -1 : 1)); return { ok: true as const, inquiries: p.inquiries } }
       if (action === 'skip') p.plan.review_status = 'skipped'
+      if (action === 'unskip') p.plan.review_status = p.plan.current_version_id ? 'ready_for_review' : 'planned'
       if (action === 'unmiss') p.plan.review_status = 'approved'
       if (action === 'golden') { const v = p.versions.find((x) => x.id === p.plan.current_version_id); if (v) v.is_golden = extra.on !== false }
       if (action === 'unapprove') { p.plan.review_status = 'ready_for_review'; p.plan.approved_at = null }

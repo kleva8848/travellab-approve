@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, getPost, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
+import { ApiError, getPost, hotelAction, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
 import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
@@ -142,7 +142,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const status = post.plan.review_status
   const questions = status === 'published' || status === 'approved' ? [] : post.questions ?? []
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'watermark', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'unskip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'watermark', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -309,6 +309,23 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     if (!(await confirmAction('Пропустити цей пост? Він зникне з черги і календаря.'))) return
     if (!(await act('skip'))) return
     haptic('success')
+    onChanged()
+    onNext()
+  }
+
+  // «Пропустити і поставити готель на паузу»: пост пропускається, готель випадає з плану, його ненаписані слоти теж пропускаються
+  const skipAndPause = async () => {
+    const h = post.hotel
+    if (!h) return
+    if (!(await confirmAction(`Пропустити цей пост і поставити «${h.name}» на паузу? Агент не братиме цей готель у план, а майбутні ненаписані пости про нього пропустяться. Повернути можна у вкладці «Готелі».`))) return
+    if (!(await act('skip', { reason: 'готель на паузі' }))) return
+    try {
+      await hotelAction('pause', h.hotel_id)
+      haptic('success')
+    } catch (e) {
+      haptic('error')
+      setToast(e instanceof Error ? `Пост пропущено, але паузу не поставлено: ${e.message}` : 'Пост пропущено, але паузу не поставлено')
+    }
     onChanged()
     onNext()
   }
@@ -651,6 +668,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                 </div>
                 <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>
                 <button className="mx-auto mt-4 block text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy} onClick={() => void skip()}>Пропустити цей пост</button>
+                {post.hotel && <button className="mx-auto mt-2 block text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy} onClick={() => void skipAndPause()}>…і поставити «{post.hotel.name}» на паузу</button>}
               </>
             )}
           </>

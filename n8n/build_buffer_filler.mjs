@@ -105,6 +105,8 @@ for (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.
   const story = p.story_id ? stories[p.story_id] || null : null;
   const title = (hotel0 && hotel0.name) || (tour0 && tour0.title) || '';
   const row = { id: p.id, date: p.scheduled_for, date_derived: !!p._date_derived, time: String(p.slot_time || '').slice(0, 5) || null, platform: p.platform, slot_type: p.slot_type, pillar: p.pillar, status: p.review_status, title: title || null };
+  // Сет 3 (20.11): готель на паузі (hotels.status='Inactive') — слот не пишемо, навіть якщо його встигли повернути з «Пропущених»
+  if (hotel0 && hotel0.status === 'Inactive') { report.push({ ...row, decision: 'skip', reason: 'готель на паузі' }); continue; }
   if (p.slot_type === 'stories') { report.push({ ...row, decision: 'skip', reason: 'сторіз — Іра знімає сама / шаблон, текст не генеруємо' }); continue; }
   if (p.slot_type === 'reel' || p.pillar === 'video') { report.push({ ...row, decision: 'skip', reason: 'рілс — спершу потрібне відео, текст не генеруємо' }); continue; }
 

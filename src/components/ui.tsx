@@ -38,6 +38,12 @@ export const IconList = () => (
   </svg>
 )
 
+export const IconHotel = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+    <path d="M4 20V5.5C4 4.7 4.7 4 5.5 4h8c.8 0 1.5.7 1.5 1.5V20" /><path d="M15 10h3.5c.8 0 1.5.7 1.5 1.5V20" /><path d="M2.5 20h19" />
+    <path d="M7.5 8h4M7.5 12h4M7.5 16h4" />
+  </svg>
+)
 export const IconPeople = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
     <circle cx="9" cy="8" r="3.2" /><path d="M3 19.5c.6-3.3 3-5 6-5s5.4 1.7 6 5" />

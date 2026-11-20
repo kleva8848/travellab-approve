@@ -4,7 +4,7 @@ import type { VercelResponse } from '@vercel/node'
 export function failSchema(res: VercelResponse, e: unknown): boolean {
   const code = typeof e === 'object' && e && 'code' in e ? String((e as { code: unknown }).code) : ''
   const msg = typeof e === 'object' && e && 'message' in e ? String((e as { message: unknown }).message) : ''
-  if (code === '42703' || code === '42P01' || code === 'PGRST205' || code === 'PGRST204' || /review_status|post_versions/.test(msg)) {
+  if (code === '42703' || code === '42P01' || code === 'PGRST205' || code === 'PGRST204' || code === 'PGRST202' || /review_status|post_versions/.test(msg)) {
     res.status(503).json({ error: 'schema_pending' })
     return true
   }

@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AudiencesScreen } from './components/AudiencesScreen'
 import { CalendarScreen, loadFilter, matchFilter, saveFilter, type Filter } from './components/CalendarScreen'
+import { HotelsScreen } from './components/HotelsScreen'
 import { PlanScreen } from './components/PlanScreen'
 import { PostScreen } from './components/PostScreen'
 import { TodayScreen } from './components/TodayScreen'
 import { VideoScreen } from './components/VideoScreen'
-import { Center, IconCalendar, IconList, IconPeople, IconSun, Spinner } from './components/ui'
+import { Center, IconCalendar, IconHotel, IconList, IconPeople, IconSun, Spinner } from './components/ui'
 import { ApiError, getMe, getQueue, getVideos, type Me, type QueueItem, type StoryInfo } from './lib/api'
 import type { VideoList } from './lib/video'
 import { haptic, initTelegram, inTelegram, isDemo, startParam } from './lib/tg'
 
-type Tab = 'today' | 'plan' | 'calendar' | 'audiences'
+type Tab = 'today' | 'plan' | 'calendar' | 'hotels' | 'audiences'
 
 const TABS: { id: Tab; label: string; icon: () => React.JSX.Element }[] = [
   { id: 'today', label: 'Сьогодні', icon: IconSun },
   { id: 'plan', label: 'План', icon: IconList },
   { id: 'calendar', label: 'Календар', icon: IconCalendar },
+  { id: 'hotels', label: 'Готелі', icon: IconHotel },
   { id: 'audiences', label: 'Аудиторії', icon: IconPeople },
 ]
 
@@ -137,6 +139,7 @@ export default function App() {
         {tab === 'today' && <TodayScreen me={auth.me} queue={queue} filter={filter} setFilter={setFilter} story={story} videos={videos} queueError={queueError} onOpen={open} onOpenVideo={setVideoId} onRetry={() => void refresh()} onChanged={() => void refresh()} />}
         {tab === 'plan' && <PlanScreen onOpen={open} onChanged={() => void refresh()} />}
         {tab === 'calendar' && <CalendarScreen queue={queue} filter={filter} setFilter={setFilter} onOpen={open} onChanged={() => void refresh()} />}
+        {tab === 'hotels' && <HotelsScreen />}
         {tab === 'audiences' && <AudiencesScreen me={auth.me} />}
       </main>
       <nav className="flex pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)]" style={{ background: 'var(--bg)', borderTop: '0.5px solid var(--line)' }}>
