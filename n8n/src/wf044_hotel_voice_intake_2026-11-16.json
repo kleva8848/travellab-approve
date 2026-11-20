@@ -1,0 +1,2311 @@
+{
+  "name": "[TravelLab] Hotel Voice Intake",
+  "nodes": [
+    {
+      "id": "trg-exec",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "trg-webhook",
+      "name": "Webhook - Manual Test",
+      "webhookId": "5b0c7f2e-7a1d-4c53-9f0e-3a6d2b8e1c47",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        520
+      ],
+      "parameters": {
+        "path": "travellab-voice-intake-test",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "code-normalize",
+      "name": "Code - Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const j = ($json.body && typeof $json.body === 'object') ? $json.body : $json;\nreturn [{ json: {\n  branch: j.branch || 'voice_session',\n  chat_id: j.chat_id,\n  text: String(j.text || '').trim(),\n  voice_file_id: j.voice_file_id || null,\n} }];"
+      }
+    },
+    {
+      "id": "sb-get-session",
+      "name": "Supabase - Get Open Session",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        720,
+        400
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "intake_sessions",
+        "limit": 1,
+        "orderBy": "created_at.desc",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chat_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.chat_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-merge-ctx",
+      "name": "Code - Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Normalize Input').first().json;\nconst rows = $input.all().map(i => i.json).filter(r => r && r.session_id && r.status !== 'closed');\nlet session = rows[0] || null;\nif (session) {\n  const age = Date.now() - new Date(session.updated_at).getTime();\n  if (age > 24 * 3600 * 1000) session = null;\n}\nlet route;\nif (ctx.branch === 'voice_start') route = 'start';\nelse if (ctx.branch === 'voice_cancel') route = session ? 'cancel' : 'no_session';\nelse if (!session) route = 'no_session';\nelse route = ctx.voice_file_id ? 'voice' : 'text';\nreturn [{ json: { ...ctx, session, route } }];"
+      }
+    },
+    {
+      "id": "switch-route",
+      "name": "Switch - Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "start",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "start"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cancel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "no_session",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "no_session"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "voice",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "voice"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sb-close-start",
+      "name": "Supabase - Close Open Sessions (Start)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1480,
+        100
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chat_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.chat_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "closed"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-get-hotels",
+      "name": "Supabase - Get All Hotels (Voice)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        1720,
+        100
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-picker",
+      "name": "Code - Build Hotel Picker",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        100
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Merge Context').first().json;\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hotels = $input.all().map(i => i.json).filter(h => h && h.hotel_id)\n  .sort((a, b) => String(a.name).localeCompare(String(b.name), 'uk'));\nlet reply;\nif (!hotels.length) {\n  reply = 'У базі ще нема готелів. Спочатку додай їх через /upload.';\n} else {\n  reply = 'Про який готель розповідаєш? Тапни на назву (вона скопіюється) і надішли її мені — або просто відповідай номером:\\n\\n' +\n    hotels.map((h, i) => `${i + 1}. <code>${esc(h.name)}</code>`).join('\\n') +\n    '\\n\\nЩоб вийти — /cancel';\n}\nreturn [{ json: {\n  chat_id: ctx.chat_id,\n  hotel_options_pg: '{' + hotels.map(h => h.hotel_id).join(',') + '}',\n  reply_text: reply,\n} }];"
+      }
+    },
+    {
+      "id": "sb-create-session",
+      "name": "Supabase - Create Session",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "tableId": "intake_sessions",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $json.chat_id }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "awaiting_hotel"
+            },
+            {
+              "fieldId": "hotel_options",
+              "fieldValue": "={{ $json.hotel_options_pg }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-picker",
+      "name": "Telegram - Send Hotel Picker",
+      "webhookId": "a1f4c9b2-6d3e-4b7a-8c15-2e9f0d7a3b61",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2440,
+        100
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Build Hotel Picker').first().json.chat_id }}",
+        "text": "={{ $('Code - Build Hotel Picker').first().json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "sb-close-cancel",
+      "name": "Supabase - Close Open Sessions (Cancel)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1480,
+        340
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.session.session_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "closed"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-cancel",
+      "name": "Telegram - Send Cancel Reply",
+      "webhookId": "b7d2e6a1-3c9f-4e58-a0b4-5f1c8d2e9a73",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1720,
+        340
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Merge Context').first().json.chat_id }}",
+        "text": "Зупинив ✅ Цю розмову закрито. Усе, що вже підтверджено раніше, збережено. Щоб розповісти про готель — /voice",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "tg-send-nosession",
+      "name": "Telegram - Send No Session Reply",
+      "webhookId": "c3e8f1d4-9a2b-4d67-b5c0-7e4a1f6d8b92",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1480,
+        560
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "Зараз нема активної розмови про готель. Напиши /voice, щоб почати.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "tg-get-voice",
+      "name": "Telegram - Get Voice File",
+      "webhookId": "91ec7491-26de-43cd-835a-48f4b21a14aa",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        1480,
+        780
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $json.voice_file_id }}",
+        "download": true
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "oai-transcribe",
+      "name": "OpenAI - Transcribe Voice",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "onError": "continueRegularOutput",
+      "position": [
+        1720,
+        780
+      ],
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "data",
+        "options": {
+          "language": "uk"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "code-resolve",
+      "name": "Code - Resolve Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        900
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Merge Context').first().json;\nconst inc = $input.first().json;\nlet text = ctx.text;\nif (ctx.voice_file_id) text = String(inc.text || '').trim();\nconst kind = ctx.voice_file_id ? 'voice' : 'text';\nconst state = !text ? 'empty' : ctx.session.status;\nreturn [{ json: { ...ctx, text, kind, state } }];"
+      }
+    },
+    {
+      "id": "switch-state",
+      "name": "Switch - Session State",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2200,
+        900
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "empty",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806500208-l9x4y9o6e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "empty"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "awaiting_hotel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806500208-9fhnyvsc8"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "awaiting_hotel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "collecting",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806500208-islannjju"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "collecting"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "confirming",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806500208-lnog5gcwc"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirming"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tg-send-empty",
+      "name": "Telegram - Send Empty Reply",
+      "webhookId": "17b6e2a8-c9b6-402a-a03e-a90a4b6656ed",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2480,
+        700
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "Не вдалося розпізнати повідомлення 🙈 Спробуй ще раз — голосовим або текстом.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "code-parse-choice",
+      "name": "Code - Parse Hotel Choice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        860
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Resolve Text').first().json;\nconst f = $input.first().json;\nconst opts = Array.isArray(ctx.session.hotel_options) ? ctx.session.hotel_options : [];\nlet hotel_id = null;\nif (f && f.hotel_id) {\n  hotel_id = f.hotel_id;\n} else {\n  const n = parseInt(String(ctx.text).replace(/\\D/g, ''), 10);\n  if (Number.isInteger(n) && n >= 1 && n <= opts.length) hotel_id = opts[n - 1];\n}\nconst ok = !!hotel_id;\nreturn [{ json: {\n  ok,\n  chat_id: ctx.chat_id,\n  session_id: ctx.session.session_id,\n  hotel_id,\n  reply_text: ok ? '' : `Не розпізнав 🙈 Тапни на назву готелю зі списку або напиши номер від 1 до ${opts.length} (або /cancel).`,\n} }];"
+      }
+    },
+    {
+      "id": "if-choice-valid",
+      "name": "IF - Choice Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2720,
+        860
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "condition-1789806500208-rinj8l7qi"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tg-send-badchoice",
+      "name": "Telegram - Send Bad Choice Reply",
+      "webhookId": "4ec69200-4ac5-4cce-a7bc-001ff7cfb82d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2960,
+        960
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "sb-get-chosen",
+      "name": "Supabase - Get Chosen Hotel",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        2960,
+        780
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.hotel_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-set-hotel",
+      "name": "Supabase - Set Session Hotel",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3200,
+        780
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Parse Hotel Choice').first().json.session_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "hotel_id",
+              "fieldValue": "={{ $('Code - Parse Hotel Choice').first().json.hotel_id }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "collecting"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-collect",
+      "name": "Telegram - Send Collect Prompt",
+      "webhookId": "56c00d38-0081-4ff0-9043-1132a36a7b77",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3440,
+        780
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Parse Hotel Choice').first().json.chat_id }}",
+        "text": "=Розкажи все, що знаєш про «{{ $('Supabase - Get Chosen Hotel').first().json.name }}»: голосовим або текстом. Можна кількома повідомленнями. Коли закінчиш — напиши «все».",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "code-detect-done",
+      "name": "Code - Detect Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        1100
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Resolve Text').first().json;\nconst t = String(ctx.text).toLowerCase().replace(/[.!\\s]+$/g, '').trim();\nconst is_done = ['все', 'усе', 'всё', 'це все', 'це усе', 'я все', 'done'].includes(t);\nreturn [{ json: { ...ctx, is_done } }];"
+      }
+    },
+    {
+      "id": "if-is-done",
+      "name": "IF - Is Done",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2720,
+        1100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_done }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "condition-1789806500209-0ubcduf2a"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sb-insert-msg",
+      "name": "Supabase - Insert Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2960,
+        1180
+      ],
+      "parameters": {
+        "tableId": "intake_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{ $json.session.session_id }}"
+            },
+            {
+              "fieldId": "kind",
+              "fieldValue": "={{ $json.kind }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-ack",
+      "name": "Telegram - Send Ack",
+      "webhookId": "8b7bdea3-018d-4d0f-884b-c15ad1bc472d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3200,
+        1180
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Detect Done').first().json.chat_id }}",
+        "text": "Записав ✅ Є ще щось про цей готель? Якщо все — напиши «все».",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "sb-get-hotel-prompt",
+      "name": "Supabase - Get Session Hotel",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        3200,
+        1020
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Resolve Text').first().json.session.hotel_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-get-msgs",
+      "name": "Supabase - Get Session Messages",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        3440,
+        1020
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "intake_messages",
+        "returnAll": true,
+        "orderBy": "id.asc",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Resolve Text').first().json.session.session_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-build-prompt",
+      "name": "Code - Build Structuring Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3680,
+        1020
+      ],
+      "parameters": {
+        "jsCode": "const hotel = $('Supabase - Get Session Hotel').first().json;\nconst msgs = $input.all().map(i => i.json).filter(m => m && m.content);\nconst transcript = msgs.map((m, i) => (i + 1) + ') ' + m.content).join('\\n');\nconst shape = { differentiator: 'чим готель відрізняється, головна фішка (рядок або null)', best_for: 'кому підходить (рядок або null)', not_for: 'кому не підходить (рядок або null)', honest_con: 'мінус, який Іра озвучила б клієнту (рядок або null)', visited_personally: 'true, false або null', personal_impression: 'що Іра відчуває, особисте враження (рядок або null)', extra_notes: 'інші корисні факти зі слів Іри (рядок або null)' };\nconst system = 'Ти асистент luxury travel-агентства. Іра, турагент, диктує враження про готель. Витягни з її слів структуровані поля. СУВОРІ ПРАВИЛА: використовуй ТІЛЬКИ те, що Іра сказала; нічого не вигадуй і не додавай від себе; якщо поля немає в її словах — став null; пиши стисло її словами, українською. Повідомлення, що починаються з \"Правка:\", — уточнення й мають пріоритет над попередніми. Поверни СТРОГО валідний JSON без пояснень у форматі: ' + JSON.stringify(shape);\nconst body = { model: 'gpt-4.1', temperature: 0.2, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: system }, { role: 'user', content: 'Готель: ' + (hotel.name || '') + '\\n\\nПовідомлення Іри по порядку:\\n' + transcript } ] };\nreturn [{ json: { openai_body: body, hotel_name: hotel.name || '' } }];"
+      }
+    },
+    {
+      "id": "http-structure",
+      "name": "HTTP - Structure Insight",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        3920,
+        1020
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.openai_body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "code-parse-insight",
+      "name": "Code - Parse Insight",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        1020
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Resolve Text').first().json;\nconst prep = $('Code - Build Structuring Prompt').first().json;\nconst res = $input.first().json;\nlet ins = null;\ntry { ins = JSON.parse(res.choices[0].message.content); } catch (e) { ins = null; }\nif (!ins || typeof ins !== 'object') {\n  return [{ json: { chat_id: ctx.chat_id, session_id: ctx.session.session_id, next: 'error', reply_text: 'Не вдалося обробити відповідь 🙈 Напиши «все» ще раз.' } }];\n}\nconst clean = v => (v === null || v === undefined) ? null : (String(v).trim() || null);\nconst d = {\n  differentiator: clean(ins.differentiator),\n  best_for: clean(ins.best_for),\n  not_for: clean(ins.not_for),\n  honest_con: clean(ins.honest_con),\n  visited_personally: (String(ins.visited_personally).toLowerCase() === 'true') ? true : (String(ins.visited_personally).toLowerCase() === 'false') ? false : null,\n  personal_impression: clean(ins.personal_impression),\n  extra_notes: clean(ins.extra_notes),\n};\nconst questions = { differentiator: 'чим цей готель відрізняється від інших', best_for: 'кому він підходить', not_for: 'кому він НЕ підходить', honest_con: 'який мінус ти б озвучила клієнту', visited_personally: 'чи була ти там особисто' };\nconst missing = Object.keys(questions).filter(k => d[k] === null);\nconst next = (missing.length && !ctx.session.gap_round_done && ctx.session.status === 'collecting') ? 'gaps' : 'confirm';\nconst yn = v => v === true ? 'так' : v === false ? 'ні' : '—';\nconst line = (l, v) => l + ': ' + (v || '—');\nconst card = 'Ось що я зрозумів про «' + prep.hotel_name + '»:\\n\\n' + [line('Чим відрізняється', d.differentiator), line('Кому підходить', d.best_for), line('Кому не підходить', d.not_for), line('Мінус', d.honest_con), 'Була особисто: ' + yn(d.visited_personally), line('Враження', d.personal_impression), line('Додатково', d.extra_notes)].join('\\n') + '\\n\\nЯкщо все вірно — напиши «ок». Якщо щось не так — надішли правку (голосовим або текстом).';\nconst gaps = 'Майже все є 👍 Щоб пости були точнішими, розкажи ще коротко:\\n' + missing.map(k => '• ' + questions[k]).join('\\n') + '\\n\\nМожна голосовим. Якщо додати нічого — напиши «все».';\nreturn [{ json: { chat_id: ctx.chat_id, session_id: ctx.session.session_id, next, draft_json: JSON.stringify(d), reply_text: next === 'gaps' ? gaps : card } }];"
+      }
+    },
+    {
+      "id": "switch-outcome",
+      "name": "Switch - Structure Outcome",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        4400,
+        1020
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "gaps",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806635014-ul7twlwh2"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "gaps"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "confirm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806635014-m7apt2cy4"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2,
+                  "leftValue": "",
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "condition-1789806635014-rbnkc9hg1"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "error"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sb-mark-gap",
+      "name": "Supabase - Mark Gap Round",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4640,
+        920
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.session_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "gap_round_done",
+              "fieldValue": "true"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-gaps",
+      "name": "Telegram - Send Gap Questions",
+      "webhookId": "b03c9995-381f-49a5-b877-9fd7edb31952",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4880,
+        920
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Parse Insight').first().json.chat_id }}",
+        "text": "={{ $('Code - Parse Insight').first().json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "sb-save-draft",
+      "name": "Supabase - Save Draft",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4640,
+        1040
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.session_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "draft",
+              "fieldValue": "={{ $json.draft_json }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "confirming"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-card",
+      "name": "Telegram - Send Card",
+      "webhookId": "8163bdee-1cec-4bf1-b76e-3346428a4dd3",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4880,
+        1040
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Parse Insight').first().json.chat_id }}",
+        "text": "={{ $('Code - Parse Insight').first().json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "tg-send-structerr",
+      "name": "Telegram - Send Structure Error",
+      "webhookId": "e142758f-3eb6-48d6-821f-c5eb8d9fa8b3",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4640,
+        1160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "code-detect-approval",
+      "name": "Code - Detect Approval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        1400
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Resolve Text').first().json;\nconst t = String(ctx.text).toLowerCase().replace(/[.!\\s]+$/g, '').trim();\nconst approved = ['ок', 'окей', 'ok', 'okay', 'так', 'все', 'усе', 'вірно', 'підтверджую', '👍', '✅'].includes(t);\nreturn [{ json: { ...ctx, approved } }];"
+      }
+    },
+    {
+      "id": "if-approved",
+      "name": "IF - Is Approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2720,
+        1400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "condition-1789806670448-648otnp4e"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sb-insert-correction",
+      "name": "Supabase - Insert Correction",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2960,
+        1500
+      ],
+      "parameters": {
+        "tableId": "intake_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{ $json.session.session_id }}"
+            },
+            {
+              "fieldId": "kind",
+              "fieldValue": "={{ $json.kind }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ 'Правка: ' + $json.text }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-get-msgs-save",
+      "name": "Supabase - Get Messages For Save",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        2960,
+        1320
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "intake_messages",
+        "returnAll": true,
+        "orderBy": "id.asc",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.session.session_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-get-last-ins",
+      "name": "Supabase - Get Last Insight ID",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        3200,
+        1320
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotel_insights",
+        "limit": 1,
+        "orderBy": "insight_id.desc",
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-build-insight",
+      "name": "Code - Build Insight Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3440,
+        1320
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Detect Approval').first().json;\nconst last = $input.first().json;\nconst n = last && last.insight_id ? parseInt(String(last.insight_id).replace(/\\D/g, ''), 10) : 0;\nconst insight_id = 'INS-' + String((n || 0) + 1).padStart(3, '0');\nlet d = ctx.session.draft;\nif (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }\nd = d || {};\nconst msgs = $('Supabase - Get Messages For Save').all().map(i => i.json).filter(m => m && m.content);\nconst v = d.visited_personally;\nreturn [{ json: {\n  insight_id,\n  hotel_id: ctx.session.hotel_id,\n  session_id: ctx.session.session_id,\n  chat_id: ctx.chat_id,\n  differentiator: d.differentiator ?? null,\n  best_for: d.best_for ?? null,\n  not_for: d.not_for ?? null,\n  honest_con: d.honest_con ?? null,\n  visited_personally: v === true ? 'true' : v === false ? 'false' : null,\n  personal_impression: d.personal_impression ?? null,\n  extra_notes: d.extra_notes ?? null,\n  raw_transcript: msgs.map(m => m.content).join('\\n---\\n'),\n} }];"
+      }
+    },
+    {
+      "id": "sb-insert-insight",
+      "name": "Supabase - Insert Insight",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3680,
+        1320
+      ],
+      "parameters": {
+        "tableId": "hotel_insights",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "insight_id",
+              "fieldValue": "={{ $json.insight_id }}"
+            },
+            {
+              "fieldId": "hotel_id",
+              "fieldValue": "={{ $json.hotel_id }}"
+            },
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{ $json.session_id }}"
+            },
+            {
+              "fieldId": "differentiator",
+              "fieldValue": "={{ $json.differentiator }}"
+            },
+            {
+              "fieldId": "best_for",
+              "fieldValue": "={{ $json.best_for }}"
+            },
+            {
+              "fieldId": "not_for",
+              "fieldValue": "={{ $json.not_for }}"
+            },
+            {
+              "fieldId": "honest_con",
+              "fieldValue": "={{ $json.honest_con }}"
+            },
+            {
+              "fieldId": "visited_personally",
+              "fieldValue": "={{ $json.visited_personally }}"
+            },
+            {
+              "fieldId": "personal_impression",
+              "fieldValue": "={{ $json.personal_impression }}"
+            },
+            {
+              "fieldId": "extra_notes",
+              "fieldValue": "={{ $json.extra_notes }}"
+            },
+            {
+              "fieldId": "raw_transcript",
+              "fieldValue": "={{ $json.raw_transcript }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "confirmed"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-close-saved",
+      "name": "Supabase - Close Session (Saved)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        1320
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "intake_sessions",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "session_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Build Insight Row').first().json.session_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "closed"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "tg-send-saved",
+      "name": "Telegram - Send Saved Reply",
+      "webhookId": "0600715d-e5ad-4553-8fe8-82f9c7e33e78",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4160,
+        1320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Code - Build Insight Row').first().json.chat_id }}",
+        "text": "Збережено ✅ Дякую! Тепер ці деталі підуть у пости про цей готель. Щоб розповісти про інший — /voice",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "sb-find-hotel-name",
+      "name": "Supabase - Find Hotel By Name",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        2480,
+        780
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "name",
+              "condition": "ilike",
+              "keyValue": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "sb-get-hotel-dossier",
+      "name": "Supabase - Get Hotel For Dossier",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        3920,
+        1200
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code - Build Insight Row').first().json.hotel_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-build-dossier",
+      "name": "Code - Build Dossier Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        1200
+      ],
+      "parameters": {
+        "jsCode": "// Досьє тільки зростає: нове дописується до старого, старе не перезаписується.\nconst ins = $('Code - Build Insight Row').first().json;\nconst h = $input.first().json || {};\nconst norm = s => String(s == null ? '' : s).toLowerCase().replace(/\\s+/g, ' ').trim();\nconst clean = s => (s == null ? '' : String(s)).trim();\n// Поля-переліки: ділимо по ';', дописуємо лише те, чого ще нема в старому тексті.\nconst mergeList = (oldV, newV) => {\n  const o = clean(oldV), n = clean(newV);\n  if (!n) return o || null;\n  if (!o) return n;\n  const on = norm(o), nn = norm(n);\n  if (on.includes(nn)) return o;\n  const add = n.split(/;\\s*/).map(clean).filter(s => s && !on.includes(norm(s)));\n  return add.length ? o + '; ' + add.join('; ') : o;\n};\n// Нотатки: цілий блок дописуємо, якщо його ще нема.\nconst mergeNotes = (oldV, newV) => {\n  const o = clean(oldV), n = clean(newV);\n  if (!n) return o || null;\n  if (!o) return n;\n  if (norm(o).includes(norm(n))) return o;\n  if (norm(n).includes(norm(o))) return n;\n  return o + '\\n' + n;\n};\n// «Була особисто» тільки вмикається: раз true — лишається true.\nconst visited = h.ira_visited === true || ins.visited_personally === 'true';\nconst notes = [ins.personal_impression, ins.extra_notes].filter(Boolean).join('. ');\nreturn [{ json: {\n  hotel_id: ins.hotel_id,\n  key_detail: mergeList(h.key_detail, ins.differentiator),\n  who_for: mergeList(h.who_for, ins.best_for),\n  who_not_for: mergeList(h.who_not_for, ins.not_for),\n  caveat: mergeList(h.caveat, ins.honest_con),\n  ira_visited: visited ? 'true' : 'false',\n  ira_notes: visited ? mergeNotes(h.ira_notes, notes) : (h.ira_notes ?? null),\n} }];"
+      }
+    },
+    {
+      "id": "sb-update-dossier",
+      "name": "Supabase - Update Hotel Dossier",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        4400,
+        1200
+      ],
+      "parameters": {
+        "operation": "update",
+        "tableId": "hotels",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.hotel_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "key_detail",
+              "fieldValue": "={{ $json.key_detail }}"
+            },
+            {
+              "fieldId": "who_for",
+              "fieldValue": "={{ $json.who_for }}"
+            },
+            {
+              "fieldId": "who_not_for",
+              "fieldValue": "={{ $json.who_not_for }}"
+            },
+            {
+              "fieldId": "caveat",
+              "fieldValue": "={{ $json.caveat }}"
+            },
+            {
+              "fieldId": "ira_visited",
+              "fieldValue": "={{ $json.ira_visited }}"
+            },
+            {
+              "fieldId": "ira_notes",
+              "fieldValue": "={{ $json.ira_notes }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Open Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Open Session": {
+      "main": [
+        [
+          {
+            "node": "Code - Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Merge Context": {
+      "main": [
+        [
+          {
+            "node": "Switch - Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Route": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Close Open Sessions (Start)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Close Open Sessions (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Send No Session Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Get Voice File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Resolve Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Close Open Sessions (Start)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get All Hotels (Voice)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get All Hotels (Voice)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Hotel Picker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Hotel Picker": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Create Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Create Session": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Hotel Picker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Close Open Sessions (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Cancel Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Get Voice File": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Transcribe Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Transcribe Voice": {
+      "main": [
+        [
+          {
+            "node": "Code - Resolve Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Resolve Text": {
+      "main": [
+        [
+          {
+            "node": "Switch - Session State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Session State": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Empty Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Find Hotel By Name",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Detect Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Detect Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Hotel Choice": {
+      "main": [
+        [
+          {
+            "node": "IF - Choice Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Choice Valid": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Chosen Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Send Bad Choice Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Chosen Hotel": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Set Session Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Set Session Hotel": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Collect Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Detect Done": {
+      "main": [
+        [
+          {
+            "node": "IF - Is Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Done": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Session Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Insert Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Message": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Session Hotel": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Session Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Session Messages": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Structuring Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Structuring Prompt": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Structure Insight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Structure Insight": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Insight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Insight": {
+      "main": [
+        [
+          {
+            "node": "Switch - Structure Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Structure Outcome": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Mark Gap Round",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Send Structure Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Mark Gap Round": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Gap Questions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Save Draft": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Detect Approval": {
+      "main": [
+        [
+          {
+            "node": "IF - Is Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Approved": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Messages For Save",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Insert Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Correction": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Session Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Messages For Save": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Last Insight ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Last Insight ID": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Insight Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Insight Row": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Insight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Close Session (Saved)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Saved Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Find Hotel By Name": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Hotel Choice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Insight": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Hotel For Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Hotel For Dossier": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Dossier Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Dossier Update": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Update Hotel Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Update Hotel Dossier": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Close Session (Saved)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true
+  }
+}

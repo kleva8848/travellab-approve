@@ -48,7 +48,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.callback_query || $json.body.update_id) ? $json.body : $json;\n// натиснута кнопка = та сама команда текстом\nconst CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help' };\nconst cq = b.callback_query || null;\n// «✅ Виклала» під відео, яке бот надіслав у слот (server/video_publish.ts)\nconst vp = cq ? String(cq.data || '').match(/^vpub_([0-9a-f-]{36})$/i) : null;\nconst m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nconst audio = (m.voice || m.audio) ? { file_id: (m.voice || m.audio).file_id, dur: Number((m.voice || m.audio).duration || 0) } : null;\nlet planId = null, how = 'none', videoId = null;\n// «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео\nconst vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);\nif (vo) videoId = vo[1].toLowerCase();\nif (vp) videoId = vp[1].toLowerCase();\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\n// «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст\nconst storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);\n// «🎬 Відео»: посилання на Inbox і «відео готово» після завантаження\nconst videoCmd = /^\\/video(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+video$/i.test(text) || /^(🎬\\s*)?завантажити відео$/i.test(text);\nconst videoReady = /^(\\/videodone(?:@\\w+)?|відео\\s+готов[оі]?)[.!\\s]*$/i.test(text);\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const u = String(e.url || '');\n    const mm = u.match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n    const mv = u.match(/start=vo_([0-9a-f-]{36})/i);\n    if (mv) { videoId = mv[1].toLowerCase(); how = 'vo'; break; }\n    if (/[?&]start(?:app)?=story\\b/i.test(u)) { how = 'story'; break; }\n  }\n}\nlet route = 'ignore';\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (vp) route = 'vpub';\nelse if (vo) route = 'vo_ask';\nelse if (how === 'vo') route = 'vo';\nelse if (st) route = 'ask';\nelse if (videoCmd && !file) route = 'video_ask';\nelse if (videoReady && !file) route = 'video_ready';\nelse if (storyCmd && !file) route = 'story_ask';\nelse if (how === 'story' && (file || text)) route = 'story';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, video_id: videoId, audio, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null } }];"
+        "jsCode": "// Telegram update (з тригера бота або з тестового вебхука) → що хоче людина\nconst b = $json.body && typeof $json.body === 'object' && ($json.body.message || $json.body.callback_query || $json.body.update_id) ? $json.body : $json;\n// натиснута кнопка = та сама команда текстом\nconst CB = { video_ask: '/video', video_ready: 'відео готово', story: '/story', help: '/help', photo_hotel: '/photo', photo_island: '/island', hotel_voice: '/voice', hotel_new: '/newhotel', hv_cancel: '/cancel' };\nconst cq = b.callback_query || null;\nconst cbData = cq ? String(cq.data || '') : '';\n// «✅ Фото готово» під папкою готелю / острова (назва острова — у прихованому посиланні того ж повідомлення)\nconst phr = cbData.match(/^ph_ready_(HTL-\\d+)$/i);\nlet islandReady = null;\nif (cbData === 'isl_ready' && cq.message) {\n  for (const e of [...(cq.message.entities || []), ...(cq.message.caption_entities || [])]) {\n    const mi = String(e.url || '').match(/[?&]start=isl_(.+)$/);\n    if (mi) { try { islandReady = decodeURIComponent(mi[1]).trim(); } catch (err) { islandReady = null; } break; }\n  }\n}\n// кнопки під розмовою про готель → ті самі слова, що Іра писала текстом\nconst hvText = cbData === 'hv_done' ? 'все' : cbData === 'hv_ok' ? 'ок' : null;\n// «✅ Виклала» під відео, яке бот надіслав у слот (server/video_publish.ts)\nconst vp = cq ? String(cq.data || '').match(/^vpub_([0-9a-f-]{36})$/i) : null;\n// «Пост виклала?» (21.11, сет 1): кнопки ✅ Виклала / 📅 На завтра / ⏭ Не буду під запитом WF-050 → callback ppub_ / ptmr_ / pskip_ + id поста\nconst pp = cq ? String(cq.data || '').match(/^pp(pub|tmr|skip)_([0-9a-f-]{36})$/i) : null;\n// «🔥 Сьогодні / 📅 Завтра / 🗓 У план тижня» під записаною історією\nconst sw = cq ? String(cq.data || '').match(/^st_(now|tmr|week)_([0-9a-f-]{36})$/i) : null;\nconst m = cq ? { chat: cq.message && cq.message.chat, from: cq.from, text: CB[cq.data] || '/help' } : (b.message || {});\nconst text = String(m.text || m.caption || '').trim();\nconst file = (m.voice && m.voice.file_id) || (m.audio && m.audio.file_id) || (m.video_note && m.video_note.file_id) || null;\nconst audio = (m.voice || m.audio) ? { file_id: (m.voice || m.audio).file_id, dur: Number((m.voice || m.audio).duration || 0) } : null;\nlet planId = null, how = 'none', videoId = null, nhName = '';\n// «🎙 Озвучити голосом» з апки: /start vo_<id> — голос до відео\nconst vo = text.match(/^\\/start(?:@\\w+)?\\s+vo_([0-9a-f-]{36})\\b/i);\nif (vo) videoId = vo[1].toLowerCase();\nif (vp) videoId = vp[1].toLowerCase();\nif (pp) planId = pp[2].toLowerCase();\nconst st = text.match(/^\\/start(?:@\\w+)?\\s+answer_([0-9a-f-]{36})\\b/i);\nif (st) { planId = st[1].toLowerCase(); how = 'start'; }\n// «Розповісти історію»: команда, deep link з апки/дайджесту або кнопка-текст\nconst storyCmd = /^\\/story(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+story$/i.test(text) || /розповісти історію/i.test(text);\n// «🎬 Відео»: посилання на Inbox і «відео готово» після завантаження\nconst videoCmd = /^\\/video(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+video$/i.test(text) || /^(🎬\\s*)?завантажити відео$/i.test(text);\nconst videoReady = /^(\\/videodone(?:@\\w+)?|відео\\s+готов[оі]?)[.!\\s]*$/i.test(text);\n// фото готелю / острова, голос про готель (переїхали з test_mergebot)\nconst photoCmd = /^\\/(photo|upload)(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+photo$/i.test(text);\nconst islandCmd = /^\\/island(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+island$/i.test(text);\nconst hvCmd = /^\\/voice(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+hotel$/i.test(text);\nconst hvCancel = /^\\/cancel(?:@\\w+)?$/i.test(text);\nconst hotelsCmd = /^\\/hotels(?:@\\w+)?$/i.test(text);\n// «➕ Новий готель» (сет 2, 21.11): /newhotel без назви або кнопка → кроки назва → (схожі) → країна; /newhotel Назва | Країна — одразу в Media Intake\nconst newCmd = /^\\/newhotel(?:@\\w+)?$/i.test(text) || /^\\/start(?:@\\w+)?\\s+newhotel$/i.test(text);\nconst mediaTyped = /^\\/(upload|island|newhotel)(?:@\\w+)?\\s+\\S/i.test(text) || /^(острів\\s+)?готово(?:[,:]\\s*|\\s+)\\S/i.test(text);\nconst helpCmd = /^\\/(help|start)(?:@\\w+)?$/i.test(text);\nconst r = m.reply_to_message;\nif (!planId && r) {\n  for (const e of [...(r.entities || []), ...(r.caption_entities || [])]) {\n    const u = String(e.url || '');\n    const mm = u.match(/post_([0-9a-f-]{36})/i);\n    if (mm) { planId = mm[1].toLowerCase(); how = 'reply'; break; }\n    const mv = u.match(/start=vo_([0-9a-f-]{36})/i);\n    if (mv) { videoId = mv[1].toLowerCase(); how = 'vo'; break; }\n    if (/[?&]start(?:app)?=story\\b/i.test(u)) { how = 'story'; break; }\n    if (/[?&]start=photo$/.test(u)) { how = 'photo'; break; }\n    if (/[?&]start=island$/.test(u)) { how = 'island'; break; }\n    if (/[?&]start=newhotel$/.test(u)) { how = 'nh'; break; }\n    const mn = u.match(/[?&]start=(nhc|nhd)_(.+)$/);\n    if (mn) { how = mn[1]; try { nhName = decodeURIComponent(mn[2]).trim(); } catch (err) { nhName = ''; } break; }\n  }\n}\nlet route = 'ignore', mediaText = null, hvBranch = null;\nif (!m.chat || !m.from || m.from.is_bot) route = 'ignore';\nelse if (vp) route = 'vpub';\nelse if (pp) route = 'ppost';\nelse if (sw) route = 'story_when';\nelse if (vo) route = 'vo_ask';\nelse if (how === 'vo') route = 'vo';\nelse if (st) route = 'ask';\nelse if (phr) route = 'photo_ready';\nelse if (cbData === 'isl_ready') { route = islandReady ? 'media' : 'help'; if (islandReady) mediaText = 'острів готово, ' + islandReady; }\nelse if (hvText) { route = 'hv'; hvBranch = 'voice_session'; }\nelse if (hvCancel && !file) { route = 'hv'; hvBranch = 'voice_cancel'; }\nelse if (hvCmd && !file) { route = 'hv'; hvBranch = 'voice_start'; }\nelse if (newCmd && !file) route = 'nh';\nelse if ((how === 'nh' || how === 'nhc' || how === 'nhd') && text && !file) route = 'nh';\nelse if (photoCmd && !file) route = 'photo_ask';\nelse if (islandCmd && !file) route = 'island_ask';\nelse if (hotelsCmd && !file) { route = 'media'; mediaText = '/hotels'; }\nelse if (mediaTyped && !file) { route = 'media'; mediaText = text; }\nelse if (how === 'photo' && text && !file) route = 'photo_pick';\nelse if (how === 'island' && text && !file) route = 'island_pick';\nelse if (videoCmd && !file) route = 'video_ask';\nelse if (videoReady && !file) route = 'video_ready';\nelse if (storyCmd && !file) route = 'story_ask';\nelse if (how === 'story' && (file || text)) route = 'story';\nelse if (file || (text && how === 'reply')) route = 'answer';\nelse if (text) route = 'help';\nreturn [{ json: { route, plan_id: planId, video_id: videoId, story_id: sw ? sw[2].toLowerCase() : null, when: sw ? sw[1].toLowerCase() : null, audio, how, chat_id: m.chat ? String(m.chat.id) : '', from_id: m.from ? String(m.from.id) : '', text: file ? '' : text, file_id: file, callback_id: cq ? cq.id : null, pp_action: pp ? pp[1].toLowerCase() : null,\n  media_text: mediaText, nh_name: nhName, hv_branch: hvBranch, hv_text: hvText, hotel_id: phr ? phr[1].toUpperCase() : null, explicit_help: helpCmd || cbData === 'help' } }];"
       }
     },
     {
@@ -256,6 +256,58 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "supabase-get-story",
+      "name": "Supabase - Get Story",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1730,
+        -400
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "story_queue",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "={{ 'id=eq.' + ($('Code - Normalize').first().json.story_id || '00000000-0000-0000-0000-000000000000') }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-intake-session",
+      "name": "Supabase - Get Intake Session",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1745,
+        -600
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "intake_sessions",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "={{ 'chat_id=eq.' + ($('Code - Normalize').first().json.chat_id || '0') }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "code-resolve",
       "name": "Code - Resolve",
       "type": "n8n-nodes-base.code",
@@ -265,7 +317,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst aud = all('Supabase - Get Audiences');\nconst storyHint = () => {\n  const on = (Array.isArray(aud) ? aud : []).filter(a => a && a.code && a.active !== false)\n    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));\n  const PERSONAS = on.length ? on.map(a => a.code) : ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  const a = on.find(x => x.code === persona);\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && x.p === persona);\n  const any = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && !x.p);\n  const list = mine.length ? mine : any;\n  const hint = list.length ? list[Math.floor(WEEK / PERSONAS.length) % list.length].q\n    : a ? 'Згадай клієнтів, схожих на «' + a.name + '». Що їм запамʼяталось найбільше — і чого вони не очікували?'\n    : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story', admin_chat_id: String(s.admin_chat_id || '') };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\nif (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\nif (n.route === 'vpub') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, published_at: v.published_at || null },\n    row: { published_at: new Date().toISOString(), published_ref: { ...(v.published_ref || {}), posted_via: 'bot', posted_by: Number(n.from_id) } },\n    video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\nif (n.route === 'vo_ask' || n.route === 'vo') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, has_voice: !!(v.montage && v.montage.voice) },\n    vo_url: 'https://t.me/' + bot + '?start=vo_' + v.id, video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
+        "jsCode": "// Хто пише (лише Іра / Влад), до якого поста, які відкриті питання\nconst n = $('Code - Normalize').first().json;\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst s = {};\nfor (const r of all('Supabase - Get Settings')) s[r.key] = r.value;\nconst aud = all('Supabase - Get Audiences');\nconst storyHint = () => {\n  const on = (Array.isArray(aud) ? aud : []).filter(a => a && a.code && a.active !== false)\n    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.code).localeCompare(String(b.code)));\n  const PERSONAS = on.length ? on.map(a => a.code) : ['P1', 'P2', 'P3', 'P4'];\n  const kyiv = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\n  const today = new Date(kyiv + 'T00:00:00Z');\n  const dow = (today.getUTCDay() + 6) % 7;\n  const weekStart = new Date(today.getTime() + ((dow === 0 ? 0 : 7 - dow) * 86400000));\n  const thu = new Date(weekStart.getTime() + 3 * 86400000);\n  const WEEK = 1 + Math.floor((thu - Date.UTC(thu.getUTCFullYear(), 0, 1)) / (7 * 86400000));\n  const persona = PERSONAS[WEEK % PERSONAS.length];\n  const a = on.find(x => x.code === persona);\n  let bank = s.story_prompts;\n  if (typeof bank === 'string') { try { bank = JSON.parse(bank); } catch (e) { bank = null; } }\n  const mine = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && x.p === persona);\n  const any = (Array.isArray(bank) ? bank : []).filter(x => x && x.q && !x.p);\n  const list = mine.length ? mine : any;\n  const hint = list.length ? list[Math.floor(WEEK / PERSONAS.length) % list.length].q\n    : a ? 'Згадай клієнтів, схожих на «' + a.name + '». Що їм запамʼяталось найбільше — і чого вони не очікували?'\n    : 'Яка історія з поїздок — твоїх чи клієнтів — запамʼяталась останнім часом?';\n  return { persona, hint };\n};\nconst allowed = [s.ira_chat_id, s.admin_chat_id].filter(Boolean).map(String);\nconst base = String(s.mini_app_url || '').replace(/\\/$/, '');\nconst bot = String(s.bot_username || 'travellab_studio_bot').replace(/^@/, '');\nconst out = { ...n, mini_app_url: base, supabase_url: String(s.supabase_url || '').replace(/\\/$/, ''), story_url: 'https://t.me/' + bot + '?start=story', admin_chat_id: String(s.admin_chat_id || ''),\n  photo_url: 'https://t.me/' + bot + '?start=photo', tg_start: 'https://t.me/' + bot + '?start=', island_url: 'https://t.me/' + bot + '?start=island' };\nif (n.route === 'ignore' || !allowed.includes(n.from_id)) return [{ json: { ...out, route: 'ignore' } }];\n// Розмова про готель відкрита (не closed, ≤ 24 год) → звичайне голосове / текст без reply і без команди йдуть у неї\nconst ses = all('Supabase - Get Intake Session').filter(x => x.session_id && x.status !== 'closed')\n  .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))[0];\nconst hvOpen = !!ses && Date.now() - new Date(ses.updated_at || ses.created_at).getTime() <= 24 * 3600 * 1000;\nif (hvOpen && ((n.route === 'help' && !n.explicit_help) || (n.route === 'answer' && n.how === 'none'))) return [{ json: { ...out, route: 'hv', hv_branch: 'voice_session' } }];\nif (n.route === 'hv' || n.route === 'media' || n.route === 'island_ask' || n.route === 'island_pick') return [{ json: out }];\nconst hotelList = () => all('Supabase - Get Hotels').filter(h => h.hotel_id && h.name)\n  .sort((a, b) => String(a.name).localeCompare(String(b.name), 'uk')).map(h => ({ id: h.hotel_id, name: h.name, country: h.country || '' }));\nif (n.route === 'photo_ask' || n.route === 'photo_pick' || n.route === 'nh') return [{ json: { ...out, hotels: hotelList() } }];\nif (n.route === 'photo_ready') {\n  const h = hotelList().find(x => x.id === n.hotel_id);\n  return [{ json: h ? { ...out, route: 'media', media_text: 'готово, ' + h.name } : { ...out, route: 'photo_gone' } }];\n}\nif (n.route === 'video_ask' || n.route === 'video_ready') return [{ json: out }];\nif (n.route === 'story_ask') return [{ json: { ...out, ...storyHint() } }];\nif (n.route === 'story') return [{ json: out }];\nif (n.route === 'story_when') {\n  // Дата й час нового TG-слота: завтра — час TG за замовчуванням (settings.slot_times перекриває, як server/schedule.ts);\n  // сьогодні — не раніше ніж за годину від зараз (кругла година), не пізніше 23:00. Іра змінить у календарі апки\n  const story = all('Supabase - Get Story')[0] || null;\n  const now = DateTime.now().setZone('Europe/Kyiv');\n  const d = n.when === 'tmr' ? now.plus({ days: 1 }) : now;\n  let times = s.slot_times;\n  if (typeof times === 'string') { try { times = JSON.parse(times); } catch (e) { times = {}; } }\n  const def = /^([01]\\d|2[0-3]):[0-5]\\d$/.test(String((times || {}).telegram || '')) ? String(times.telegram) : '10:00';\n  let time = def;\n  if (n.when === 'now') {\n    let e = now.plus({ minutes: 60 });\n    if (e.minute || e.second || e.millisecond) e = e.startOf('hour').plus({ hours: 1 });\n    const t = e.hasSame(now, 'day') ? e.toFormat('HH:mm') : '23:00';\n    if (t > def) time = t > '23:00' ? '23:00' : t;\n  }\n  const date = d.toFormat('yyyy-MM-dd');\n  const plan_row = story ? {\n    day: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'][d.weekday - 1], platform: 'telegram', slot_type: 'content',\n    pillar: story.pillar || 'personal_experience', tour_id: null, hotel_id: story.hotel_id || null, story_id: story.id, pair_key: null,\n    note: null, status: 'draft', week_start: d.startOf('week').toFormat('yyyy-MM-dd'), scheduled_for: date, slot_time: time, review_status: 'generating'\n  } : null;\n  return [{ json: { ...out, story, date, date_label: d.toFormat('dd.MM'), time, plan_row } }];\n}\nif (n.route === 'ppost') {\n  // ✅ Виклала → published; 📅 На завтра → дата +1 день; ⏭ Не буду → skipped. Лише для ще затверджених (повторне натискання нічого не ламає)\n  const p = all('Supabase - Get Plans')[0] || {};\n  const hn = ((p.hotel_id && all('Supabase - Get Hotels').find(h => h.hotel_id === p.hotel_id)) || {}).name;\n  const tn = ((p.tour_id && all('Supabase - Get Tours').find(t => t.tour_id === p.tour_id)) || {}).title;\n  const nowK = DateTime.now().setZone('Europe/Kyiv');\n  const stamp = new Date().toISOString();\n  const row = n.pp_action === 'pub' ? { review_status: 'published', published_at: stamp, updated_at: stamp }\n    : n.pp_action === 'tmr' ? { scheduled_for: nowK.plus({ days: 1 }).toFormat('yyyy-MM-dd'), updated_at: stamp }\n    : { review_status: 'skipped', updated_at: stamp };\n  return [{ json: { ...out, pp: { id: n.plan_id, action: n.pp_action, title: hn || tn || p.pillar || 'пост', tmr: nowK.plus({ days: 1 }).toFormat('dd.MM') }, row,\n    post_url: base ? base + '/?startapp=post_' + n.plan_id : base } }];\n}\nif (n.route === 'vpub') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, published_at: v.published_at || null },\n    row: { published_at: new Date().toISOString(), published_ref: { ...(v.published_ref || {}), posted_via: 'bot', posted_by: Number(n.from_id) } },\n    video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\nif (n.route === 'vo_ask' || n.route === 'vo') {\n  const v = all('Supabase - Get Video Draft')[0] || null;\n  if (!v || v.status === 'skipped') return [{ json: { ...out, route: 'vo_gone' } }];\n  return [{ json: { ...out, video: { id: v.id, name: v.name, format: v.format, has_voice: !!(v.montage && v.montage.voice) },\n    vo_url: 'https://t.me/' + bot + '?start=vo_' + v.id, video_url: base ? base + '/?startapp=video_' + v.id : base } }];\n}\n\nconst reqs = all('Supabase - Get Open Requests');\nconst forPlan = (p) => reqs.filter(q => q.content_plan_id === p.id || (p.hotel_id && q.hotel_id === p.hotel_id) || (p.tour_id && q.tour_id === p.tour_id))\n  .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));\nconst plans = all('Supabase - Get Plans');\nlet plan = n.plan_id ? plans.find(p => p.id === n.plan_id) || null : null;\nif (!plan && !n.plan_id && n.route === 'answer') {\n  // просто голосове, не відповідь на питання: якщо «бракує даних» рівно в одному пості — до нього\n  const c = plans.filter(p => p.review_status === 'needs_data' && !p.published_at && forPlan(p).length);\n  if (c.length === 1) plan = c[0];\n  // жодного поста з питаннями, а голосове є → це історія для постів\n  if (!c.length && n.file_id) return [{ json: { ...out, route: 'story', how: 'plain' } }];\n}\nif (n.route === 'help') return [{ json: { ...out, route: 'help' } }];\nif (!plan) return [{ json: { ...out, route: n.plan_id ? 'gone' : 'unresolved' } }];\n\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst tours = Object.fromEntries(all('Supabase - Get Tours').map(t => [t.tour_id, t]));\nconst plat = { telegram: 'Telegram', instagram: 'Instagram', threads: 'Threads' }[plan.platform] || plan.platform;\nconst title = ((plan.hotel_id && hotels[plan.hotel_id]) || {}).name || ((plan.tour_id && tours[plan.tour_id]) || {}).title || plan.pillar;\nconst qs = forPlan(plan).map(q => ({ id: q.id, field: q.field, question: q.question }));\nreturn [{ json: { ...out, plan, title: title + ' · ' + plat, questions: qs, post_url: base ? base + '/?startapp=post_' + plan.id : '' } }];"
       },
       "executeOnce": true
     },
@@ -592,6 +644,246 @@
               },
               "renameOutput": true,
               "outputKey": "vpub"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-story_when",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "story_when",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "story_when"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-photo_ask",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "photo_ask",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "photo_ask"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-photo_pick",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "photo_pick",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "photo_pick"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-island_ask",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "island_ask",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "island_ask"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-island_pick",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "island_pick",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "island_pick"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-media",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "media",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "media"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-hv",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "hv",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "hv"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-photo_gone",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "photo_gone",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "photo_gone"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-ppost",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "ppost",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "ppost"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r-nh",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "nh",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "nh"
             }
           ]
         },
@@ -621,7 +913,7 @@
         520
       ],
       "parameters": {
-        "jsCode": "// help / unresolved / gone / нема питань — коротко + кнопка в апку\nconst r = $json;\nconst T = {\n  help: 'Привіт! Я бот TravelLab. Що я вмію — тисни кнопку нижче:\\n\\n'\n    + '📱 Відкрити TravelLab — пости на перегляд: затвердити, попросити правку, вибрати фото.\\n\\n'\n    + '🎬 Завантажити відео — дам папку на Диску. Закинь туди відео з телефона чи компʼютера, повернись сюди й натисни «✅ Відео готово».\\n\\n'\n    + '🎙 Розповісти історію — запишеш голосове, я зроблю з нього пост.\\n\\n'\n    + '❓ Питання агента до поста — відкрий пост в апці й натисни «Відповісти голосом».\\n\\n'\n    + '📷 Фото поки що — через бот завантаження фото, скоро переїде сюди.\\n\\n'\n    + 'Загубила меню — напиши /help.',\n  unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.\\n\\nЯкщо це історія для постів — надішли /story і запиши її у відповідь.',\n  gone: 'Цього поста вже немає в роботі 🙌',\n  vo_gone: 'Цього відео вже немає в роботі 🙌',\n  none: 'По цьому посту питань уже немає 🙌'\n};\nconst k = r.route === 'answer' ? 'none' : r.route;\nconst kind = (k === 'help' || !T[k]) ? 'menu' : 'button';\nreturn [{ json: { chat_id: r.chat_id, kind, text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];"
+        "jsCode": "// help / unresolved / gone / нема питань — коротко + кнопка в апку\nconst r = $json;\nconst T = {\n  help: 'Привіт! Я бот TravelLab. Що я вмію — тисни кнопку нижче:\\n\\n'\n    + '📱 Відкрити TravelLab — пости на перегляд: затвердити, попросити правку, вибрати фото.\\n\\n'\n    + '📷 Фото готелю — вибереш готель, дам папку на Диску. Закинь фото й натисни «✅ Фото готово» — я їх опишу для постів.\\n\\n'\n    + '🏝 Фото острова — те саме для місця без готелю: пляжі, вид, атмосфера.\\n\\n'\n    + '🏨 Розповісти про готель — голосом: чим особливий, кому підходить і кому ні, мінуси, твоє враження. Запишу в досьє готелю — це піде в усі пости про нього.\\n\\n'\n    + '🎙 Розповісти історію — запишеш голосове, я зроблю з нього пост.\\n\\n'\n    + '🎬 Завантажити відео — дам папку на Диску. Закинь туди відео з телефона чи компʼютера, повернись сюди й натисни «✅ Відео готово».\\n\\n'\n    + '❓ Питання агента до поста — відкрий пост в апці й натисни «Відповісти голосом».\\n\\n'\n    + 'Загубила меню — напиши /help.',\n  unresolved: 'Не зрозумів, до якого поста ця відповідь 🙈 Відкрий пост у TravelLab і натисни «Відповісти голосом» — я поставлю питання ще раз.\\n\\nЯкщо це історія для постів — надішли /story і запиши її у відповідь.',\n  gone: 'Цього поста вже немає в роботі 🙌',\n  vo_gone: 'Цього відео вже немає в роботі 🙌',\n  photo_gone: 'Не знайшов цей готель у базі 🙈 Натисни «📷 Фото готелю» в /help і вибери ще раз.',\n  none: 'По цьому посту питань уже немає 🙌'\n};\nconst k = r.route === 'answer' ? 'none' : r.route;\nconst kind = (k === 'help' || !T[k]) ? 'menu' : 'button';\nreturn [{ json: { chat_id: r.chat_id, kind, text: T[k] || T.help, url: (k === 'none' && r.post_url) || r.mini_app_url, button: k === 'none' ? 'Повернутись у TravelLab' : 'Відкрити TravelLab' } }];"
       }
     },
     {
@@ -1250,7 +1542,7 @@
         1040
       ],
       "parameters": {
-        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// /story: питання-підказка тижня + force_reply з прихованим маркером ?start=story (відповідь на нього = історія)\nconst r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.story_url) + '🎙 <b>Історія для постів</b>\\n\\nПідказка цього тижня:\\n<i>' + esc(r.hint) + '</i>\\n\\n'\n    + 'Або будь-яка інша історія — твоя чи клієнтів. Запиши голосове на 1–3 хв у відповідь на це повідомлення (можна й текстом). '\n    + 'Імена клієнтів не обовʼязково — я їх не пишу. Історія піде в найближчий суботній пост, текст побачиш в апці до публікації.'\n} }];"
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// /story: питання-підказка тижня + force_reply з прихованим маркером ?start=story (відповідь на нього = історія)\nconst r = $json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.story_url) + '🎙 <b>Історія для постів</b>\\n\\nПідказка цього тижня:\\n<i>' + esc(r.hint) + '</i>\\n\\n'\n    + 'Або будь-яка інша історія — твоя чи клієнтів. Запиши голосове на 1–3 хв у відповідь на це повідомлення (можна й текстом). '\n    + 'Імена клієнтів не обовʼязково — я їх не пишу. Після запису обереш, коли пост: сьогодні, завтра чи в план тижня. Текст побачиш в апці до публікації.'\n} }];"
       },
       "executeOnce": true
     },
@@ -1520,7 +1812,7 @@
         1300
       ],
       "parameters": {
-        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst r = $('Code - Story Row').first().json;\nconst res = $json;\nconst ok = res.statusCode >= 200 && res.statusCode < 300;\nif (!ok) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'Не вдалось записати історію 🙈 Перешли це голосове ще раз трохи згодом — або Владу.', url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nreturn [{ json: { chat_id: r.chat_id, kind: 'button',\n  text: 'Дякую! Записав історію ✅\\n«' + r.title + '»'\n    + (r.is_story ? '' : '\\n\\n(Схоже, це не історія з поїздок — якщо випадково, скажи Владу, він прибере.)')\n    + '\\n\\nВона піде в найближчий суботній пост — план тижня складаю в неділю ввечері. Текст побачиш в апці до публікації.',\n  url: r.mini_app_url, button: 'Відкрити TravelLab' } }];"
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst r = $('Code - Story Row').first().json;\nconst res = $json;\nconst ok = res.statusCode >= 200 && res.statusCode < 300;\nif (!ok) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'Не вдалось записати історію 🙈 Перешли це голосове ще раз трохи згодом — або Владу.', url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nconst head = 'Дякую! Записав історію ✅\\n«' + r.title + '»'\n  + (r.is_story ? '' : '\\n\\n(Схоже, це не історія з поїздок — якщо випадково, скажи Владу, він прибере.)');\n// id історії → кнопки «коли публікувати»; без id (Supabase не повернув рядок) — як раніше, у план тижня\nconst id = Array.isArray(res.body) && res.body[0] ? res.body[0].id : null;\nif (!id) return [{ json: { chat_id: r.chat_id, kind: 'button',\n  text: head + '\\n\\nВона піде в найближчий суботній пост — план тижня складаю в неділю ввечері. Текст побачиш в апці до публікації.',\n  url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nreturn [{ json: { chat_id: r.chat_id, kind: 'story_choice', story_id: id,\n  text: head + '\\n\\nКоли робимо пост?\\n🔥 Сьогодні або 📅 Завтра — напишу одразу і покладу в апку.\\n🗓 У план тижня — поставлю, коли складатиму план у неділю.' } }];"
       },
       "executeOnce": true
     },
@@ -1644,7 +1936,7 @@
         2080
       ],
       "parameters": {
-        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// Підсумок Inbox: скільки відео, де, скільки місця; Владу — сигнал «можна розбирати» (HTML: назви папок екрануємо)\nconst r = $('Code - Resolve').first().json;\nconst q = $('Code - Video Query').first().json;\nconst files = (Array.isArray($json.files) ? $json.files : []).filter(f => f.mimeType !== 'application/vnd.google-apps.folder');\nconst err = q.list_error || ($json.error ? String($json.error.message || $json.error).slice(0, 200) : '');\nconst names = Object.fromEntries(q.folders.map(f => [f.id, f.name]));\nconst videos = files.filter(f => String(f.mimeType || '').startsWith('video/'));\nconst photos = files.filter(f => String(f.mimeType || '').startsWith('image/'));\nconst other = files.length - videos.length - photos.length;\nconst gb = videos.reduce((s, f) => s + Number(f.size || 0), 0) / 1e9;\nconst by = {};\nfor (const f of videos) { const k = names[(f.parents || [])[0]] || ''; by[k] = (by[k] || 0) + 1; }\nconst lines = Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, c]) => '• ' + (k ? '«' + esc(k) + '»' : 'без папки') + ' — ' + c);\nconst size = gb >= 1 ? gb.toFixed(1).replace('.', ',') + ' ГБ' : Math.round(gb * 1000) + ' МБ';\nconst url = \"https://drive.google.com/drive/folders/1py-eratM0G1dr8gGI94PXJMx7DziXk9K\";\nlet text, admin = '';\nif (err) text = 'Не вдалось відкрити папку з відео 🙈 Я передав Владу, він подивиться.';\nelse if (!videos.length) text = 'У папці поки немає відео 🤔\\n\\nЯкщо завантажувала з телефона — перевір, що завантаження закінчилось (Диск має бути відкритий до кінця). Потім знову натисни «✅ Відео готово».';\nelse text = 'Отримав ' + videos.length + ' відео (' + size + ') ✅\\n' + lines.join('\\n')\n  + (photos.length ? '\\n\\nФото в цій папці (' + photos.length + ') поки не беру — фото поки що через бот завантаження фото (/upload).' : '')\n  + '\\n\\nТепер я їх розберу: де знято, який готель чи острів, найкращі моменти. Перший рілс покаже Влад.';\nif (err) admin = '⚠️ Іра написала «відео готово», але Inbox не відкрився: ' + esc(err);\nelse if (videos.length) admin = '🎬 Іра закинула ' + videos.length + ' відео (' + size + ') у 00_Inbox:\\n' + lines.join('\\n')\n  + (photos.length ? '\\n+ фото: ' + photos.length : '') + (other > 0 ? '\\n+ інші файли: ' + other : '') + '\\n\\nМожна запускати розбір (Reels_Test_Plan §3).';\nreturn [{ json: { chat_id: r.chat_id, kind: 'link', text, url, button: '📂 Відкрити папку для відео',\n  admin_chat_id: r.admin_chat_id, admin_text: admin, notify_admin: !!admin && !!r.admin_chat_id && r.admin_chat_id !== r.chat_id } }];"
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\n// Підсумок Inbox: скільки відео, де, скільки місця; Владу — сигнал «можна розбирати» (HTML: назви папок екрануємо)\nconst r = $('Code - Resolve').first().json;\nconst q = $('Code - Video Query').first().json;\nconst files = (Array.isArray($json.files) ? $json.files : []).filter(f => f.mimeType !== 'application/vnd.google-apps.folder');\nconst err = q.list_error || ($json.error ? String($json.error.message || $json.error).slice(0, 200) : '');\nconst names = Object.fromEntries(q.folders.map(f => [f.id, f.name]));\nconst videos = files.filter(f => String(f.mimeType || '').startsWith('video/'));\nconst photos = files.filter(f => String(f.mimeType || '').startsWith('image/'));\nconst other = files.length - videos.length - photos.length;\nconst gb = videos.reduce((s, f) => s + Number(f.size || 0), 0) / 1e9;\nconst by = {};\nfor (const f of videos) { const k = names[(f.parents || [])[0]] || ''; by[k] = (by[k] || 0) + 1; }\nconst lines = Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, c]) => '• ' + (k ? '«' + esc(k) + '»' : 'без папки') + ' — ' + c);\nconst size = gb >= 1 ? gb.toFixed(1).replace('.', ',') + ' ГБ' : Math.round(gb * 1000) + ' МБ';\nconst url = \"https://drive.google.com/drive/folders/1py-eratM0G1dr8gGI94PXJMx7DziXk9K\";\nlet text, admin = '';\nif (err) text = 'Не вдалось відкрити папку з відео 🙈 Я передав Владу, він подивиться.';\nelse if (!videos.length) text = 'У папці поки немає відео 🤔\\n\\nЯкщо завантажувала з телефона — перевір, що завантаження закінчилось (Диск має бути відкритий до кінця). Потім знову натисни «✅ Відео готово».';\nelse text = 'Отримав ' + videos.length + ' відео (' + size + ') ✅\\n' + lines.join('\\n')\n  + (photos.length ? '\\n\\nФото в цій папці (' + photos.length + ') не беру — фото готелю чи острова завантажуй через кнопки «📷 Фото готелю» / «🏝 Фото острова» в /help.' : '')\n  + '\\n\\nТепер я їх розберу: де знято, який готель чи острів, найкращі моменти. Перший рілс покаже Влад.';\nif (err) admin = '⚠️ Іра написала «відео готово», але Inbox не відкрився: ' + esc(err);\nelse if (videos.length) admin = '🎬 Іра закинула ' + videos.length + ' відео (' + size + ') у 00_Inbox:\\n' + lines.join('\\n')\n  + (photos.length ? '\\n+ фото: ' + photos.length : '') + (other > 0 ? '\\n+ інші файли: ' + other : '') + '\\n\\nМожна запускати розбір (Reels_Test_Plan §3).';\nreturn [{ json: { chat_id: r.chat_id, kind: 'link', text, url, button: '📂 Відкрити папку для відео',\n  admin_chat_id: r.admin_chat_id, admin_text: admin, notify_admin: !!admin && !!r.admin_chat_id && r.admin_chat_id !== r.chat_id } }];"
       },
       "executeOnce": true
     },
@@ -1921,6 +2213,951 @@
       "executeOnce": true
     },
     {
+      "id": "http-post-action",
+      "name": "HTTP - Post Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        3640
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/content_plan?id=eq.{{ $json.pp.id }}&review_status=eq.approved&published_at=is.null",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.row) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-post-action-reply",
+      "name": "Code - Post Action Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        3640
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Code - Resolve').first().json;\nconst c = $json;\nconst ok = c.statusCode >= 200 && c.statusCode < 300 && Array.isArray(c.body) && c.body.length > 0;\nconst fail = !(c.statusCode >= 200 && c.statusCode < 300);\nconst t = '«' + r.pp.title + '»';\nconst text = fail ? 'Не вдалось позначити 🙈 Відкрий календар в апці й зроби це там.'\n  : !ok ? 'Пост ' + t + ' уже оброблено раніше ✓'\n  : r.pp.action === 'pub' ? 'Позначила ✅ ' + t + ' — викладено. Дякую!'\n  : r.pp.action === 'tmr' ? 'Перенесла 📅 ' + t + ' на завтра, ' + r.pp.tmr + '.'\n  : 'Добре ⏭ ' + t + ' не публікуємо.';\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text, url: r.post_url || r.mini_app_url, button: 'Відкрити календар' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-story-when",
+      "name": "Code - Story When",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        3900
+      ],
+      "parameters": {
+        "jsCode": "// Сьогодні/Завтра → генеруємо; «У план тижня» або історії вже нема в черзі — лише відповідь\nconst r = $json;\nconst st = r.story;\nconst reply = (text) => [{ json: { chat_id: r.chat_id, kind: 'button', go: false, text, url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nif (!st) return reply('Не знайшов цю історію 🙈 Запиши її ще раз — /story.');\nif (st.status !== 'new') return reply('Ця історія вже в плані 🙌 Глянь в апці.');\nif (r.when === 'week') return reply('Ок 🗓 Історія чекає в черзі — поставлю її, коли складатиму план тижня (неділя ввечері). Текст побачиш в апці до публікації.');\nconst day = r.when === 'tmr' ? 'завтра' : 'сьогодні';\nreturn [{ json: { ...r, go: true, day_word: day, wait_text: '✍️ Пишу пост з твоєю історією на ' + day + ' — це 1–2 хв. Напишу, щойно буде готовий.' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-go-",
+      "name": "IF - Story Go?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-go-",
+              "leftValue": "={{ $json.go }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-lock-story",
+      "name": "HTTP - Lock Story",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        3900
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/story_queue?id=eq.{{ $json.story.id }}&status=eq.new",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'used' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-story-locked-",
+      "name": "IF - Story Locked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-locked-",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) && $json.body.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-story-taken",
+      "name": "Code - Story Taken",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        4160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Code - Story When').first().json;\nreturn [{ json: { chat_id: r.chat_id, kind: 'button', text: 'Ця історія вже в плані 🙌 Глянь в апці.', url: r.mini_app_url, button: 'Відкрити TravelLab' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "http-insert-story-plan",
+      "name": "HTTP - Insert Story Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        3900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Story When').first().json.supabase_url }}/rest/v1/content_plan",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Code - Story When').first().json.plan_row) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-story-plan-created-",
+      "name": "IF - Story Plan Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-plan-created-",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) && $json.body.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-story-writing",
+      "name": "Telegram - Story Writing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3520,
+        3900
+      ],
+      "parameters": {
+        "chatId": "={{ $('Code - Story When').first().json.chat_id }}",
+        "text": "={{ $('Code - Story When').first().json.wait_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-approved-posts",
+      "name": "Supabase - Get Approved Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        3900
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "posts",
+        "returnAll": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-golden-versions",
+      "name": "Supabase - Get Golden Versions",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        3900
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "post_versions",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "is_golden=eq.true"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-golden-plans",
+      "name": "Supabase - Get Golden Plans",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4180,
+        3900
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_plan",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "supabase-get-rules",
+      "name": "Supabase - Get Rules",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4400,
+        3900
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ira_rules",
+        "returnAll": true,
+        "filterType": "string",
+        "filterString": "status=eq.active"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-gen-input",
+      "name": "Code - Story Gen Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4620,
+        3900
+      ],
+      "parameters": {
+        "jsCode": "// Вхід Post Generator — як у Buffer Filler (mode initial), але note порожній: без теми/аудиторії тижня\n\nconst IRA_RULES_MAX = 12;\nconst IRA_SCOPE_ORDER = { hotel: 0, pillar: 1, platform: 2, global: 3 };\nfunction pickIraRules(rows, plan) {\n  const seen = new Set();\n  return (rows || [])\n    .filter(r => r && r.rule_text && r.status === 'active' && (r.scope === 'global'\n      || (r.scope === 'platform' && r.scope_value === plan.platform)\n      || (r.scope === 'pillar' && r.scope_value === plan.pillar)\n      || (r.scope === 'hotel' && plan.hotel_id && r.scope_value === plan.hotel_id)))\n    .sort((a, b) => (IRA_SCOPE_ORDER[a.scope] - IRA_SCOPE_ORDER[b.scope]) || String(b.created_at).localeCompare(String(a.created_at)))\n    .map(r => String(r.rule_text).trim())\n    .filter(t => { const k = t.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })\n    .slice(0, IRA_RULES_MAX);\n}\nfunction iraRulesBlock(rules) {\n  return 'ПРАВИЛА ІРИ З ЇЇ ПОПЕРЕДНІХ ПРАВОК (дотримуйся в цьому пості; жорсткі заборони вище мають пріоритет):\\n' + rules.map(r => '— ' + r).join('\\n');\n}\nfunction applyIraRules(input, rules) {\n  const out = { ...input, rules };\n  if (!rules.length) return out;\n  const block = iraRulesBlock(rules);\n  if (out.mode === 'regenerate' && out.had_feedback && out.ira_feedback) out.ira_feedback = out.ira_feedback + '\\n\\n' + block;\n  else out.fewshot = [{ text: '(Це не приклад поста, а її правила.)\\n' + block }, ...(Array.isArray(out.fewshot) ? out.fewshot : [])];\n  return out;\n}\n\nconst all = (x) => { try { return $(x).all().map(i => i.json).filter(j => j && Object.keys(j).length > 0 && !j.error); } catch (e) { return []; } };\nconst r = $('Code - Story When').first().json;\nconst plan = $('HTTP - Insert Story Plan').first().json.body[0];\nconst hotels = Object.fromEntries(all('Supabase - Get Hotels').map(h => [h.hotel_id, h]));\nconst CUTOVER = new Date('2026-09-19T12:00:00Z');\nconst legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);\nconst goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));\nconst golden = all('Supabase - Get Golden Versions').filter(v => v.text).sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))\n  .filter(v => (goldenPlans[v.content_plan_id] || {}).platform === 'telegram').slice(0, 3).map(v => ({ text: v.text }));\nconst rules = pickIraRules(all('Supabase - Get Rules'), plan);\nreturn [{ json: applyIraRules({\n  mode: 'initial',\n  slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar, note: '' },\n  week_parity: DateTime.fromISO(plan.scheduled_for).weekNumber % 2 === 0 ? 'even' : 'odd',\n  tour: null, hotel: plan.hotel_id ? hotels[plan.hotel_id] || null : null, story: r.story,\n  fewshot: [...golden, ...legacy],\n  passthrough: { content_plan_id: plan.id }\n}, rules) }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "execute-post-generator",
+      "name": "Execute - Post Generator",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4840,
+        3900
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "VZk3w2jPwXFexId2",
+          "mode": "id"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-gen-parse",
+      "name": "Code - Story Gen Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5060,
+        3900
+      ],
+      "parameters": {
+        "jsCode": "// Відповідь генератора → що писати у версію (як Buffer Filler)\nconst g = $json || {};\nconst plan = $('HTTP - Insert Story Plan').first().json.body[0];\nconst ok = !!(g.status && g.status !== 'failed' && g.text);\nconst lintErr = g.lint_errors || [];\nreturn [{ json: {\n  _ok: ok,\n  _error: ok ? '' : String(g.error || g.status || 'генератор не повернув текст').slice(0, 300),\n  plan_id: plan.id,\n  photo_count: plan.hotel_id ? 1 : 0,\n  rpc: ok ? {\n    p_content_plan_id: plan.id,\n    p_text: g.text,\n    p_trigger: 'initial',\n    p_expected_version_no: 0,\n    p_hooks: Array.isArray(g.hooks) && g.hooks.length ? g.hooks : null,\n    p_form: g.form || null,\n    p_key_idea: g.key_idea || null,\n    p_model: 'gpt-4.1',\n    p_prompt_version: 'PRMPT-011 v5 · story_bot',\n    p_lint: lintErr.length ? { errors: lintErr, attempts: g.attempts || null } : null,\n    p_missing_facts: g.needs_data ? [{ field: 'unknown', note: 'генератор: бракує даних' }] : [],\n    p_review_status: 'ready_for_review'\n  } : null\n} }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-generated-",
+      "name": "IF - Story Generated?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5280,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-generated-",
+              "leftValue": "={{ $json._ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-story-photos-ranked-",
+      "name": "HTTP - Story Photos (ranked)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5500,
+        3900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Story When').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media_ranked",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_plan_id: $json.plan_id, p_count: $json.photo_count || 0, p_text: ($json.rpc || {}).p_text || null }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-story-ranked-",
+      "name": "IF - Story Ranked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5720,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-ranked-",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-story-photos",
+      "name": "HTTP - Story Photos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5720,
+        4160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Story When').first().json.supabase_url }}/rest/v1/rpc/tl_pick_media",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_plan_id: $('Code - Story Gen Parse').first().json.plan_id, p_count: $('Code - Story Gen Parse').first().json.photo_count || 0 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "http-story-add-version",
+      "name": "HTTP - Story Add Version",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5940,
+        3900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Code - Story When').first().json.supabase_url }}/rest/v1/rpc/tl_add_version",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const r = { ...$('Code - Story Gen Parse').first().json.rpc };\n  const okIds = (j) => j && j.statusCode >= 200 && j.statusCode < 300 && Array.isArray(j.body) ? j.body : null;\n  const ranked = okIds($('HTTP - Story Photos (ranked)').first().json);\n  let fallback = null;\n  try { fallback = okIds($('HTTP - Story Photos').first().json); } catch (e) { fallback = null; }\n  const ids = ranked || fallback || [];\n  if (ids.length) r.p_media_ids = ids;\n  return r;\n})()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-result",
+      "name": "Code - Story Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6160,
+        3900
+      ],
+      "parameters": {
+        "jsCode": "// Підсумок: пост у апці → Ірі «готово» з кнопкою на пост; ні → відкат + Владу\nconst r = $('Code - Story When').first().json;\nconst prev = $prevNode.name;\nlet planId = null;\ntry { const b = $('HTTP - Insert Story Plan').first().json.body; planId = Array.isArray(b) && b[0] ? b[0].id : null; } catch (e) { planId = null; }\nconst msg = (j) => String((j.body && (j.body.message || j.body.code)) || (j.error && j.error.message) || ('HTTP ' + j.statusCode)).slice(0, 300);\nlet ok = false, note = '';\nif (prev === 'IF - Story Plan Created?') note = 'слот не створився: ' + msg($json);\nelse if (prev === 'IF - Story Generated?') note = $json._error || 'генератор не повернув текст';\nelse { ok = $json.statusCode >= 200 && $json.statusCode < 300; if (!ok) note = 'версія не записалась: ' + msg($json); }\nconst base = r.mini_app_url;\nconst postUrl = planId && base ? base + '/?startapp=post_' + planId : base;\nif (ok) return [{ json: { ok: true, chat_id: r.chat_id, kind: 'button', url: postUrl, button: '👀 Глянути пост',\n  text: 'Готово ✨ Пост з твоєю історією на ' + r.day_word + ', ' + r.date_label + ' о ' + r.time + '.\\n\\nГлянь і затверди в апці — дату й час можна змінити там же.' } }];\nreturn [{ json: { ok: false, plan_id: planId, story_id: r.story.id, supabase_url: r.supabase_url,\n  admin_chat_id: r.admin_chat_id, admin_text: '⚠️ Історія «' + String(r.story.transcript_clean || '').slice(0, 60) + '…» → пост на ' + r.date_label + ' не вийшов: ' + note,\n  chat_id: r.chat_id, kind: 'button', url: postUrl, button: 'Відкрити TravelLab',\n  text: planId ? 'Не вийшло написати пост 🙈 Історія стоїть у плані на ' + r.date_label + ' — Влад подивиться.'\n    : 'Не вийшло поставити історію в план 🙈 Вона збережена — натисни кнопку ще раз трохи згодом.' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-done-",
+      "name": "IF - Story Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6380,
+        3900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-done-",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-story-plan-revert",
+      "name": "HTTP - Story Plan Revert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6600,
+        4160
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/content_plan?id=eq.{{ $json.plan_id || '00000000-0000-0000-0000-000000000000' }}&review_status=eq.generating",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ review_status: 'planned', review_note: 'Історія з бота: пост не згенерувався', updated_at: $now.toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "http-story-unlock",
+      "name": "HTTP - Story Unlock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6820,
+        4160
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Code - Story Result').first().json.supabase_url }}/rest/v1/story_queue?id=eq.{{ $('Code - Story Result').first().json.plan_id ? '00000000-0000-0000-0000-000000000000' : $('Code - Story Result').first().json.story_id }}&status=eq.used",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'new' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "telegram-story-fail-admin",
+      "name": "Telegram - Story Fail Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        7040,
+        4160
+      ],
+      "parameters": {
+        "chatId": "={{ $('Code - Story Result').first().json.admin_chat_id }}",
+        "text": "={{ $('Code - Story Result').first().json.admin_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-story-fail-reply",
+      "name": "Code - Story Fail Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7260,
+        4160
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $('Code - Story Result').first().json }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-story-choice-",
+      "name": "IF - Story Choice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6380,
+        650
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-story-choice-",
+              "leftValue": "={{ $json.kind === 'story_choice' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-reply-story-choice-",
+      "name": "Telegram - Reply (story choice)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        6600,
+        650
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🔥 Сьогодні",
+                    "additionalFields": {
+                      "callback_data": "={{ 'st_now_' + $json.story_id }}"
+                    }
+                  },
+                  {
+                    "text": "📅 Завтра",
+                    "additionalFields": {
+                      "callback_data": "={{ 'st_tmr_' + $json.story_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🗓 У план тижня",
+                    "additionalFields": {
+                      "callback_data": "={{ 'st_week_' + $json.story_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "if-link-",
       "name": "IF - Link?",
       "type": "n8n-nodes-base.if",
@@ -2076,9 +3313,39 @@
               "row": {
                 "buttons": [
                   {
-                    "text": "🎬 Завантажити відео",
+                    "text": "📷 Фото готелю",
                     "additionalFields": {
-                      "callback_data": "video_ask"
+                      "callback_data": "photo_hotel"
+                    }
+                  },
+                  {
+                    "text": "🏝 Фото острова",
+                    "additionalFields": {
+                      "callback_data": "photo_island"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🏨 Розповісти про готель",
+                    "additionalFields": {
+                      "callback_data": "hotel_voice"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "➕ Новий готель",
+                    "additionalFields": {
+                      "callback_data": "hotel_new"
                     }
                   }
                 ]
@@ -2095,6 +3362,18 @@
                   }
                 ]
               }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🎬 Завантажити відео",
+                    "additionalFields": {
+                      "callback_data": "video_ask"
+                    }
+                  }
+                ]
+              }
             }
           ]
         },
@@ -2107,6 +3386,255 @@
         "telegramApi": {
           "id": "n0IdHhMlzZgnnc7K",
           "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-photo-step",
+      "name": "Code - Photo Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        4680
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');\nconst pick = (opts, txt) => {\n  const t = String(txt || '').trim();\n  if (/^\\d{1,3}$/.test(t)) { const k = parseInt(t, 10); return k >= 1 && k <= opts.length ? opts[k - 1] : null; }\n  const q = norm(t);\n  if (!q) return null;\n  const exact = opts.find(x => norm(x.name) === q);\n  if (exact) return exact;\n  if (q.length < 4) return null;\n  const c = opts.filter(x => { const v = norm(x.name); return v.includes(q) || q.includes(v); });\n  return c.length === 1 ? c[0] : null;\n};\nconst numbered = (xs) => xs.map((x, i) => (i + 1) + '. ' + esc(x.name)).join('\\n');\n// /photo: список готелів з номерами (force_reply + маркер ?start=photo); відповідь → /upload <точна назва> у Media Intake\nconst r = $json;\nconst opts = r.hotels || [];\nif (!opts.length) return [{ json: { chat_id: r.chat_id, kind: 'button', text: 'У базі ще нема готелів 🙈 Скажи Владу.', url: r.mini_app_url, button: 'Відкрити TravelLab' } }];\nif (r.route === 'photo_ask') return [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.photo_url) + '📷 <b>Фото готелю</b>\\n\\nДля якого готелю? Напиши номер у відповідь на це повідомлення:\\n\\n' + numbered(opts)\n    + '\\n\\nНового готелю в списку нема? Натисни «➕ Новий готель» у /help.' } }];\nconst h = pick(opts, r.text);\nif (!h) return [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.photo_url) + 'Не знайшов «' + esc(r.text) + '» 🙈 Напиши номер зі списку у відповідь на це повідомлення:\\n\\n' + numbered(opts) } }];\nreturn [{ json: { ...r, media_text: '/upload ' + h.name } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "http-list-islands",
+      "name": "HTTP - List Islands",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        4940
+      ],
+      "parameters": {
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "'1R4jAWrdB-xMzB5Mf7BdCgGfX1J5ogpOV' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,mimeType,size,parents)"
+            },
+            {
+              "name": "pageSize",
+              "value": "1000"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "code-new-hotel-step",
+      "name": "Code - New Hotel Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        4420
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');\nconst pick = (opts, txt) => {\n  const t = String(txt || '').trim();\n  if (/^\\d{1,3}$/.test(t)) { const k = parseInt(t, 10); return k >= 1 && k <= opts.length ? opts[k - 1] : null; }\n  const q = norm(t);\n  if (!q) return null;\n  const exact = opts.find(x => norm(x.name) === q);\n  if (exact) return exact;\n  if (q.length < 4) return null;\n  const c = opts.filter(x => { const v = norm(x.name); return v.includes(q) || q.includes(v); });\n  return c.length === 1 ? c[0] : null;\n};\nconst numbered = (xs) => xs.map((x, i) => (i + 1) + '. ' + esc(x.name)).join('\\n');\nconst r = $json;\nconst hotels = r.hotels || [];\nconst norm2 = (s) => String(s || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');\nconst mark = (k, v) => hidden(r.tg_start + k + (v === undefined ? '' : encodeURIComponent(v)));\nconst countries = [...new Set(hotels.map(h => String(h.country || '').trim()).filter(c => c && !/^уточнити$/i.test(c)))]\n  .sort((a, b) => a.localeCompare(b, 'uk')).map(name => ({ name }));\nconst similarOf = (name) => {\n  const q = norm2(name);\n  const stop = new Set(['resort', 'resorts', 'hotel', 'hotels', 'spa', 'beach']);\n  const tokens = String(name).toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter(t => t.length >= 4 && !stop.has(t));\n  return hotels.filter(h => { const n = norm2(h.name); return n === q || tokens.some(t => n.includes(t)); }).slice(0, 6);\n};\nconst askCountry = (name, lead) => ({ chat_id: r.chat_id, kind: 'force',\n  text: mark('nhc_', name) + (lead || '') + '🌍 <b>' + esc(name) + '</b>\\n\\nУ якій країні? Напиши номер у відповідь на це повідомлення — або назву нової країни:\\n\\n' + (countries.length ? numbered(countries) : '(ще нема жодної — напиши назву)') });\nconst askName = (lead) => ({ chat_id: r.chat_id, kind: 'force',\n  text: mark('newhotel') + (lead || '') + '➕ <b>Новий готель</b>\\n\\nЯк він називається? Напиши назву у відповідь на це повідомлення (як на сайті готелю, наприклад: Ikos Aria).' });\nconst out = (o) => [{ json: o }];\nconst t = String(r.text || '').trim();\nif (!r.how || r.how === 'none') return out(askName(''));\nif (r.how === 'nh') {\n  const name = t.replace(/[|\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 80);\n  if (name.length < 3) return out(askName('Не зрозуміла назву 🙈 '));\n  const exact = hotels.find(h => norm2(h.name) === norm2(name));\n  if (exact) return out({ ...r, media_text: '/upload ' + exact.name });\n  const sim = similarOf(name);\n  if (sim.length) return out({ chat_id: r.chat_id, kind: 'force',\n    text: mark('nhd_', name) + '🤔 Схожі готелі вже є в базі:\\n\\n' + numbered(sim) + '\\n\\nЦе один із них? Напиши його номер. Якщо «' + esc(name) + '» — зовсім новий, напиши слово <b>новий</b>.' });\n  return out(askCountry(name, ''));\n}\nconst name = String(r.nh_name || '').trim();\nif (!name) return out(askName(''));\nif (r.how === 'nhd') {\n  if (/^нов/i.test(t)) return out(askCountry(name, ''));\n  const sim = similarOf(name);\n  const h = pick(sim, t);\n  if (h) return out({ ...r, media_text: '/upload ' + h.name });\n  return out({ chat_id: r.chat_id, kind: 'force',\n    text: mark('nhd_', name) + 'Не зрозуміла 🙈 Напиши номер зі списку або слово <b>новий</b>:\\n\\n' + numbered(sim) });\n}\n// nhc: країна — номер зі списку або нова назва\nif (/^\\d{1,3}$/.test(t) && !pick(countries, t)) return out(askCountry(name, 'Нема країни з номером ' + esc(t) + ' 🙈 '));\nconst country = (pick(countries, t) || { name: t.replace(/[|\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 40) }).name;\nif (country.length < 3) return out(askCountry(name, 'Не зрозуміла 🙈 '));\nreturn out({ ...r, media_text: '/newhotel ' + name + ' | ' + country });"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "code-island-step",
+      "name": "Code - Island Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        4940
+      ],
+      "parameters": {
+        "jsCode": "const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hidden = (url) => url ? '<a href=\"' + esc(url) + '\">\\u200b</a>' : '';\nconst list = (qs) => qs.map((q, i) => (qs.length > 1 ? (i + 1) + '. ' : '') + esc(q.question)).join('\\n');\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');\nconst pick = (opts, txt) => {\n  const t = String(txt || '').trim();\n  if (/^\\d{1,3}$/.test(t)) { const k = parseInt(t, 10); return k >= 1 && k <= opts.length ? opts[k - 1] : null; }\n  const q = norm(t);\n  if (!q) return null;\n  const exact = opts.find(x => norm(x.name) === q);\n  if (exact) return exact;\n  if (q.length < 4) return null;\n  const c = opts.filter(x => { const v = norm(x.name); return v.includes(q) || q.includes(v); });\n  return c.length === 1 ? c[0] : null;\n};\nconst numbered = (xs) => xs.map((x, i) => (i + 1) + '. ' + esc(x.name)).join('\\n');\n// /island: острови = підпапки Destinations на Диску Іри (Costa_Rica → «Costa Rica»; Media Intake назад робить ту саму папку).\n// Відповідь: номер / назва наявного острова, або нова назва → нова папка\nconst r = $('Code - Resolve').first().json;\nconst err = $json.error ? String($json.error.message || $json.error).slice(0, 200) : '';\nconst opts = (Array.isArray($json.files) ? $json.files : [])\n  .map(f => ({ name: String(f.name || '').replace(/_+/g, ' ').trim() }))\n  .filter(x => x.name && !/^qa\\s*test/i.test(x.name))\n  .sort((a, b) => a.name.localeCompare(b.name, 'uk'));\nconst intro = '🏝 <b>Фото острова</b>\\n\\nФото місця без привʼязки до готелю: пляжі, вид, атмосфера. ';\nif (r.route === 'island_ask') return [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.island_url) + intro + (opts.length\n    ? 'Напиши номер острова у відповідь на це повідомлення — або назву нового:\\n\\n' + numbered(opts)\n    : (err ? 'Не вдалось відкрити список островів 🙈 ' : '') + 'Напиши назву острова у відповідь на це повідомлення.') } }];\nconst t = String(r.text || '').trim();\nif (/^\\d{1,3}$/.test(t) && !pick(opts, t)) return [{ json: { chat_id: r.chat_id, kind: 'force',\n  text: hidden(r.island_url) + 'Нема острова з номером ' + esc(t) + ' 🙈 Напиши номер зі списку або назву нового:\\n\\n' + numbered(opts) } }];\nconst name = (pick(opts, t) || { name: t.replace(/\\s+/g, ' ').slice(0, 60) }).name;\nreturn [{ json: { ...r, media_text: '/island ' + name } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-to-media-",
+      "name": "IF - To Media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        4810
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-to-media-",
+              "leftValue": "={{ !!$json.media_text }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-media-input",
+      "name": "Code - Media Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        4810
+      ],
+      "parameters": {
+        "jsCode": "const r = $json;\nconst ready = /^(острів\\s+)?готово/i.test(r.media_text);\nreturn [{ json: { message: { chat: { id: Number(r.chat_id) }, text: r.media_text }, chat_id: r.chat_id,\n  ack: ready ? '⏳ Дивлюсь папку й описую нові фото — це 1–3 хв. Напишу, коли закінчу.' : '' } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "if-media-ack-",
+      "name": "IF - Media Ack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        4680
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "if-media-ack-",
+              "leftValue": "={{ !!$json.ack }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram-media-ack",
+      "name": "Telegram - Media Ack",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3300,
+        4680
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.ack }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "n0IdHhMlzZgnnc7K",
+          "name": "TravelLab Ira Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "execute-media-intake",
+      "name": "Execute - Media Intake",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3080,
+        4940
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "sBBQxK3jVtK6LmoQ",
+          "mode": "id"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "code-hotel-voice-input",
+      "name": "Code - Hotel Voice Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        5330
+      ],
+      "parameters": {
+        "jsCode": "const r = $json;\nreturn [{ json: { branch: r.hv_branch || 'voice_session', chat_id: r.chat_id, text: r.hv_text || r.text || '', voice_file_id: r.file_id || null } }];"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "execute-hotel-voice",
+      "name": "Execute - Hotel Voice",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2420,
+        5330
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ELqmuNDOcpIX6N5m",
+          "mode": "id"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
         }
       },
       "onError": "continueRegularOutput"
@@ -2337,6 +3865,28 @@
       "main": [
         [
           {
+            "node": "Supabase - Get Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Story": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Intake Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Intake Session": {
+      "main": [
+        [
+          {
             "node": "Code - Resolve",
             "type": "main",
             "index": 0
@@ -2447,6 +3997,505 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Code - Story When",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Photo Step",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Photo Step",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - List Islands",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - List Islands",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Media Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Hotel Voice Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Simple Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Post Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - New Hotel Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Photo Step": {
+      "main": [
+        [
+          {
+            "node": "IF - To Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - New Hotel Step": {
+      "main": [
+        [
+          {
+            "node": "IF - To Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - List Islands": {
+      "main": [
+        [
+          {
+            "node": "Code - Island Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Island Step": {
+      "main": [
+        [
+          {
+            "node": "IF - To Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - To Media?": {
+      "main": [
+        [
+          {
+            "node": "Code - Media Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Media Input": {
+      "main": [
+        [
+          {
+            "node": "IF - Media Ack?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Execute - Media Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Media Ack?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Media Ack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Code - Hotel Voice Input": {
+      "main": [
+        [
+          {
+            "node": "Execute - Hotel Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story When": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Go?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Go?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Lock Story",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Lock Story": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Locked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Locked?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Insert Story Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Taken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Taken": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Insert Story Plan": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Plan Created?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Plan Created?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Story Writing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Story Writing": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Approved Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Approved Posts": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Versions": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Golden Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Golden Plans": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Rules": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Gen Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Gen Input": {
+      "main": [
+        [
+          {
+            "node": "Execute - Post Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute - Post Generator": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Gen Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Gen Parse": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Generated?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Generated?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Story Photos (ranked)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Story Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Story Photos (ranked)": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Ranked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Ranked?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Story Add Version",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Story Photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Story Photos": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Story Add Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Story Add Version": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Result": {
+      "main": [
+        [
+          {
+            "node": "IF - Story Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Done?": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP - Story Plan Revert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Story Plan Revert": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Story Unlock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Story Unlock": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Story Fail Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Story Fail Admin": {
+      "main": [
+        [
+          {
+            "node": "Code - Story Fail Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Story Fail Reply": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -2462,6 +4511,28 @@
       ]
     },
     "Code - Posted Reply": {
+      "main": [
+        [
+          {
+            "node": "Code - Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Post Action": {
+      "main": [
+        [
+          {
+            "node": "Code - Post Action Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Post Action Reply": {
       "main": [
         [
           {
@@ -3064,6 +5135,24 @@
         [
           {
             "node": "Telegram - Reply (link)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Story Choice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Story Choice?": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Reply (story choice)",
             "type": "main",
             "index": 0
           }

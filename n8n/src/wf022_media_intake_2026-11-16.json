@@ -1,0 +1,3324 @@
+{
+  "name": "[TravelLab] Media Intake",
+  "nodes": [
+    {
+      "id": "trigger-1",
+      "name": "Telegram Trigger",
+      "webhookId": "3fbcf9f8-67d5-49d9-b360-fff616cf9e57",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "route-msg",
+      "name": "Code - Route Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const msg = $json.message || ($json.body && $json.body.message) || {};\nconst text = (msg.text || '').trim();\nconst chatId = msg.chat ? msg.chat.id : null;\nconst voice = msg.voice || msg.audio || null;\nconst voiceFileId = voice ? voice.file_id : null;\n\nlet branch = 'other';\nlet hotelQuery = '';\nlet createNew = false;\n\nconst helpMatch = text.match(/^\\/help$/i);\nconst hotelsListMatch = text.match(/^\\/hotels$/i);\nconst uploadMatch = text.match(/^\\/upload\\s+(.+)/i);\nconst islandUploadMatch = text.match(/^\\/island\\s+(.+)/i);\nconst islandReadyMatch = text.match(/^острів\\s+готово[,:]?\\s*(.+)/i);\nconst readyMatch = text.match(/^готово[,:]?\\s*(.+)/i);\nconst voiceStartMatch = text.match(/^\\/voice$/i);\nconst voiceCancelMatch = text.match(/^\\/cancel$/i);\nconst newHotelMatch = text.match(/^\\/newhotel\\s+(.+)/i);\n\nif (helpMatch) {\n  branch = 'help';\n} else if (hotelsListMatch) {\n  branch = 'list_hotels';\n} else if (voiceStartMatch) {\n  branch = 'voice_start';\n} else if (voiceCancelMatch) {\n  branch = 'voice_cancel';\n} else if (newHotelMatch) {\n  branch = 'upload';\n  hotelQuery = newHotelMatch[1].trim();\n  createNew = true;\n} else if (uploadMatch) {\n  branch = 'upload';\n  hotelQuery = uploadMatch[1].trim();\n} else if (islandUploadMatch) {\n  branch = 'island_upload';\n  hotelQuery = islandUploadMatch[1].trim();\n} else if (islandReadyMatch) {\n  branch = 'island_ready';\n  hotelQuery = islandReadyMatch[1].trim();\n} else if (readyMatch) {\n  branch = 'ready';\n  hotelQuery = readyMatch[1].trim();\n}\n\nreturn [{ json: { branch, hotel_query: hotelQuery, chat_id: chatId, raw_text: text, voice_file_id: voiceFileId, create_new: createNew } }];"
+      }
+    },
+    {
+      "id": "if-is-upload",
+      "name": "IF - Is Upload",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-upload",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "upload"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "supabase-find-hotel-upload",
+      "name": "Supabase - Find Hotel (Upload)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        940,
+        180
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-check-hotel-upload",
+      "name": "Code - Check Hotel Found (Upload)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const routeData = $('Code - Route Message').item.json;\nconst rows = $input.all().map(i => i.json).filter(r => r && r.hotel_id);\nconst norm = s => String(s || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');\nconst q = norm(routeData.hotel_query);\nlet match = rows.find(r => norm(r.name) === q) || null;\nif (!match && !routeData.create_new && q.length >= 5) {\n  const cand = rows.filter(r => { const n = norm(r.name); return n.includes(q) || q.includes(n); });\n  if (cand.length === 1) match = cand[0];\n}\nconst exists = !!match;\nconst stop = new Set(['resort', 'resorts', 'hotel', 'hotels']);\nconst tokens = String(routeData.hotel_query || '').toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter(t => t.length >= 4 && !stop.has(t));\nconst similar = exists ? [] : rows.filter(r => { const n = norm(r.name); return tokens.some(t => n.includes(t)); }).slice(0, 5).map(r => r.name);\nreturn [{ json: {\n  hotel_exists: exists,\n  hotel_id: exists ? match.hotel_id : null,\n  hotel_name: exists ? match.name : routeData.hotel_query,\n  chat_id: routeData.chat_id,\n  hotel_query: routeData.hotel_query,\n  create_new: routeData.create_new === true,\n  similar,\n} }];"
+      }
+    },
+    {
+      "id": "if-hotel-found-upload",
+      "name": "IF - Hotel Found (Upload)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1380,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-hotel-found-upload",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.hotel_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-existing-hotel",
+      "name": "Code - Format Existing Hotel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nreturn [{ json: { hotel_id: c.hotel_id, hotel_name: c.hotel_name, chat_id: c.chat_id, is_new_hotel: false } }];"
+      }
+    },
+    {
+      "id": "supabase-last-hotel-id-upload",
+      "name": "Supabase - Get Last Hotel ID (Upload)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1600,
+        300
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "orderBy": "hotel_id.desc",
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-generate-stub-hotel",
+      "name": "Code - Generate Stub Hotel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const checkData = $('Code - Check Hotel Found (Upload)').item.json;\nconst lastRows = $input.all();\nlet lastNum = 0;\nif (lastRows.length && lastRows[0].json && lastRows[0].json.hotel_id) {\n  const m = String(lastRows[0].json.hotel_id).match(/(\\d+)$/);\n  if (m) lastNum = parseInt(m[1], 10);\n}\nconst nextId = 'HTL-' + String(lastNum + 1).padStart(3, '0');\nreturn [{ json: {\n  hotel_id: nextId,\n  name: checkData.hotel_query,\n  country: 'Уточнити',\n  status: 'needs_review',\n  content_status: 'Not Ready',\n  chat_id: checkData.chat_id\n} }];"
+      }
+    },
+    {
+      "id": "supabase-insert-stub-hotel",
+      "name": "Supabase - Insert Stub Hotel",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        300
+      ],
+      "parameters": {
+        "tableId": "hotels",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "hotel_id",
+              "fieldValue": "={{ $json.hotel_id }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $json.name }}"
+            },
+            {
+              "fieldId": "country",
+              "fieldValue": "={{ $json.country }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "content_status",
+              "fieldValue": "={{ $json.content_status }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-format-new-hotel",
+      "name": "Code - Format New Hotel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst ctx = $('Code - Generate Stub Hotel').item.json;\nreturn [{ json: { hotel_id: r.hotel_id || ctx.hotel_id, hotel_name: r.name || ctx.name, chat_id: ctx.chat_id, is_new_hotel: true } }];"
+      }
+    },
+    {
+      "id": "merge-hotel-paths-upload",
+      "name": "Merge - Hotel Paths (Upload)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2480,
+        180
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "code-build-folder-name",
+      "name": "Code - Build Folder Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst slug = (c.hotel_name || '').trim().replace(/[^\\p{L}\\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');\nconst folderName = `${c.hotel_id}_${slug}`;\nreturn [{ json: { ...c, folder_name: folderName } }];"
+      }
+    },
+    {
+      "id": "gdrive-search-folder-upload",
+      "name": "Google Drive - Search Hotel Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "alwaysOutputData": true,
+      "position": [
+        2920,
+        180
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "={{ $json.folder_name }}",
+        "filter": {
+          "whatToSearch": "folders",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1dMKIHGpxlbdQsIH4-er46K4MjwXCpCtq"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "code-check-folder-found",
+      "name": "Code - Check Folder Found",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst found = rows.find(r => r.json && r.json.id);\nconst ctx = $('Code - Build Folder Name').item.json;\nreturn [{ json: { ...ctx, folder_exists: !!found, folder_id: found ? found.json.id : null, folder_link: found ? (found.json.webViewLink || ('https://drive.google.com/drive/folders/' + found.json.id)) : null } }];"
+      }
+    },
+    {
+      "id": "if-folder-exists-upload",
+      "name": "IF - Folder Exists (Upload)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3360,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-folder-exists-upload",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.folder_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gdrive-create-folder-upload",
+      "name": "Google Drive - Create Hotel Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3580,
+        300
+      ],
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $json.folder_name }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1dMKIHGpxlbdQsIH4-er46K4MjwXCpCtq"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "code-format-created-folder",
+      "name": "Code - Format Created Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3800,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Code - Check Folder Found').item.json;\nconst f = $input.first().json;\nreturn [{ json: { ...ctx, folder_id: f.id, folder_link: f.webViewLink || ('https://drive.google.com/drive/folders/' + f.id) } }];"
+      }
+    },
+    {
+      "id": "merge-folder-paths-upload",
+      "name": "Merge - Folder Paths (Upload)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4020,
+        180
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "code-build-upload-reply",
+      "name": "Code - Build Upload Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst newNote = c.is_new_hotel ? `\\n\\n(Готель ще не було в базі — створив чернетку ${c.hotel_id}, потрібно буде дослідити пізніше.)` : '';\nconst text = `Готово, вантаж сюди 👇\\n${c.folder_link}${newNote}\\n\\nКоли завантажиш усі фото — напиши мені:\\n<code>готово, ${escapeHtml(c.hotel_name)}</code>`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "tg-send-upload-reply",
+      "name": "Telegram - Send Upload Reply",
+      "webhookId": "bed88814-7dd1-42f7-af7c-ad2b3f602d68",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4460,
+        180
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "code-build-fallback-reply",
+      "name": "Code - Build Fallback Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nlet text;\nconst instructions = `Для ГОТЕЛЮ:\\n• /hotels — список готелів у базі (тапни на назву щоб скопіювати)\\n• /newhotel [назва] — додати НОВИЙ готель (/upload нових готелів не створює)\\n1) /upload [назва готелю] — дам лінк на Drive-папку\\n2) Залий фото на Drive\\n3) \"готово, [назва готелю]\" — заберу й опишу фото\\n\\nДля ОСТРОВА (без прив'язки до готелю):\\n1) /island [назва острова] — дам лінк на Drive-папку\\n2) Залий фото на Drive\\n3) \"острів готово, [назва острова]\" — заберу й опишу фото\\n\\nДля ІНФО ПРО ГОТЕЛЬ:\\n• /voice — розкажи про готель голосовими або текстом, я запишу\\n• /cancel — скасувати розмову про готель\\n\\nСтарі фото не чіпаю — описую тільки нові.\\n\\nНапиши /help будь-коли, щоб побачити цю інструкцію знову.`;\nif (c.branch === 'ready') {\n  text = `Бачу, що готово по \"${c.hotel_query}\" 👍 Обробку фото (Vision-аналіз + запис у базу) ще добудовую — це наступний крок. Скоро зможу забирати фото автоматично.`;\n} else if (c.branch === 'help') {\n  text = `📸 Медіа-бібліотека TravelLab\\n\\n${instructions}`;\n} else {\n  text = `🤖 Не розпізнав команду.\\n\\n${instructions}`;\n}\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "tg-send-fallback-reply",
+      "name": "Telegram - Send Fallback Reply",
+      "webhookId": "4f3390ae-7e44-40b7-994f-53cf15cc6b6d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1160,
+        500
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "webhook-manual-test",
+      "name": "Webhook - Manual Test",
+      "webhookId": "8e3c04b0-8d4e-4288-b248-5c2a770c7634",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        100
+      ],
+      "parameters": {
+        "path": "travellab-media-intake-test",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mO62EQmnKHlk93GW",
+          "name": "TravelLab Approve Webhook"
+        }
+      }
+    },
+    {
+      "id": "1f7d8195-b974-409a-8297-ccde3dbd58f0",
+      "name": "IF - Is Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        940,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "ready"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "61551a30-612b-493e-8e89-0a65cd18ab36",
+      "name": "Supabase - Find Hotel (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1160,
+        620
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "limit": 1,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "name",
+              "condition": "ilike",
+              "keyValue": "={{ $json.hotel_query }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "3bdadab9-b391-450f-be3d-aaf5e050ff42",
+      "name": "Code - Check Hotel Found (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        620
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst row = rows.length ? rows[0].json : null;\nconst exists = !!(row && row.hotel_id);\nconst routeData = $('Code - Route Message').item.json;\nreturn [{ json: {\n  hotel_exists: exists,\n  hotel_id: exists ? row.hotel_id : null,\n  hotel_name: exists ? row.name : routeData.hotel_query,\n  country: exists ? row.country : null,\n  chat_id: routeData.chat_id,\n  hotel_query: routeData.hotel_query\n} }];"
+      }
+    },
+    {
+      "id": "62e873b7-b487-42c9-a7a7-6e2d53c03d68",
+      "name": "IF - Hotel Found (Ready)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1600,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-hotel-found-ready",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.hotel_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "42fe3e37-ba07-41b8-9667-d8616bb4844f",
+      "name": "Code - Build Hotel Not Found Reply (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        740
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst text = `Не знайшов готель \"${c.hotel_query}\" в базі 🤔\\n\\nСпочатку напиши /upload ${c.hotel_query} — я створю папку, а вже потім напишеш \"готово, ${c.hotel_query}\".`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "638f0aac-6451-4341-a842-1109c04d31b2",
+      "name": "Telegram - Send Hotel Not Found Reply (Ready)",
+      "webhookId": "818e3a44-4f0a-4d60-9f5a-f0efd686c912",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2040,
+        740
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "b4364c70-4d27-4111-a79d-51d0e2906653",
+      "name": "Code - Build Folder Name (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        620
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst slug = (c.hotel_name || '').trim().replace(/[^\\p{L}\\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');\nconst folderName = `${c.hotel_id}_${slug}`;\nreturn [{ json: { ...c, folder_name: folderName } }];"
+      }
+    },
+    {
+      "id": "ab8d18da-a49c-443f-a82c-14afc7b3155d",
+      "name": "Google Drive - Search Hotel Folder (Ready)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "alwaysOutputData": true,
+      "position": [
+        2040,
+        620
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "={{ $json.folder_name }}",
+        "filter": {
+          "whatToSearch": "folders",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1dMKIHGpxlbdQsIH4-er46K4MjwXCpCtq"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "52bf2d66-f22c-44f3-a566-5f9d379062cb",
+      "name": "Code - Check Folder Found (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        620
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst found = rows.find(r => r.json && r.json.id);\nconst ctx = $('Code - Build Folder Name (Ready)').item.json;\nreturn [{ json: { ...ctx, folder_exists: !!found, folder_id: found ? found.json.id : null } }];"
+      }
+    },
+    {
+      "id": "66c09f14-3242-4bf4-9372-ce82f85e1974",
+      "name": "IF - Folder Exists (Ready)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-folder-exists-ready",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.folder_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c44b2dc6-bd0b-477d-821d-299c2319553e",
+      "name": "Code - Build No Folder Reply (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        740
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst text = `Ще нема папки для \"${c.hotel_name}\" 🤔\\n\\nСпочатку напиши /upload ${c.hotel_name}, залий фото, а вже потім вернись з \\\"готово, ${c.hotel_name}\\\".`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "0e5825c1-bad9-4dfc-afe8-7452289ad0e1",
+      "name": "Telegram - Send No Folder Reply (Ready)",
+      "webhookId": "a536c513-bc95-4daf-966e-6f21e17cabc5",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2920,
+        740
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "a6530325-2621-4339-9476-51dd552f2435",
+      "name": "Supabase - Get Existing Media (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        2700,
+        620
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "returnAll": true,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.hotel_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "1092c955-d00c-471a-99e8-e32501be22d3",
+      "name": "Google Drive - List Files In Folder (Ready)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        2920,
+        620
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "",
+        "returnAll": true,
+        "filter": {
+          "whatToSearch": "files",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "={{ $('Code - Check Folder Found (Ready)').item.json.folder_id }}"
+          }
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType"
+          ]
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "5143d3df-5a62-4955-aa60-fa887ea9b221",
+      "name": "Code - Filter New Photos (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        620
+      ],
+      "parameters": {
+        "jsCode": "const existingRows = $('Supabase - Get Existing Media (Ready)').all().map(r => r.json);\nconst existingIds = new Set(existingRows.filter(r => r && r.drive_file_id).map(r => r.drive_file_id));\nconst ctx = $('Code - Check Folder Found (Ready)').item.json;\nconst seen = new Set();\nconst files = $input.all().map(i => i.json).filter(f => f && f.id && !seen.has(f.id) && seen.add(f.id));\nconst newPhotos = files\n  .filter(f => (f.mimeType || '').startsWith('image/'))\n  .filter(f => !existingIds.has(f.id))\n  .map(f => ({\n    drive_file_id: f.id,\n    drive_url: 'https://drive.google.com/file/d/' + f.id + '/view',\n    hotel_id: ctx.hotel_id,\n    hotel_name: ctx.hotel_name,\n    country: ctx.country,\n    chat_id: ctx.chat_id\n  }));\nreturn [{ json: { count: newPhotos.length, chat_id: ctx.chat_id, hotel_id: ctx.hotel_id, hotel_name: ctx.hotel_name, photos: newPhotos } }];"
+      }
+    },
+    {
+      "id": "9e93b6ac-d7b0-461d-bc47-3b3023b3c0d3",
+      "name": "IF - Has New Photos (Ready)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3360,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-has-new-photos",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ab58664c-0e9d-4b8d-817e-3a7798b6aefa",
+      "name": "Code - Build Nothing New Reply (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        740
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst text = `Перевірив папку \"${c.hotel_name}\" — нових фото не знайшов 🤷\\n\\nЯкщо щойно залила — почекай хвилинку і напиши \"готово, ${c.hotel_name}\" ще раз.`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "5a6f122e-4f65-4e80-84f4-f85878babff7",
+      "name": "Telegram - Send Nothing New Reply (Ready)",
+      "webhookId": "8dd53e27-e899-4547-82ee-8662c245606c",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3800,
+        740
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "bbf13912-0802-4eaa-bf36-7ea673a810a6",
+      "name": "Code - Unwrap New Photos (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nreturn c.photos.map(p => ({ json: p }));"
+      }
+    },
+    {
+      "id": "76baa77a-cb0e-4922-9a07-92b5674f2a29",
+      "name": "OpenAI - Analyze Photo (Ready)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "onError": "continueRegularOutput",
+      "position": [
+        4020,
+        500
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "text": "Опиши це фото готелю українською мовою для медіа-бібліотеки luxury travel-агентства: 1-2 атмосферних речення (наприклад: 'захід сонця з приватного пляжу, шезлонги, тиша'). Потім додай 3-6 коротких тегів англійською мовою (наприклад: beach, sunset, private, luxury, pool, room, spa, view). Поверни СТРОГО валідний JSON без жодного додаткового тексту, у форматі: {\"description\": \"...\", \"tags\": [\"...\", \"...\"]}",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "c40ee19e-cac0-4cad-ac83-5248954ee26c",
+      "name": "Code - Parse Vision Result (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const meta = $('Code - Unwrap New Photos (Ready)').item.json;\nlet parsed;\ntry {\n  const message = Array.isArray($json) ? $json[0] : $json;\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = ((block && block.text) || '').trim().replace(/^```json\\s*|```$/g, '');\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { description: '', tags: [] };\n}\nreturn { json: {\n  ...meta,\n  description: parsed.description || '',\n  tags: Array.isArray(parsed.tags) ? parsed.tags : []\n} };"
+      }
+    },
+    {
+      "id": "4e34d5cc-58c3-49d3-b820-80be73c74f82",
+      "name": "Supabase - Get Last Media ID (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        4460,
+        500
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "limit": 1,
+        "orderBy": "media_id.desc",
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "d4afc130-0777-41a3-a598-fb60916c7abb",
+      "name": "Code - Generate Media ID (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4680,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const parsedItems = $('Code - Parse Vision Result (Ready)').all();\nconst lastRows = $input.all();\nlet lastNum = 0;\nif (lastRows.length && lastRows[0].json && lastRows[0].json.media_id) {\n  const m = String(lastRows[0].json.media_id).match(/(\\d+)$/);\n  if (m) lastNum = parseInt(m[1], 10);\n}\nreturn parsedItems.map((item, i) => {\n  const parsedData = item.json;\n  const nextId = 'MED-' + String(lastNum + i + 1).padStart(3, '0');\n  const tagsPg = '{' + (parsedData.tags || []).map(t => String(t).replace(/[{}\",]/g, '').trim()).filter(Boolean).join(',') + '}';\n  return { json: { ...parsedData, media_id: nextId, tags_pg: tagsPg } };\n});"
+      }
+    },
+    {
+      "id": "967dc27f-9809-47fa-98dc-c2c041e97c05",
+      "name": "Supabase - Insert Media Row (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4900,
+        500
+      ],
+      "parameters": {
+        "tableId": "media",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "media_id",
+              "fieldValue": "={{ $json.media_id }}"
+            },
+            {
+              "fieldId": "hotel_id",
+              "fieldValue": "={{ $json.hotel_id }}"
+            },
+            {
+              "fieldId": "destination",
+              "fieldValue": "={{ $json.country }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "photo"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "ira_personal"
+            },
+            {
+              "fieldId": "description",
+              "fieldValue": "={{ $json.description }}"
+            },
+            {
+              "fieldId": "tags",
+              "fieldValue": "={{ $json.tags_pg }}"
+            },
+            {
+              "fieldId": "drive_url",
+              "fieldValue": "={{ $json.drive_url }}"
+            },
+            {
+              "fieldId": "drive_file_id",
+              "fieldValue": "={{ $json.drive_file_id }}"
+            },
+            {
+              "fieldId": "quality",
+              "fieldValue": "ira_personal"
+            },
+            {
+              "fieldId": "usage_count",
+              "fieldValue": 0
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "3a50e89e-7eac-43bf-9257-bb69939e9fa4",
+      "name": "Code - Build Summary Reply (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5120,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst count = items.length;\nconst ctx = $('Code - Filter New Photos (Ready)').first().json;\nconst text = `Готово! Додав ${count} нов${count === 1 ? 'е' : 'их'} фото до \"${ctx.hotel_name}\" 📸\\n\\nОписи й теги збережені в базі — можу використовувати їх для постів.`;\nreturn [{ json: { chat_id: ctx.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "81f3cbb7-806a-47c8-a15b-ac9cb099ca56",
+      "name": "Telegram - Send Summary Reply (Ready)",
+      "webhookId": "4bc5b340-8587-425f-9b5f-40b33cb35bc4",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5340,
+        500
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "3064c139-d8c0-48e6-828f-e5605f7e3763",
+      "name": "IF - Is Island Upload",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        940,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-island-upload",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "island_upload"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ef1bd22c-8fdb-4da6-b711-ff096d75e7e5",
+      "name": "IF - Is Island Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1160,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-island-ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "island_ready"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f0802bb5-89f1-40b4-9249-453ef8d78970",
+      "name": "Code - Build Island Folder Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        780
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst islandName = c.hotel_query;\nconst slug = (islandName || '').trim().replace(/[^\\p{L}\\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');\nreturn [{ json: { island_name: islandName, chat_id: c.chat_id, folder_name: slug } }];"
+      }
+    },
+    {
+      "id": "f90ffe6e-720e-445a-8fe4-319c55935917",
+      "name": "Google Drive - Search Island Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "alwaysOutputData": true,
+      "position": [
+        1380,
+        780
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "={{ $json.folder_name }}",
+        "filter": {
+          "whatToSearch": "folders",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1R4jAWrdB-xMzB5Mf7BdCgGfX1J5ogpOV"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "e7503162-357c-417a-b3c6-dc22dbc49b0f",
+      "name": "Code - Check Island Folder Found",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        780
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst found = rows.find(r => r.json && r.json.id);\nconst ctx = $('Code - Build Island Folder Name').item.json;\nreturn [{ json: { ...ctx, folder_exists: !!found, folder_id: found ? found.json.id : null, folder_link: found ? ('https://drive.google.com/drive/folders/' + found.json.id) : null } }];"
+      }
+    },
+    {
+      "id": "9658527f-0b35-447a-b03d-414017c1ebde",
+      "name": "IF - Island Folder Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1820,
+        780
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-island-folder-exists",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.folder_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "41c98061-50ee-4a63-abe0-c4c026f2d1b6",
+      "name": "Google Drive - Create Island Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2040,
+        900
+      ],
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $json.folder_name }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1R4jAWrdB-xMzB5Mf7BdCgGfX1J5ogpOV"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "c3395d46-3521-403e-b255-511e36d300f6",
+      "name": "Code - Format Created Island Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        900
+      ],
+      "parameters": {
+        "jsCode": "const f = $input.first().json;\nconst ctx = $('Code - Check Island Folder Found').item.json;\nreturn [{ json: { ...ctx, folder_id: f.id, folder_link: 'https://drive.google.com/drive/folders/' + f.id } }];"
+      }
+    },
+    {
+      "id": "a0fbebba-0910-484f-be0b-caa7a43a9f01",
+      "name": "Merge - Island Folder Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2480,
+        780
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "7fa7eaef-73a8-4ab2-88ed-725766eb4008",
+      "name": "Code - Build Island Upload Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        780
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst text = `Готово, вантаж сюди 👇\\n${c.folder_link}\\n\\nКоли завантажиш усі фото — напиши мені:\\n<code>острів готово, ${escapeHtml(c.island_name)}</code>`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "b832f8fc-0f8d-4579-abc4-cf397a32295a",
+      "name": "Telegram - Send Island Upload Reply",
+      "webhookId": "d5164258-a840-42a2-b8b0-8b2cfc858500",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2920,
+        780
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "6bab7b4e-164b-452e-8895-e5b1876f45a7",
+      "name": "Code - Build Island Folder Name (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst islandName = c.hotel_query;\nconst slug = (islandName || '').trim().replace(/[^\\p{L}\\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');\nreturn [{ json: { island_name: islandName, chat_id: c.chat_id, folder_name: slug } }];"
+      }
+    },
+    {
+      "id": "68651751-f7a2-43b1-9d60-fab2586a9967",
+      "name": "Google Drive - Search Island Folder (Ready)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "alwaysOutputData": true,
+      "position": [
+        1600,
+        1300
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "={{ $json.folder_name }}",
+        "filter": {
+          "whatToSearch": "folders",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1R4jAWrdB-xMzB5Mf7BdCgGfX1J5ogpOV"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "bddf93ab-f45c-40bf-a08d-0aec29054abf",
+      "name": "Code - Check Island Folder Found (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst found = rows.find(r => r.json && r.json.id);\nconst ctx = $('Code - Build Island Folder Name (Ready)').item.json;\nreturn [{ json: { ...ctx, folder_exists: !!found, folder_id: found ? found.json.id : null } }];"
+      }
+    },
+    {
+      "id": "7d358530-f583-4252-80cf-1d356bb15800",
+      "name": "IF - Island Folder Exists (Ready)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2040,
+        1300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-island-folder-exists-ready",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.folder_exists }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d3af7846-77fa-40df-9afe-3a0338af54d8",
+      "name": "Code - Build Island No Folder Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        1420
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst text = `Ще нема папки для острова \"${c.island_name}\" 🤔\\n\\nСпочатку напиши /island ${c.island_name}, залий фото, а вже потім \\\"острів готово, ${c.island_name}\\\".`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "8e3aa5e3-d15f-4688-95b1-e8af923b6bf9",
+      "name": "Telegram - Send Island No Folder Reply",
+      "webhookId": "4b0eb027-2bdb-4ce1-b1de-3a58b3976a9c",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2480,
+        1420
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "f76b65e7-64d5-4527-9690-1c3e591fdcb0",
+      "name": "Supabase - Get Existing Island Media (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        2260,
+        1300
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "returnAll": true,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hotel_id",
+              "condition": "is",
+              "keyValue": "null"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "8c5ed802-05f4-4ea1-8fcf-f54d7beb34cc",
+      "name": "Google Drive - List Island Files In Folder (Ready)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        2480,
+        1300
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "name",
+        "queryString": "",
+        "returnAll": true,
+        "filter": {
+          "whatToSearch": "files",
+          "folderId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "={{ $('Code - Check Island Folder Found (Ready)').item.json.folder_id }}"
+          }
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType"
+          ]
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "f9ee37a9-8ef0-4e00-ae52-5003d6269414",
+      "name": "Code - Filter New Island Photos (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const existingRows = $('Supabase - Get Existing Island Media (Ready)').all().map(r => r.json);\nconst existingIds = new Set(existingRows.filter(r => r && r.drive_file_id).map(r => r.drive_file_id));\nconst ctx = $('Code - Check Island Folder Found (Ready)').item.json;\nconst seen = new Set();\nconst files = $input.all().map(i => i.json).filter(f => f && f.id && !seen.has(f.id) && seen.add(f.id));\nconst newPhotos = files\n  .filter(f => (f.mimeType || '').startsWith('image/'))\n  .filter(f => !existingIds.has(f.id))\n  .map(f => ({\n    drive_file_id: f.id,\n    drive_url: 'https://drive.google.com/file/d/' + f.id + '/view',\n    island_name: ctx.island_name,\n    chat_id: ctx.chat_id\n  }));\nreturn [{ json: { count: newPhotos.length, chat_id: ctx.chat_id, island_name: ctx.island_name, photos: newPhotos } }];"
+      }
+    },
+    {
+      "id": "aafbfbb2-d98d-47b6-8eb1-dc848e1fbfc5",
+      "name": "IF - Has New Island Photos (Ready)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2920,
+        1300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-has-new-island-photos",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e2d17642-b89c-4ea0-92b6-f88f82ce81af",
+      "name": "Code - Build Island Nothing New Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        1420
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst text = `Перевірив папку острова \"${c.island_name}\" — нових фото не знайшов 🤷`;\nreturn [{ json: { chat_id: c.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "f43f434f-7a25-4d00-8d93-2a367e33125b",
+      "name": "Telegram - Send Island Nothing New Reply",
+      "webhookId": "bd037c59-43f1-4f48-b1db-f5851c92cab8",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3360,
+        1420
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "be7e7b72-01ed-494a-a355-0e7ba3fa7231",
+      "name": "Code - Unwrap New Island Photos (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        1180
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nreturn c.photos.map(p => ({ json: p }));"
+      }
+    },
+    {
+      "id": "9a29512a-f460-4007-856d-a07a0ec6e437",
+      "name": "OpenAI - Analyze Island Photo (Ready)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "onError": "continueRegularOutput",
+      "position": [
+        3580,
+        1180
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "inputType": "base64",
+        "binaryPropertyName": "data",
+        "text": "Опиши це фото острова/локації українською мовою для медіа-бібліотеки luxury travel-агентства: 1-2 атмосферних речення. Потім додай 3-6 коротких тегів англійською мовою. Поверни СТРОГО валідний JSON без жодного додаткового тексту, у форматі: {\"description\": \"...\", \"tags\": [\"...\", \"...\"]}",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "W0SZsbrcQTP4Dcjx",
+          "name": "n8n_easypanel_p2p_mira"
+        }
+      }
+    },
+    {
+      "id": "79464962-d65c-4d4e-9e2a-3c2b6730698b",
+      "name": "Code - Parse Island Vision Result (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3800,
+        1180
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const meta = $('Code - Unwrap New Island Photos (Ready)').item.json;\nlet parsed;\ntry {\n  const message = Array.isArray($json) ? $json[0] : $json;\n  const block = message && Array.isArray(message.content) ? message.content[0] : null;\n  const raw = ((block && block.text) || '').trim().replace(/^```json\\s*|```$/g, '');\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { description: '', tags: [] };\n}\nreturn { json: {\n  ...meta,\n  description: parsed.description || '',\n  tags: Array.isArray(parsed.tags) ? parsed.tags : []\n} };"
+      }
+    },
+    {
+      "id": "086870bb-52b0-4983-a8be-bc3ec10c4a09",
+      "name": "Supabase - Get Last Media ID (Island Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        4020,
+        1180
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "media",
+        "limit": 1,
+        "orderBy": "media_id.desc",
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "a1051894-b657-44c2-95fa-d8b8d88b7028",
+      "name": "Code - Generate Media ID (Island Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        1180
+      ],
+      "parameters": {
+        "jsCode": "const parsedItems = $('Code - Parse Island Vision Result (Ready)').all();\nconst lastRows = $input.all();\nlet lastNum = 0;\nif (lastRows.length && lastRows[0].json && lastRows[0].json.media_id) {\n  const m = String(lastRows[0].json.media_id).match(/(\\d+)$/);\n  if (m) lastNum = parseInt(m[1], 10);\n}\nreturn parsedItems.map((item, i) => {\n  const parsedData = item.json;\n  const nextId = 'MED-' + String(lastNum + i + 1).padStart(3, '0');\n  const tagsPg = '{' + (parsedData.tags || []).map(t => String(t).replace(/[{}\",]/g, '').trim()).filter(Boolean).join(',') + '}';\n  return { json: { ...parsedData, media_id: nextId, tags_pg: tagsPg } };\n});"
+      }
+    },
+    {
+      "id": "95f4a4c9-8031-4853-a74b-237eba40b6fc",
+      "name": "Supabase - Insert Island Media Row (Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4460,
+        1180
+      ],
+      "parameters": {
+        "tableId": "media",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "media_id",
+              "fieldValue": "={{ $json.media_id }}"
+            },
+            {
+              "fieldId": "destination",
+              "fieldValue": "={{ $json.island_name }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "photo"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "ira_personal"
+            },
+            {
+              "fieldId": "description",
+              "fieldValue": "={{ $json.description }}"
+            },
+            {
+              "fieldId": "tags",
+              "fieldValue": "={{ $json.tags_pg }}"
+            },
+            {
+              "fieldId": "drive_url",
+              "fieldValue": "={{ $json.drive_url }}"
+            },
+            {
+              "fieldId": "drive_file_id",
+              "fieldValue": "={{ $json.drive_file_id }}"
+            },
+            {
+              "fieldId": "quality",
+              "fieldValue": "ira_personal"
+            },
+            {
+              "fieldId": "usage_count",
+              "fieldValue": 0
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "953047a1-473c-41fd-a8b7-4f6508d21ae3",
+      "name": "Code - Build Island Summary Reply (Ready)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4680,
+        1180
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst count = items.length;\nconst ctx = $('Code - Filter New Island Photos (Ready)').first().json;\nconst text = `Готово! Додав ${count} нов${count === 1 ? 'е' : 'их'} фото до острова \"${ctx.island_name}\" 📸`;\nreturn [{ json: { chat_id: ctx.chat_id, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "ee33d5bd-7077-4f61-80fa-7873cde42eb9",
+      "name": "Telegram - Send Island Summary Reply (Ready)",
+      "webhookId": "3bff1015-f45c-4476-bd7d-77991b5095b7",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4900,
+        1180
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "if-is-hotels-list",
+      "name": "IF - Is Hotels List",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1160,
+        1060
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-hotels-list",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.branch }}",
+              "rightValue": "list_hotels"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "supabase-get-all-hotels",
+      "name": "Supabase - Get All Hotels",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1380,
+        1060
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "hotels",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-build-hotel-list-reply",
+      "name": "Code - Build Hotel List Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        1060
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r && r.hotel_id);\nconst chatId = $('Code - Route Message').item.json.chat_id;\nconst escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nif (!rows.length) {\n  return [{ json: { chat_id: chatId, reply_text: 'У базі поки нема жодного готелю. Напиши /upload [назва готелю], щоб додати перший.' } }];\n}\nrows.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'uk'));\nconst lines = rows.map((r, i) => {\n  const icon = r.status === 'needs_review' ? '🆕' : '✅';\n  return `${i + 1}. ${icon} <code>${escapeHtml(r.name)}</code>`;\n});\nconst text = `📋 Готелі в базі (${rows.length}):\\n\\n${lines.join('\\n')}\\n\\nТапни на назву щоб скопіювати, потім напиши /upload [назва] або \"готово, [назва]\".`;\nreturn [{ json: { chat_id: chatId, reply_text: text } }];"
+      }
+    },
+    {
+      "id": "tg-send-hotel-list-reply",
+      "name": "Telegram - Send Hotel List Reply",
+      "webhookId": "c082eece-bf3d-42e6-a7c1-a6cac1da0c8e",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1820,
+        1060
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "if-is-voice-command",
+      "name": "IF - Is Voice Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1660,
+        1360
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-voice-command",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ ['voice_start', 'voice_cancel'].includes($json.branch) }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sb-get-open-session-voice",
+      "name": "Supabase - Get Open Session (Voice)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1900,
+        1460
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "intake_sessions",
+        "limit": 1,
+        "orderBy": "created_at.desc",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chat_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.chat_id }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "oj5JHcgmtpi0FPHx",
+          "name": "Travel Lab Test"
+        }
+      }
+    },
+    {
+      "id": "code-check-voice-session",
+      "name": "Code - Check Voice Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        1460
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Code - Route Message').first().json;\nconst s = $input.all().map(i => i.json).find(x => x && x.session_id && x.status !== 'closed');\nconst open = !!s && (Date.now() - new Date(s.updated_at).getTime()) <= 24 * 3600 * 1000;\nreturn [{ json: { ...r, has_session: open, branch: open ? 'voice_session' : r.branch, text: r.raw_text } }];"
+      }
+    },
+    {
+      "id": "if-has-open-session",
+      "name": "IF - Has Open Session",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2380,
+        1460
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-has-open-session",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.has_session }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "exec-hotel-voice-intake",
+      "name": "Execute Workflow - Hotel Voice Intake",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2620,
+        1300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "X5Q7PA1BOBWStXec",
+          "mode": "id"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-create-allowed-upload",
+      "name": "IF - Create Allowed (Upload)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1600,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-create-allowed-upload",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.create_new }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-notfound-upload",
+      "name": "Code - Build Not Found Upload Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const c = $json;\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nlet t = 'Не знайшов готель «' + esc(c.hotel_query) + '» у базі 🙈 Щоб не було дублів, нові готелі додаються лише явною командою.\\n\\n';\nif (c.similar && c.similar.length) {\n  t += 'Може, це один із цих?\\n' + c.similar.map(n => '• <code>' + esc(n) + '</code>').join('\\n') + '\\n(тапни на назву й надішли /upload [назва])\\n\\n';\n}\nt += 'Усі готелі — /hotels.\\nЯкщо це справді НОВИЙ готель — надішли:\\n<code>/newhotel ' + esc(c.hotel_query) + '</code>';\nreturn [{ json: { chat_id: c.chat_id, reply_text: t } }];"
+      }
+    },
+    {
+      "id": "tg-send-notfound-upload",
+      "name": "Telegram - Send Not Found Upload Reply",
+      "webhookId": "55564f3e-f766-4746-be8c-c29c94109f92",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2040,
+        520
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FJ0LCrNjEI8nLTNA",
+          "name": "TravelLab - Ira Bot (test_mergebot)"
+        }
+      }
+    },
+    {
+      "id": "http-photo-meta-ready",
+      "name": "HTTP - Drive Photo Meta (Ready)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        3800,
+        500
+      ],
+      "parameters": {
+        "url": "={{ 'https://www.googleapis.com/drive/v3/files/' + $json.drive_file_id + '?fields=thumbnailLink,mimeType&supportsAllDrives=true' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "http-photo-jpeg-ready",
+      "name": "HTTP - Download Photo JPEG (Ready)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3910,
+        380
+      ],
+      "parameters": {
+        "url": "={{ $json.thumbnailLink ? $json.thumbnailLink.replace(/=s\\d+(-c)?$/, '=s1600') : 'https://www.googleapis.com/drive/v3/files/' + $('Code - Unwrap New Photos (Ready)').item.json.drive_file_id + '?alt=media' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "http-island-photo-meta-ready",
+      "name": "HTTP - Drive Island Photo Meta (Ready)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        3360,
+        1180
+      ],
+      "parameters": {
+        "url": "={{ 'https://www.googleapis.com/drive/v3/files/' + $json.drive_file_id + '?fields=thumbnailLink,mimeType&supportsAllDrives=true' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    },
+    {
+      "id": "http-island-photo-jpeg-ready",
+      "name": "HTTP - Download Island Photo JPEG (Ready)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3470,
+        1060
+      ],
+      "parameters": {
+        "url": "={{ $json.thumbnailLink ? $json.thumbnailLink.replace(/=s\\d+(-c)?$/, '=s1600') : 'https://www.googleapis.com/drive/v3/files/' + $('Code - Unwrap New Island Photos (Ready)').item.json.drive_file_id + '?alt=media' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cjY7BSZAIddR6oLs",
+          "name": "Google Drive Іра"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code - Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Route Message": {
+      "main": [
+        [
+          {
+            "node": "IF - Is Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Upload": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Find Hotel (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Island Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Find Hotel (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Hotel Found (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Hotel Found (Upload)": {
+      "main": [
+        [
+          {
+            "node": "IF - Hotel Found (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Hotel Found (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Code - Format Existing Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Create Allowed (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Last Hotel ID (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Code - Generate Stub Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Generate Stub Hotel": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Stub Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Stub Hotel": {
+      "main": [
+        [
+          {
+            "node": "Code - Format New Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format Existing Hotel": {
+      "main": [
+        [
+          {
+            "node": "Merge - Hotel Paths (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format New Hotel": {
+      "main": [
+        [
+          {
+            "node": "Merge - Hotel Paths (Upload)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Hotel Paths (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Folder Name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Folder Name": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Search Hotel Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Search Hotel Folder": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Folder Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Folder Found": {
+      "main": [
+        [
+          {
+            "node": "IF - Folder Exists (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Folder Exists (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Merge - Folder Paths (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Drive - Create Hotel Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Create Hotel Folder": {
+      "main": [
+        [
+          {
+            "node": "Code - Format Created Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format Created Folder": {
+      "main": [
+        [
+          {
+            "node": "Merge - Folder Paths (Upload)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Folder Paths (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Upload Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Fallback Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Fallback Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Code - Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Ready": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Find Hotel (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Island Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Find Hotel (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Hotel Found (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Hotel Found (Ready)": {
+      "main": [
+        [
+          {
+            "node": "IF - Hotel Found (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Hotel Found (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Folder Name (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Hotel Not Found Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Hotel Not Found Reply (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Hotel Not Found Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Folder Name (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Search Hotel Folder (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Search Hotel Folder (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Folder Found (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Folder Found (Ready)": {
+      "main": [
+        [
+          {
+            "node": "IF - Folder Exists (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Folder Exists (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Existing Media (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build No Folder Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build No Folder Reply (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send No Folder Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Existing Media (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - List Files In Folder (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - List Files In Folder (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Filter New Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Filter New Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "IF - Has New Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has New Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Unwrap New Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Nothing New Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Nothing New Reply (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Nothing New Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Analyze Photo (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Vision Result (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Vision Result (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Last Media ID (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Last Media ID (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Generate Media ID (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Generate Media ID (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Media Row (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Media Row (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Summary Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Summary Reply (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Summary Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Island Upload": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Island Folder Name",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Island Ready": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Island Folder Name (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Hotels List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island Folder Name": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Search Island Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Search Island Folder": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Island Folder Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Island Folder Found": {
+      "main": [
+        [
+          {
+            "node": "IF - Island Folder Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Island Folder Exists": {
+      "main": [
+        [
+          {
+            "node": "Merge - Island Folder Paths",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Drive - Create Island Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Create Island Folder": {
+      "main": [
+        [
+          {
+            "node": "Code - Format Created Island Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format Created Island Folder": {
+      "main": [
+        [
+          {
+            "node": "Merge - Island Folder Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Island Folder Paths": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Island Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island Upload Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Island Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island Folder Name (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Search Island Folder (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Search Island Folder (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Island Folder Found (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Island Folder Found (Ready)": {
+      "main": [
+        [
+          {
+            "node": "IF - Island Folder Exists (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Island Folder Exists (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Existing Island Media (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Island No Folder Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island No Folder Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Island No Folder Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Existing Island Media (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - List Island Files In Folder (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - List Island Files In Folder (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Filter New Island Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Filter New Island Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "IF - Has New Island Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has New Island Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Unwrap New Island Photos (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Island Nothing New Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island Nothing New Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Island Nothing New Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Analyze Island Photo (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Island Vision Result (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Island Vision Result (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Last Media ID (Island Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Last Media ID (Island Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Generate Media ID (Island Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Generate Media ID (Island Ready)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Insert Island Media Row (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Insert Island Media Row (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Island Summary Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Island Summary Reply (Ready)": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Island Summary Reply (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Hotels List": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get All Hotels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Voice Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get All Hotels": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Hotel List Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Hotel List Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Hotel List Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Voice Command": {
+      "main": [
+        [
+          {
+            "node": "Execute Workflow - Hotel Voice Intake",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase - Get Open Session (Voice)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Open Session (Voice)": {
+      "main": [
+        [
+          {
+            "node": "Code - Check Voice Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Check Voice Session": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Open Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Open Session": {
+      "main": [
+        [
+          {
+            "node": "Execute Workflow - Hotel Voice Intake",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Fallback Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Create Allowed (Upload)": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Last Hotel ID (Upload)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Build Not Found Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Not Found Upload Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Not Found Upload Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Unwrap New Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Drive Photo Meta (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Drive Photo Meta (Ready)": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Download Photo JPEG (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Download Photo JPEG (Ready)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Analyze Photo (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Unwrap New Island Photos (Ready)": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Drive Island Photo Meta (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Drive Island Photo Meta (Ready)": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Download Island Photo JPEG (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Download Island Photo JPEG (Ready)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Analyze Island Photo (Ready)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true
+  }
+}
