@@ -333,6 +333,16 @@ export async function rewriteVideoCaption(id: string, comment: string, chips: st
   return call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'caption_ai', id, comment, chips, caption }) })
 }
 
+// «Скасувати» після «Виклала»: знімає позначку опублікованого
+export async function unmarkVideoPosted(id: string): Promise<void> {
+  if (isDemo) {
+    await wait(150)
+    patchDemoVideo(id, { published_at: null })
+    return
+  }
+  await call('/api/video', { method: 'POST', body: JSON.stringify({ action: 'unposted', id }) })
+}
+
 // «✅ Виклала» (Instagram — Іра викладає сама; те саме робить кнопка в боті)
 export async function markVideoPosted(id: string): Promise<{ published_at: string }> {
   if (isDemo) {

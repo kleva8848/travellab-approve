@@ -2,10 +2,15 @@ import { useCallback, useRef, useState } from 'react'
 import { reviewAction } from './api'
 import { haptic } from './tg'
 
-type Target = { id: string; version_no: number }
+type Target = { id: string; version_no?: number }
+type Ops = { pub: (t: Target) => Promise<unknown>; unpub: (t: Target) => Promise<unknown> }
+const postOps: Ops = {
+  pub: (t) => reviewAction(t.id, t.version_no ?? 0, 'publish'),
+  unpub: (t) => reviewAction(t.id, t.version_no ?? 0, 'unpublish'),
+}
 
 // «✓ Виклала» одним тапом: пост одразу зникає зі списку, внизу 5 с висить «Скасувати»
-export function usePublished(onChanged: () => void) {
+export function usePublished(onChanged: () => void, ops: Ops = postOps) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ text: string; undo?: Target } | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -29,7 +34,7 @@ export function usePublished(onChanged: () => void) {
     setHide(q.id, true)
     show({ text: 'Позначила: викладено ✓', undo: q })
     try {
-      await reviewAction(q.id, q.version_no, 'publish')
+      await ops.pub(q)
     } catch (e) {
       setHide(q.id, false)
       haptic('error')
@@ -43,7 +48,7 @@ export function usePublished(onChanged: () => void) {
     if (!q) return
     show(null)
     try {
-      await reviewAction(q.id, q.version_no, 'unpublish')
+      await ops.unpub(q)
       haptic('tap')
     } catch (e) {
       show({ text: e instanceof Error ? e.message : 'Помилка' }, 2500)

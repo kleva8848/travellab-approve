@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { failSchema } from '../server/schema.js'
 import { FINAL_RESET, PUBLISHED_ERR, ackRemount, cleanPlan, coverMedia, coverTitles, draftMeta, getVideo, listVideoGaps, listVideos, previewCover, requestRemount, resendFinal, rewriteCaption, saveCaption, saveCover, sendCover } from '../server/video.js'
-import { markPosted } from '../server/video_publish.js'
+import { markPosted, unmarkPosted } from '../server/video_publish.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -75,6 +75,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (b.action === 'cover_media' || b.action === 'cover_titles') {
       const { code, ...r } = b.action === 'cover_media' ? await coverMedia(id) : await coverTitles(id, b.spec)
       return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
+    }
+    if (b.action === 'unposted') {
+      return (await unmarkPosted(id)) ? void res.json({ ok: true }) : void res.status(409).json({ error: 'Позначки вже нема.' })
     }
     if (b.action === 'posted') {
       const r = await markPosted(id, user.id)

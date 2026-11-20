@@ -7,6 +7,7 @@ import { PILLAR, PLATFORM } from './PostScreen'
 import { RulesAdmin } from './RulesAdmin'
 import { Label, Spinner } from './ui'
 import { PublishedButton, usePublished } from '../lib/usePublished'
+import { markVideoPosted, unmarkVideoPosted } from '../lib/api'
 
 const DAYS = ['неділя', 'понеділок', 'вівторок', 'середа', 'четвер', 'пʼятниця', 'субота']
 const MONTHS = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня']
@@ -28,6 +29,8 @@ const WAITING = new Set(['ready_for_review', 'changes_requested', 'needs_data'])
 // Черга Іри: що чекає на неї (огляд), що агент переробляє, що вже затверджено
 export function TodayScreen({ me, queue, filter, setFilter, story, videos, queueError, onOpen, onOpenVideo, onRetry, onChanged }: Props) {
   const pub = usePublished(onChanged)
+  // відео: «✓ Виклала» через /api/video (published_at), так само зникає з «Сьогодні»
+  const vpub = usePublished(onChanged, { pub: (t) => markVideoPosted(t.id), unpub: (t) => unmarkVideoPosted(t.id) })
   const now = new Date()
   const day = DAYS[now.getDay()]
   const name = me.first_name ? VOCATIVE[me.first_name] ?? me.first_name : null
@@ -86,7 +89,7 @@ export function TodayScreen({ me, queue, filter, setFilter, story, videos, queue
             </div>
           )}
 
-          {videos && shownVideos(videos.items).length > 0 && <Videos items={shownVideos(videos.items)} onOpen={onOpenVideo} />}
+          {videos && shownVideos(videos.items).filter((v) => !vpub.hidden.has(v.id)).length > 0 && <Videos items={shownVideos(videos.items).filter((v) => !vpub.hidden.has(v.id))} onOpen={onOpenVideo} onPosted={(v) => void vpub.mark(v)} />}
           {videos && videos.gaps.length > 0 && <VideoGaps gaps={videos.gaps} />}
           <List title="Потрібна твоя відповідь" items={asking} onOpen={onOpen} badge={<span className="chip warn">відповісти</span>} />
           <List title="Чекають тебе" items={reviewing} onOpen={onOpen} />
@@ -97,6 +100,7 @@ export function TodayScreen({ me, queue, filter, setFilter, story, videos, queue
       )}
       {me.is_admin && <RulesAdmin />}
       {pub.node}
+      {vpub.node}
     </div>
   )
 }
@@ -127,8 +131,8 @@ function slotDay(s: string) {
   return `${WD[new Date(`${ymd}T12:00:00Z`).getUTCDay()]} ${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`
 }
 
-// Опубліковане тримаємо на «Сьогодні» ще добу — щоб Іра бачила «опубліковано ✓», далі прибираємо
-const shownVideos = (items: VideoCard[]) => items.filter((v) => !v.published_at || Date.now() - Date.parse(v.published_at) < 24 * 60 * 60_000)
+// Опубліковане (вийшло в канал або «✓ Виклала») на «Сьогодні» не тримаємо — воно зроблене й не займає місце
+const shownVideos = (items: VideoCard[]) => items.filter((v) => !v.published_at)
 
 // Бейдж публікації (сет 7): ok — зелений, wait — темний, act — золотий (Ірі треба щось зробити)
 function pubBadge(v: VideoCard, s: PubState): [string, 'ok' | 'wait' | 'act'] {
@@ -142,14 +146,15 @@ function pubBadge(v: VideoCard, s: PubState): [string, 'ok' | 'wait' | 'act'] {
 const BADGE_BG = { ok: 'var(--ok)', wait: 'rgba(0,0,0,.55)', act: '#C9B27C' }
 
 // Сторіз / рілс на перегляд: обкладинка 9:16 + назва (у демо — 3 тестові з lib/video); з автоконвеєра — ще й день слоту
-function Videos({ items, onOpen }: { items: VideoCard[]; onOpen: (id: string) => void }) {
+function Videos({ items, onOpen, onPosted }: { items: VideoCard[]; onOpen: (id: string) => void; onPosted: (v: VideoCard) => void }) {
   const ready = items.filter((v) => v.status === 'ready_for_review').length
   return (
     <>
       <Label>{ready ? `🎬 Готово ${ready} відео на перегляд` : 'Відео'}</Label>
       <div className="flex items-start gap-2.5 overflow-x-auto pb-1">
         {items.map((v) => (
-          <button key={v.id} className="shrink-0 text-left" style={{ width: 104 }} onClick={() => { haptic('tap'); onOpen(v.id) }}>
+          <div key={v.id} className="shrink-0" style={{ width: 104 }}>
+          <button className="block w-full text-left" onClick={() => { haptic('tap'); onOpen(v.id) }}>
             <span className="relative block overflow-hidden rounded-xl" style={{ width: 104, height: 185, boxShadow: 'var(--shadow)' }}>
               <img src={v.poster} alt="" className="h-full w-full object-cover" />
               <span className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[11px]" style={{ background: 'rgba(0,0,0,.5)', color: '#fff' }}>{v.format === 'reel' ? 'рілс' : 'сторіз'} · {Math.round(v.dur)}с</span>
@@ -165,6 +170,8 @@ function Videos({ items, onOpen }: { items: VideoCard[]; onOpen: (id: string) =>
             <b className="mt-1.5 block text-[13px] leading-tight">{v.name}</b>
             <span className="text-[12px]" style={{ color: 'var(--hint)' }}>{[v.scheduled_for && `на ${slotDay(v.scheduled_for)}`, v.place].filter(Boolean).join(' · ')}</span>
           </button>
+          {v.status === 'approved' && v.ready && !v.remounting && <div className="mt-1.5"><PublishedButton onClick={() => onPosted(v)} /></div>}
+          </div>
         ))}
       </div>
     </>

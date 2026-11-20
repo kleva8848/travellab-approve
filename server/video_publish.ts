@@ -198,6 +198,13 @@ export async function publishVideos(opts: VideoPublishOpts) {
 }
 
 // «✅ Виклала» з апки (бот WF-055 робить те саме напряму в Supabase): опубліковано → редагування закрите
+// Скасувати «Виклала» (5 с «Скасувати» в апці): знімаємо позначку, відео лишається approved
+export async function unmarkPosted(id: string): Promise<boolean> {
+  const r = await db().from('video_drafts').update({ published_at: null }).eq('id', id).not('published_at', 'is', null).select('id')
+  if (r.error) throw r.error
+  return Boolean(r.data?.length)
+}
+
 export async function markPosted(id: string, userId: number): Promise<{ published_at: string } | 'not_found' | 'not_ready'> {
   const cur = await db().from('video_drafts').select('status, final_path, published_at, published_ref').eq('id', id).maybeSingle()
   if (cur.error) throw cur.error
