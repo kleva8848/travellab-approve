@@ -26,7 +26,7 @@ const FORM: Record<string, string> = { one_fact: 'один факт', list: 'п�
 
 const CHIPS_TEXT = ['Коротше', 'Тепліше, більше мене', 'Без ціни', 'Інший початок', 'Більше фактів']
 // Підказки до «До фото» — лише те, що вміє парсер у WF-046 (→ photo_edits); чипи під самим фото діють одразу, без агента
-const CHIPS_PHOTO = ['Прибери текст з фото', 'Текст вниз', 'Більше затемнення', 'Текст ширше', 'Без обробки', 'Напиши на фото: ']
+const CHIPS_PHOTO = ['Прибери текст з фото', 'Текст вниз', 'Більше затемнення', 'Текст ширше', 'Без обробки']
 
 // «Інший кроп» по колу: як вирішив агент → центр → верх → низ → знову агент
 const CROPS: (PhotoEdit['crop'] | undefined)[] = [undefined, 'centre', 'north', 'south']
@@ -66,7 +66,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [uploading, setUploading] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
   // Готовий вигляд фото поточної версії (рамка + обробка + текст) — рендерить сервер
-  const [ready, setReady] = useState<{ version: string; urls: (string | null)[] } | null>(null)
+  const [ready, setReady] = useState<{ version: string; key: string; urls: (string | null)[] } | null>(null)
   const [rendering, setRendering] = useState(false)
   // Правка тексту на фото (заголовок + рядок «Країна · Готель» на першому фото, підпис — на решті)
   const [photoDraft, setPhotoDraft] = useState<{ title: string; kicker: string } | null>(null)
@@ -122,12 +122,13 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
 
   const curId = cur?.id
   const curPhotos = (cur?.media_ids ?? []).length
+  const curKey = (cur?.media_ids ?? []).join(',')
   useEffect(() => {
     if (!post || !curId || !curPhotos) return
     let alive = true
     setRendering(true)
     reviewAction(post.plan.id, post.plan.version_no, 'preview')
-      .then((r) => { if (alive) setReady({ version: curId, urls: r.urls ?? [] }) })
+      .then((r) => { if (alive) setReady({ version: curId, key: curKey, urls: r.urls ?? [] }) })
       .catch(() => { if (alive) setReady(null) }) // не вийшло — лишається сире фото, «Надіслати в чат» все одно оброблить
       .finally(() => { if (alive) setRendering(false) })
     return () => { alive = false }
@@ -488,7 +489,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
 
             {(shown.media_ids ?? []).length > 0 ? (
               <div className="mb-3">
-                <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} ready={ready && ready.version === shown.id ? ready.urls : undefined} />
+                <Carousel key={shown.id} ids={shown.media_ids} media={post.media} onSlide={setSlide} start={view === 'new' ? slide : 0} ready={ready && (ready.version === shown.id || ready.key === (shown.media_ids ?? []).join(',')) ? ready.urls : undefined} />
                 {rendering && shown.id === cur.id && !(ready && ready.version === cur.id) && (
                   <div className="mt-1.5 text-[13px]" style={{ color: 'var(--hint)' }}>Готую фото: рамка, обробка, текст…</div>
                 )}
@@ -666,7 +667,8 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                   <textarea className="in" rows={2} value={cPhoto} placeholder="Напр.: прибери текст, без обробки" onChange={(e) => setCPhoto(e.target.value)} />
                   <div className="qchips">{CHIPS_PHOTO.map((c) => <button key={c} onClick={() => addChip('photo', c)}>{c}</button>)}</div>
                 </div>
-                <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>
+                <div className="mx-2 mt-3 text-center text-[13px]" style={{ color: 'var(--hint)' }}>«До тексту» не чіпає фото, «До фото» не чіпає текст.</div>
+                <div className="mx-2 mt-1 text-center text-[13px]" style={{ color: 'var(--hint)' }}>Затверджений пост іде в календар. Передумаєш — його можна повернути.</div>
                 <button className="mx-auto mt-4 block text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy} onClick={() => void skip()}>Пропустити цей пост</button>
                 {post.hotel && <button className="mx-auto mt-2 block text-[14px]" style={{ color: 'var(--hint)' }} disabled={busy} onClick={() => void skipAndPause()}>…і поставити «{post.hotel.name}» на паузу</button>}
               </>

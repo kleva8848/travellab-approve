@@ -46,7 +46,7 @@ function parseEdit(raw: Record<string, unknown>): Record<string, string | null> 
     if (v === null) out[k] = null
     else if (rule === 'text') {
       if (typeof v !== 'string') return null
-      out[k] = v.replace(/\s+/g, ' ').trim().slice(0, MAX_PHOTO_TEXT)
+      out[k] = v.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, MAX_PHOTO_TEXT)
     } else if (typeof v === 'string' && rule.includes(v)) out[k] = v
     else return null
   }

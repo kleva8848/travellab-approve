@@ -64,8 +64,10 @@ function zeroWidth(src: Buffer): Buffer {
 export type PhotoText = { kicker?: string; title: string; small?: boolean }
 
 // Типографіка заголовка: «2–4» не рвемо (word joiner після тире), короткі слова («у», «на», «та», «з») не висять у кінці рядка (нерозривний пробіл)
-const typo = (s: string) =>
+const typo1 = (s: string) =>
   s.replace(/(\d)\s*([–—-])\s*(\d)/g, '$1$2\u2060$3').replace(/(^|\s)(\p{L}{1,2})\s+(?=\S)/gu, '$1$2\u00A0').replace(/(^|\s)(\p{L}{1,2})\s+(?=\S)/gu, '$1$2\u00A0')
+// \n у заголовку — ручний перенос рядка (Іра): типографіку застосовуємо до кожного рядка окремо
+const typo = (s: string) => s.split('\n').map(typo1).join('\n')
 
 type El = { type: string; props: Record<string, unknown> }
 const el = (type: string, style: Record<string, unknown>, children?: unknown): El => ({ type, props: { style, children } })
@@ -87,7 +89,7 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
       marginBottom: Math.round(inner * 0.022), textShadow: shadow,
     }, t.kicker))
   }
-  kids.push(el('div', { fontFamily: 'Cormorant Garamond', fontWeight: 500, fontSize: titleSize, lineHeight: 1.18, textShadow: shadow }, typo(t.title)))
+  kids.push(el('div', { fontFamily: 'Cormorant Garamond', fontWeight: 500, fontSize: titleSize, lineHeight: 1.18, textShadow: shadow, whiteSpace: 'pre-line' }, typo(t.title)))
 
   const pad = zone.zone === 'top' ? { paddingTop: Math.round(frame + inset + (h - 2 * frame) * 0.08) } : { paddingBottom: Math.round(frame + inset + (h - 2 * frame) * 0.07) }
   const root = el('div', {

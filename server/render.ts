@@ -19,9 +19,7 @@ const TG_LONG = 1600
 const STORY = { w: 1080, h: 1920 }
 const STORY_SAFE = 0.09
 // Версія оформлення в назві файлу: змінили вигляд (r2 — підписи на кожному фото каруселі; r3 — вуаль під текстом за яскравістю; r4 — без розриву «2–4» і висячих «у», «на»; r5 — Cormorant замість Prata) → старі готові фото не беремо з кешу
-const REV = 'r5'
-// tag — водяні знаки (watermark.ts): '' коли вимкнені → назви файлів як раніше
-const exportPath = (planId: string, versionNo: number, i: number, tag = '') => `exports/${planId}/v${versionNo}${REV}${tag}_${i + 1}.jpg`
+const REV = 'r6'
 
 // Ручні правки Іри до конкретного фото (чипи під фото) — render_params.photo_edits[media_id]
 export type PhotoEdit = { text?: 'off' | 'top' | 'bottom'; look?: 'none'; crop?: 'centre' | 'north' | 'south'; title?: string; kicker?: string; veil?: 'more' | 'less'; bright?: 'up' | 'down'; size?: 'bigger' | 'smaller'; width?: 'wide' | 'narrow' }
@@ -111,7 +109,7 @@ type PostInfo = { text: string; platform: string; hotel: string | null }
 
 // Заголовок на перше фото (обкладинка): {kicker, title, zone}
 async function coverText(post: PostInfo, mediaId: string, storagePath: string, forText: string): Promise<Overlay | null> {
-  const j = await photoHook({ role: 'cover', ...post, image_url: await sign(storagePath) }, 30000)
+  const j = await photoHook({ role: 'cover', ...post, image_url: await sign(storagePath) }, 15000)
   const title = String(j?.title ?? '').trim()
   if (!title) return null
   return { title, kicker: String(j?.kicker ?? '').trim() || undefined, zone_hint: (j?.zone as string | null) ?? null, for_text: forText, media_id: mediaId }
@@ -120,7 +118,7 @@ async function coverText(post: PostInfo, mediaId: string, storagePath: string, f
 // Підписи на фото 2–10 каруселі — одним запитом, щоб агент бачив усю карусель і не повторювався
 async function captionTexts(post: PostInfo, slides: { id: string; path: string }[], forText: string, key: string): Promise<Captions | null> {
   const urls = await Promise.all(slides.map((x) => sign(x.path)))
-  const j = await photoHook({ role: 'captions', ...post, image_urls: urls }, 50000)
+  const j = await photoHook({ role: 'captions', ...post, image_urls: urls }, 25000)
   const list = Array.isArray(j?.captions) ? (j!.captions as { title?: string; zone?: string | null }[]) : null
   if (!list?.length) return null
   const items = slides.map((_, i) => {
@@ -131,10 +129,17 @@ async function captionTexts(post: PostInfo, slides: { id: string; path: string }
 }
 
 type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[]; photo_text: string | null }
+type Slide = { id: string; i: number; src: string; path: string; text: (PhotoText & { zone_hint?: string | null }) | null }
+type Prepared = { ids: string[]; text: string; platform: string; versionNo: number; edits: Record<string, PhotoEdit>; wm: WmKind | null; wmStory: WmKind | null; first: string | undefined; slides: Slide[]; cover: (PhotoText & { zone_hint?: string | null }) | null }
 
-// Рендерить фото поточної версії поста; копія лягає в Storage `exports/<plan>/v<N><REV>_<i>.jpg` (повторний виклик перезаписує) — для календаря/історії
-// story — номер фото: лише воно, у форматі сторіз 9:16, без копії в Storage
-export async function render(planId: string, story?: number): Promise<Rendered> {
+// Кеш експорту по слайду: ім'я файлу = хеш (фото + текст на ньому + правки + знак + платформа). Одна правка перемальовує лише свій слайд,
+// а не всі 10; правка тексту поста не чіпає фото (текст на фото не залежить від тексту поста)
+const slideHash = (platform: string, tag: string, s: { id: string; text: unknown }, edit: PhotoEdit | undefined) =>
+  createHash('sha1').update(JSON.stringify([REV, platform, tag, s.id, s.text, edit ?? null])).digest('hex').slice(0, 16)
+const exportPath = (planId: string, hash: string) => `exports/${planId}/${REV}_${hash}.jpg`
+
+// Усе потрібне для рендеру БЕЗ малювання: версія, фото, тексти на фото (кеш за media_id; Іра-текст агент не перебиває)
+async function prepare(planId: string): Promise<Prepared> {
   const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id').eq('id', planId).maybeSingle()
   if (p.error) throw p.error
   if (!p.data?.current_version_id) throw new Error('у поста немає версії')
@@ -148,35 +153,39 @@ export async function render(planId: string, story?: number): Promise<Rendered> 
   const platform = String(p.data.platform)
   const text = String(v.data?.text ?? '')
   const params = (v.data?.render_params as Record<string, unknown>) ?? {}
+  const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
   const withPath = ids.filter((id) => pathOf.get(id))
   const first = withPath[0]
   const rest = [...new Set(withPath.slice(1))]
-  // Кеш текстів на фото — у post_versions.render_params, поки текст поста і фото ті самі
-  const forText = createHash('sha1').update(text).digest('hex').slice(0, 12)
+  // Текст на фото прив'язаний до фото (media_id), а не до тексту поста: правка тексту поста заголовок на фото не міняє.
+  // Якщо на слайді є текст Іри (або вона його вимкнула) — агента (WF-049) для цього слайда не кличемо
+  const own = (id: string) => edits[id]?.title !== undefined || edits[id]?.text === 'off'
   let overlay: Overlay | null = null
   let captions: Captions | null = null
   if (first && text.trim()) {
     const h = p.data.hotel_id ? await db().from('hotels').select('name, country').eq('hotel_id', p.data.hotel_id).maybeSingle() : null
     const post: PostInfo = { text, platform, hotel: h?.data ? [h.data.name, h.data.country].filter(Boolean).join(', ') : null }
     const key = rest.join(',')
+    const forText = createHash('sha1').update(text).digest('hex').slice(0, 12)
     const cachedCover = params.photo_text as Overlay | undefined
     const cachedCaps = params.photo_captions as Captions | undefined
-    const coverOk = Boolean(cachedCover?.title && cachedCover.for_text === forText && cachedCover.media_id === first)
-    const capsOk = !rest.length || (cachedCaps?.for_text === forText && cachedCaps.media_key === key)
+    const coverOk = Boolean(cachedCover?.title && cachedCover.media_id === first)
+    const needCover = !coverOk && !own(first)
+    const needCaps = rest.length > 0 && !(cachedCaps?.media_key === key) && !rest.every(own)
     const [cover, caps] = await Promise.all([
-      coverOk ? cachedCover! : coverText(post, first, pathOf.get(first)!, forText).catch(() => null),
-      capsOk ? cachedCaps ?? null : captionTexts(post, rest.map((id) => ({ id, path: pathOf.get(id)! })), forText, key).catch(() => null),
+      needCover ? coverText(post, first, pathOf.get(first)!, forText).catch(() => null) : coverOk ? cachedCover! : null,
+      needCaps ? captionTexts(post, rest.map((id) => ({ id, path: pathOf.get(id)! })), forText, key).catch(() => null) : cachedCaps?.media_key === key ? cachedCaps : null,
     ])
     overlay = cover
     captions = rest.length ? caps : null
     const patch: Record<string, unknown> = {}
-    if (!coverOk && cover) patch.photo_text = cover
-    if (!capsOk && caps) patch.photo_captions = caps
+    if (needCover && cover) patch.photo_text = cover
+    if (needCaps && caps) patch.photo_captions = caps
     if (Object.keys(patch).length) await db().from('post_versions').update({ render_params: { ...params, ...patch } }).eq('id', v.data!.id)
   }
-  const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
   const tag = await watermarkTag()
-  const wm: WmKind | null = !tag ? null : story !== undefined ? 'wm2' : postWm(params.wm)
+  const wm: WmKind | null = !tag ? null : postWm(params.wm)
+  const wmStory: WmKind | null = !tag ? null : 'wm2'
   // Текст Іри на фото має пріоритет над текстом агента
   const textFor = (id: string): (PhotoText & { zone_hint?: string | null }) | null => {
     const e = edits[id] ?? {}
@@ -188,54 +197,62 @@ export async function render(planId: string, story?: number): Promise<Rendered> 
     const title = e.title ?? c?.title
     return title ? { title, small: true, zone_hint: c?.zone_hint ?? null } : null
   }
+  const slides: Slide[] = []
+  ids.forEach((id, i) => {
+    const src = pathOf.get(id)
+    if (!src) return
+    const t = textFor(id)
+    slides.push({ id, i, src, text: t, path: exportPath(planId, slideHash(platform, `${tag}|${wm ?? ''}`, { id, text: t }, edits[id])) })
+  })
+  const cover = first && edits[first]?.text !== 'off' ? textFor(first) : null
+  return { ids, text, platform, versionNo: Number(p.data.version_no), edits, wm, wmStory, first, slides, cover }
+}
 
+// Рендерить фото поточної версії поста; готовий слайд лежить у Storage `exports/<plan>/<REV>_<хеш>.jpg` — незмінений слайд береться з кешу
+// story — номер фото: лише воно, у форматі сторіз 9:16, без копії в Storage
+export async function render(planId: string, story?: number, pre?: Prepared): Promise<Rendered> {
+  const pr = pre ?? (await prepare(planId))
   const files = await Promise.all(
-    ids.map(async (id, i) => {
-      const src = pathOf.get(id)
-      if (!src || (story !== undefined && i !== story)) return null
-      const dl = await db().storage.from(BUCKET).download(src)
+    pr.slides.map(async (s) => {
+      if (story !== undefined) {
+        if (s.i !== story) return null
+        const dl = await db().storage.from(BUCKET).download(s.src)
+        if (dl.error) throw dl.error
+        const out = await frame(Buffer.from(await dl.data.arrayBuffer()), 'story', s.text, s.text?.zone_hint, pr.edits[s.id], pr.wmStory)
+        return { name: `travellab_story_${s.i + 1}.jpg`, buf: out }
+      }
+      const name = `travellab_${pr.platform}_${s.i + 1}.jpg`
+      const hit = await db().storage.from(BUCKET).download(s.path)
+      if (!hit.error) return { name, buf: Buffer.from(await hit.data.arrayBuffer()) }
+      const dl = await db().storage.from(BUCKET).download(s.src)
       if (dl.error) throw dl.error
-      const withText = textFor(id)
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), story !== undefined ? 'story' : platform, withText, withText?.zone_hint, edits[id], wm)
-      if (story !== undefined) return { name: `travellab_story_${i + 1}.jpg`, buf: out }
-      const path = exportPath(planId, Number(p.data!.version_no), i, tag)
-      const up = await db().storage.from(BUCKET).upload(path, out, { contentType: 'image/jpeg', upsert: true })
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), pr.platform, s.text, s.text?.zone_hint, pr.edits[s.id], pr.wm)
+      const up = await db().storage.from(BUCKET).upload(s.path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
-      return { name: `travellab_${platform}_${i + 1}.jpg`, buf: out }
+      return { name, buf: out }
     }),
   )
-  const cover = first && edits[first]?.text !== 'off' ? textFor(first) : null
-  const photo_text = cover ? [cover.kicker, cover.title].filter(Boolean).join(' · ') : null
-  return { text, platform, files: files.filter((f) => f !== null), photo_text }
+  const photo_text = pr.cover ? [pr.cover.kicker, pr.cover.title].filter(Boolean).join(' · ') : null
+  return { text: pr.text, platform: pr.platform, files: files.filter((f) => f !== null), photo_text }
 }
 
 // Готовий вигляд поточної версії для апки: Іра одразу бачить фото так, як воно піде (рамка + обробка + текст).
-// Рендер кешується в exports/<plan>/v<N><REV>_<i>.jpg — нова версія (інше фото / текст) = новий номер → новий рендер
+// Перемальовуються лише слайди, чий хеш змінився
 export async function previewUrls(planId: string): Promise<{ version_no: number; urls: (string | null)[] }> {
-  const p = await db().from('content_plan').select('version_no, current_version_id').eq('id', planId).maybeSingle()
-  if (p.error) throw p.error
-  if (!p.data?.current_version_id) return { version_no: 0, urls: [] }
-  const n = Number(p.data.version_no)
-  const v = await db().from('post_versions').select('media_ids').eq('id', p.data.current_version_id).maybeSingle()
-  if (v.error) throw v.error
-  const ids = ((v.data?.media_ids as string[] | null) ?? []).slice(0, 10)
-  if (!ids.length) return { version_no: n, urls: [] }
-  const m = await db().from('media').select('media_id, storage_path').in('media_id', ids)
-  if (m.error) throw m.error
-  const has = new Set((m.data ?? []).filter((x) => x.storage_path).map((x) => x.media_id as string))
-  const tag = await watermarkTag()
-  const paths = ids.map((id, i) => (has.has(id) ? exportPath(planId, n, i, tag) : null))
-  const want = paths.filter((x): x is string => Boolean(x))
-  if (!want.length) return { version_no: n, urls: paths }
-
-  const list = await db().storage.from(BUCKET).list(`exports/${planId}`, { search: `v${n}${REV}${tag}_`, limit: 100 })
-  const ready = new Set((list.data ?? []).map((f) => `exports/${planId}/${f.name}`))
-  if (!want.every((x) => ready.has(x))) await render(planId)
-
-  const signed = await db().storage.from(BUCKET).createSignedUrls(want, 60 * 60)
+  const pr = await prepare(planId)
+  const byId = pr.slides
+  const order = pr.ids
+  if (!byId.length) return { version_no: pr.versionNo, urls: order.map(() => null) }
+  const want = byId.map((s) => s.path)
+  let signed = await db().storage.from(BUCKET).createSignedUrls(want, 60 * 60)
   if (signed.error) throw signed.error
-  const byPath = new Map((signed.data ?? []).map((s) => [s.path, s.signedUrl]))
-  return { version_no: n, urls: paths.map((x) => (x ? byPath.get(x) ?? null : null)) }
+  if (signed.data.some((x) => !x.signedUrl)) {
+    await render(planId, undefined, pr)
+    signed = await db().storage.from(BUCKET).createSignedUrls(want, 60 * 60)
+    if (signed.error) throw signed.error
+  }
+  const bySlide = new Map(byId.map((s, k) => [s.i, signed.data[k]?.signedUrl ?? null]))
+  return { version_no: pr.versionNo, urls: order.map((_, i) => bySlide.get(i) ?? null) }
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
