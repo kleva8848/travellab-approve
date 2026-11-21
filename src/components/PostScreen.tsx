@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, getPost, hotelAction, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
 import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
+import type { PhotoSpec } from '../lib/photoSpec'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { AudienceCard } from './AudienceCard'
@@ -8,6 +9,7 @@ import { Carousel } from './Carousel'
 import { DataQuestions } from './DataQuestions'
 import { whenLabel } from './CalendarScreen'
 import { Inquiries } from './Inquiries'
+import { PhotoEditor } from './PhotoEditor'
 import { Center, Label, Spinner } from './ui'
 
 export const PLATFORM: Record<string, { name: string; cls: string }> = {
@@ -68,10 +70,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   // Готовий вигляд фото поточної версії (рамка + обробка + текст) — рендерить сервер
   const [ready, setReady] = useState<{ version: string; key: string; urls: (string | null)[] } | null>(null)
   const [rendering, setRendering] = useState(false)
-  // Правка тексту на фото (заголовок + рядок «Країна · Готель» на першому фото, підпис — на решті)
-  const [photoDraft, setPhotoDraft] = useState<{ title: string; kicker: string } | null>(null)
+  // Редактор тексту на фото (сет 5): повноекранний лист для одного фото
+  const [editor, setEditor] = useState<{ mid: string; slide: number } | null>(null)
 
-  useBackButton(true, onBack)
+  useBackButton(!editor, onBack)
 
   const load = useCallback(async () => {
     try {
@@ -88,7 +90,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     setSlide(0)
     setCText(''); setCPhoto(''); setChipsT([]); setChipsP([])
     setDraft(null)
-    setPhotoDraft(null)
+    setEditor(null)
     void load()
   }, [load])
 
@@ -143,7 +145,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const status = post.plan.review_status
   const questions = status === 'published' || status === 'approved' ? [] : post.questions ?? []
 
-  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'unskip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'watermark', extra = {}) => {
+  const act = async (action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'reschedule' | 'skip' | 'unskip' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'watermark' | 'photo_spec', extra = {}) => {
     setBusy(true)
     try {
       const r = await reviewAction(post.plan.id, post.plan.version_no, action, extra)
@@ -349,22 +351,12 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   // Фото, яке Іра зараз бачить у каруселі, і правки до нього
   const curMid = cur.media_ids?.[slide]
   const curEdit: PhotoEdit = (curMid && cur.render_params?.photo_edits?.[curMid]) || {}
-  const agentPhotoText = (): { title: string; kicker: string } => {
-    const rp = cur.render_params ?? {}
-    if (slide === 0) return { title: rp.photo_text?.title ?? '', kicker: rp.photo_text?.kicker ?? '' }
-    const rest = [...new Set((cur.media_ids ?? []).slice(1))]
-    return { title: rp.photo_captions?.items?.[rest.indexOf(curMid ?? '')]?.title ?? '', kicker: '' }
-  }
-  const photoTextNow = () => {
-    const a = agentPhotoText()
-    return { title: curEdit.title ?? a.title, kicker: curEdit.kicker ?? a.kicker }
-  }
-
+  // Текст Іри з редактора на цьому фото — тоді «Текст вгору / вниз» не потрібні (текст стоїть, де вона поставила)
+  const curSpec = (curMid && cur.render_params?.photo_spec?.[curMid]) || null
   const editPhoto = async (edit: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }, done: string) => {
     if (!curMid) return
     if (!(await act('photo_edit', { media_id: curMid, edit }))) return
     haptic('success')
-    setPhotoDraft(null)
     setToast(done)
     await load()
   }
@@ -385,16 +377,16 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     void editPhoto({ crop: c ?? null }, c ? `Кроп: ${CROP_NAME[c]}` : 'Кроп: як підібрав агент')
   }
 
-  const savePhotoText = () => {
-    if (!photoDraft) return
-    const a = agentPhotoText()
-    const title = photoDraft.title.trim()
-    const kicker = photoDraft.kicker.trim()
-    // Збіглося з агентовим — прибираємо правку, щоб далі діяв текст агента
-    void editPhoto(
-      { title: title === a.title ? null : title, ...(slide === 0 ? { kicker: kicker === a.kicker ? null : kicker } : {}), ...(title && curEdit.text === 'off' ? { text: null } : {}) },
-      'Текст на фото оновлено',
-    )
+  // «Зберегти» в редакторі: одна нова версія (той самий текст поста), агент цей слайд більше не перегенеровує; null — текст агента
+  const saveSpec = async (spec: PhotoSpec | null) => {
+    if (!editor) return false
+    const r = await act('photo_spec', { media_id: editor.mid, spec })
+    setEditor(null)
+    if (!r) return false
+    haptic('success')
+    setToast(spec ? 'Текст на фото збережено — малюю готовий вигляд' : 'Повернула текст агента')
+    await load()
+    return true
   }
 
   const addChip = (which: 'text' | 'photo', chip: string) => {
@@ -499,7 +491,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                       {curEdit.text === 'off'
                         ? <button className="on" disabled={busy} onClick={() => void editPhoto({ text: null }, 'Текст на фото повернула')}>Без тексту ✕</button>
                         : <button disabled={busy} onClick={() => void editPhoto({ text: 'off' }, 'Прибрала текст з фото')}>Без тексту</button>}
-                      {(['top', 'bottom'] as const).map((z) => (
+                      {!curSpec && (['top', 'bottom'] as const).map((z) => (
                         <button key={z} className={curEdit.text === z ? 'on' : ''} disabled={busy}
                           onClick={() => void editPhoto({ text: curEdit.text === z ? null : z }, curEdit.text === z ? 'Текст — де вирішив агент' : z === 'top' ? 'Текст угорі' : 'Текст унизу')}>
                           {z === 'top' ? 'Текст вгору' : 'Текст вниз'}
@@ -512,7 +504,7 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                       <button className={curEdit.crop ? 'on' : ''} disabled={busy} onClick={nextCrop}>
                         Інший кроп{curEdit.crop ? ` · ${CROP_NAME[curEdit.crop]}` : ''}
                       </button>
-                      <button disabled={busy} onClick={() => { haptic('tap'); setPhotoDraft(photoTextNow()) }}>✎ Текст на фото</button>
+                      <button className={curSpec ? 'on' : ''} disabled={busy} onClick={() => { haptic('tap'); setEditor({ mid: curMid, slide }) }}>✎ Текст на фото{curSpec ? ' · твій' : ''}</button>
                     </div>
                     <div className="qchips">
                       <span className="self-center text-[13px]" style={{ color: 'var(--hint)' }}>Знак:</span>
@@ -520,25 +512,6 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                         <button key={k} className={curWm === k ? 'on' : ''} disabled={busy} onClick={() => void setWm(k)}>{WM_NAME[k]}</button>
                       ))}
                     </div>
-                    {photoDraft && (
-                      <div className="card mt-2.5">
-                        <div className="mb-2 font-semibold">Текст на фото{(cur.media_ids ?? []).length > 1 ? ` ${slide + 1}` : ''}</div>
-                        {slide === 0 && (
-                          <input className="in mb-2 w-full" style={{ height: 40 }} value={photoDraft.kicker} placeholder="Країна · Готель (можна порожнім)"
-                            onChange={(e) => setPhotoDraft({ ...photoDraft, kicker: e.target.value })} />
-                        )}
-                        <textarea className="in" rows={2} value={photoDraft.title} placeholder={slide === 0 ? 'Заголовок на фото' : 'Підпис на фото'} autoFocus
-                          onChange={(e) => setPhotoDraft({ ...photoDraft, title: e.target.value })} />
-                        <div className="mt-3 flex gap-2">
-                          <button className="btn sec" disabled={busy} onClick={() => setPhotoDraft(null)}>Скасувати</button>
-                          <button className="btn" disabled={busy || !photoDraft.title.trim()} onClick={savePhotoText}>{busy ? 'Зберігаю…' : 'Зберегти'}</button>
-                        </div>
-                        {(curEdit.title !== undefined || curEdit.kicker !== undefined) && (
-                          <button className="mx-auto mt-2.5 block text-[13px]" style={{ color: 'var(--hint)' }} disabled={busy}
-                            onClick={() => void editPhoto({ title: null, kicker: null }, 'Повернула текст агента')}>Повернути текст агента</button>
-                        )}
-                      </div>
-                    )}
                   </>
                 )}
                 {view === 'new' && !approved && (
@@ -705,6 +678,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
         )}
       </div>
       {toast && <div className="toast">{toast}</div>}
+      {editor && (
+        <PhotoEditor planId={post.plan.id} mediaId={editor.mid} slide={editor.slide} photos={(cur.media_ids ?? []).length} busy={busy}
+          onClose={() => setEditor(null)} onSave={saveSpec} />
+      )}
     </div>
   )
 }

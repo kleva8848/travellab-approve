@@ -1,17 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
-import { POST_WM, previewUrls, sendStory, sendToChat, type PhotoEdit, type PostWm } from '../server/render.js'
+import { cleanSpec, photoPreview, POST_WM, previewUrls, sendStory, sendToChat, type PhotoEdit, type PhotoSpec, type PostWm } from '../server/render.js'
 import { inquiryCounts, notifyN8n, openQuestions } from '../server/review.js'
 import { DATE_RE, kyivNow, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
+import { photoTitles } from '../server/video.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark' | 'photo_preview' | 'photo_spec' | 'photo_ideas'
   id?: string
   expected_version_no?: number
   text?: string
@@ -32,6 +33,8 @@ type Body = {
   wm?: string
   reason?: string
   answers?: { id?: string; answer?: string }[]
+  spec?: unknown
+  bg?: boolean
 }
 
 const MAX_ANSWER = 1000
@@ -166,6 +169,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const r = await db().rpc('tl_add_version', {
         p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
         p_render_params: { ...params, photo_edits: edits }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
+      })
+      if (r.error) {
+        if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()
+        throw r.error
+      }
+      return void res.json({ ok: true })
+    }
+
+    // Редактор тексту на фото (сет 5). photo_preview — нічого не зберігає: той самий рендер, що файл у чаті, 540 px;
+    // без spec — поточна спека фото (збережена Ірою або з тексту агента) + чистий кадр bg для миттєвого DOM-прев'ю
+    if (b.action === 'photo_preview') {
+      const r = await photoPreview(b.id, String(b.media_id ?? ''), b.spec, b.bg === true)
+      return r ? void res.json({ ok: true, ...r }) : void res.status(400).json({ error: 'bad spec' })
+    }
+
+    // «✨ Варіанти» напису — лише підказки агента, нічого не зберігає
+    if (b.action === 'photo_ideas') {
+      const { code, ...r } = await photoTitles(b.id, b.spec)
+      return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
+    }
+
+    // «Зберегти» в редакторі: одна нова версія (не на кожен тап) з тим самим текстом поста — render_params.photo_spec[media_id], source 'ira'
+    // (агент цей слайд більше не перегенеровує). Старі текстові правки фото (title / kicker / вгору-вниз / розмір) прибираємо — діє спека;
+    // кроп, обробка, яскравість лишаються. spec: null — «Повернути текст агента»
+    if (b.action === 'photo_spec') {
+      const mid = String(b.media_id ?? '')
+      const spec = b.spec === null ? null : cleanSpec(b.spec)
+      if (!mid || (b.spec !== null && !spec)) return void res.status(400).json({ error: 'bad spec' })
+      const p = await db().from('content_plan').select('review_status, version_no, current_version_id, published_at').eq('id', b.id).maybeSingle()
+      if (p.error) throw p.error
+      if (!p.data?.current_version_id || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
+      const v = await db().from('post_versions').select('media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle()
+      if (v.error) throw v.error
+      if (!((v.data?.media_ids as string[] | null) ?? []).includes(mid)) return void res.status(400).json({ error: 'фото не з цього поста' })
+      const params = (v.data?.render_params as Record<string, unknown> | null) ?? {}
+      const specs = { ...((params.photo_spec as Record<string, PhotoSpec> | undefined) ?? {}) }
+      const edits = { ...((params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}) }
+      if (spec) specs[mid] = spec
+      else delete specs[mid]
+      if (edits[mid]) {
+        const { title: _t, kicker: _k, text: _x, size: _s, width: _w, veil: _v, ...rest } = edits[mid]
+        if (Object.keys(rest).length) edits[mid] = rest
+        else delete edits[mid]
+      }
+      const r = await db().rpc('tl_add_version', {
+        p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
+        p_render_params: { ...params, photo_edits: edits, photo_spec: specs }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
       })
       if (r.error) {
         if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()

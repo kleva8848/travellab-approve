@@ -51,7 +51,7 @@ export type Band = { y0: number; y1: number }
 // З band: під текстом вуаль на повну силу, а сила — від яскравості фото саме під текстом (біла піна / пісок / небо
 // під кремовим текстом → темніше, до 70%); далі м'яко сходить до центру кадру
 // tone: false — «без обробки»: кольори й яскравість як в оригіналі, лишається лише вуаль під текстом (щоб читався)
-export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null, tone = true, adj: { veil?: 'more' | 'less'; bright?: 'up' | 'down' } = {}): Buffer {
+export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, strength = 0.42, frac = 0.36, band?: Band | null, tone = true, adj: { veil?: 'more' | 'less'; bright?: 'up' | 'down'; free?: { strength: number | null } } = {}): Buffer {
   const px = w * h
   const y = new Float32Array(px)
   for (let i = 0; i < px; i++) y[i] = lum(rgb[i * 3] / 255, rgb[i * 3 + 1] / 255, rgb[i * 3 + 2] / 255)
@@ -90,6 +90,14 @@ export function softVeil(rgb: Buffer, w: number, h: number, zone?: Zone | null, 
     else strength = Math.min(0.75, Math.max(strength, hi < 0.6 ? (0.6 - hi) / (0.45 * (1 - hi)) : 0))
     weight = (row: number) =>
       zone.zone === 'top' ? (row <= y1 ? 1 : 1 - smooth(row, y1, y1 + feather)) : row >= y0 ? 1 : smooth(row, y0 - feather, y0)
+    // Редактор Іри (сет 5): текст будь-де → вуаль іде за блоком — повна під текстом, м'яко сходить в обидва боки;
+    // блок біля краю — до самого краю (як раніше). Сила: число Іри або авто, порахована вище
+    if (adj.free) {
+      const toTop = band.y0 < h * 0.25
+      const toBottom = band.y1 > h * 0.75
+      weight = (row: number) => row < y0 ? (toTop ? 1 : smooth(row, y0 - feather, y0)) : row > y1 ? (toBottom ? 1 : 1 - smooth(row, y1, y1 + feather)) : 1
+      if (adj.free.strength !== null) strength = Math.min(0.85, Math.max(0, adj.free.strength))
+    }
   }
 
   if (adj.veil) strength = Math.min(0.9, adj.veil === 'more' ? strength * 1.45 : strength * 0.55) // «більше / менше затемнення» під текстом

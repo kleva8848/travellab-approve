@@ -1,76 +1,14 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import satori from 'satori'
 import sharp from 'sharp'
 import type { Zone } from './look.js'
+import { blockLines, CREAM, el, FONT, GAP, GOLD, GRAPH, loadFonts, TRACK_UPPER, typo, type El, type SpecFont } from './typo.js'
 
 // Текст на фото як у тесті раунду 7: по центру, поля 9%, зверху 8% / знизу 7%.
 // Брендові шрифти (як у відео, src/lib/video.ts FONT): Cormorant Garamond — основний рядок, Tenor Sans капсом з розрядкою — готель / місце / інфо.
-// Кремовий на затемненні, графітовий на світлій вуалі. Buongiorno не купили → рукописної літери немає
-const CREAM = '#F3EBDD'
-const GRAPH = '#2F2B27'
-
-let fonts: { name: string; data: Buffer; weight: 400 | 500; style: 'normal' }[] | null = null
-export function loadFonts() {
-  if (!fonts) {
-    const dir = join(process.cwd(), 'server', 'fonts')
-    fonts = [
-      { name: 'Cormorant Garamond', data: zeroWidth(readFileSync(join(dir, 'CormorantGaramond-Medium.ttf'))), weight: 500, style: 'normal' },
-      { name: 'Tenor Sans', data: readFileSync(join(dir, 'TenorSans-Regular.ttf')), weight: 400, style: 'normal' },
-    ]
-  }
-  return fonts
-}
-
-// У Cormorant невидимі символи (word joiner з typo(), ZWJ, ZWSP…) мають ширину 0.6 em → «2–   4» з діркою.
-// Обнуляємо їм ширину в копії шрифту: cmap формату 4 → номер гліфа → hmtx
-function zeroWidth(src: Buffer): Buffer {
-  const b = Buffer.from(src)
-  const tables: Record<string, number> = {}
-  for (let i = 0, n = b.readUInt16BE(4); i < n; i++) tables[b.toString('latin1', 12 + i * 16, 16 + i * 16)] = b.readUInt32BE(20 + i * 16)
-  const cmap = tables.cmap
-  let sub = -1
-  for (let i = 0, n = b.readUInt16BE(cmap + 2); i < n; i++) {
-    const at = cmap + 4 + i * 8
-    const o = cmap + b.readUInt32BE(at + 4)
-    if (b.readUInt16BE(o) === 4 && (b.readUInt16BE(at) === 3 || b.readUInt16BE(at) === 0)) { sub = o; break }
-  }
-  if (sub < 0) return b
-  const seg = b.readUInt16BE(sub + 6) / 2
-  const end = sub + 14
-  const start = end + seg * 2 + 2
-  const delta = start + seg * 2
-  const range = delta + seg * 2
-  const glyph = (c: number) => {
-    for (let i = 0; i < seg; i++) {
-      if (b.readUInt16BE(end + i * 2) < c) continue
-      const s = b.readUInt16BE(start + i * 2)
-      if (s > c) return 0
-      const ro = b.readUInt16BE(range + i * 2)
-      const g = ro ? b.readUInt16BE(range + i * 2 + ro + 2 * (c - s)) : c
-      return g ? (g + b.readUInt16BE(delta + i * 2)) & 0xffff : 0
-    }
-    return 0
-  }
-  const metrics = b.readUInt16BE(tables.hhea + 34)
-  for (const c of [0x200b, 0x200c, 0x200d, 0x2060, 0xfeff]) {
-    const g = glyph(c)
-    if (g && g < metrics) b.writeUInt16BE(0, tables.hmtx + g * 4)
-  }
-  return b
-}
+// Кремовий на затемненні, графітовий на світлій вуалі. Шрифти й типографіка — server/typo.ts (спільні з редактором Іри, сет 5)
 
 // small — підпис на фото 2–10 каруселі: лише один рядок, дрібніше за заголовок обкладинки
 export type PhotoText = { kicker?: string; title: string; small?: boolean }
-
-// Типографіка заголовка: «2–4» не рвемо (word joiner після тире), короткі слова («у», «на», «та», «з») не висять у кінці рядка (нерозривний пробіл)
-const typo1 = (s: string) =>
-  s.replace(/(\d)\s*([–—-])\s*(\d)/g, '$1$2\u2060$3').replace(/(^|\s)(\p{L}{1,2})\s+(?=\S)/gu, '$1$2\u00A0').replace(/(^|\s)(\p{L}{1,2})\s+(?=\S)/gu, '$1$2\u00A0')
-// \n у заголовку — ручний перенос рядка (Іра): типографіку застосовуємо до кожного рядка окремо
-const typo = (s: string) => s.split('\n').map(typo1).join('\n')
-
-type El = { type: string; props: Record<string, unknown> }
-const el = (type: string, style: Record<string, unknown>, children?: unknown): El => ({ type, props: { style, children } })
 
 // Прозорий PNG w×h з текстом — кладемо поверх фото (sharp composite)
 // inset — додатковий відступ згори/знизу (сторіз: там лежать аватар і поле відповіді Instagram)
@@ -100,6 +38,56 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
   }, kids)
 
   // satori приймає React-подібні вузли (JSX не потрібен) і віддає SVG з літерами-контурами → sharp рендерить без шрифтів у системі
+  const svg = await satori(root as unknown as Parameters<typeof satori>[0], { width: w, height: h, fonts: loadFonts() })
+  return sharp(Buffer.from(svg)).png().toBuffer()
+}
+
+// ───────────── Редактор Іри (сет 5): render_params.photo_spec[media_id] ─────────────
+// Координати — частки фото без рамки (сторіз: без зон інтерфейсу Instagram), тож та сама спека працює в 4:5, Telegram і 9:16.
+// x, y — центр блоку тексту; w — ширина блоку; size — кегль, частка ширини фото; lh — міжрядковий інтервал.
+// veil: null — сила вуалі сама (від яскравості під текстом), число 0…0.85 — як поставила Іра. color: light — кремовий текст на затемненні,
+// dark — графітовий на світлій вуалі. source: 'ira' — збережено Ірою, агент цей слайд ніколи не перегенеровує
+export type SpecBlock = { role: 'kicker' | 'title'; text: string; font: SpecFont; size: number; lh: number; gold: number[]; cap?: 'upper' | null }
+export type PhotoSpec = { v: 1; x: number; y: number; w: number; veil: number | null; color: 'light' | 'dark'; blocks: SpecBlock[]; source: 'ira' | 'ai' }
+
+// Блок → вузли satori. Слова — flex-елементи з відступом рівно в пробіл (satori не вміє інлайн-спанів для золотих слів),
+// той самий layout малює DOM-прев'ю в src/components/PhotoEditor.tsx
+function specBlock(b: SpecBlock, unit: number, gap: number, color: string, shadow: string): El[] {
+  const f = FONT[b.font] ?? FONT.cormorant
+  const size = Math.max(8, Math.round(b.size * unit))
+  const upper = !f.script && b.cap === 'upper'
+  const track = upper ? TRACK_UPPER * size : 0
+  const sp = f.space * size + track
+  const gold = new Set(b.gold)
+  const base = { fontFamily: f.name, fontWeight: f.weight, fontSize: size, lineHeight: b.lh, letterSpacing: track, textTransform: upper ? 'uppercase' : 'none', color, textShadow: shadow }
+  const word = (w: { text: string; n: number }) => el('div', gold.has(w.n) ? { color: GOLD } : {}, w.text)
+  return blockLines(b.text).map((groups) => groups === null
+    ? el('div', { height: gap, width: 1 })
+    : el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp, width: '100%' },
+      groups.map((g) => (g.length === 1 ? word(g[0]) : el('div', { display: 'flex', columnGap: sp }, g.map(word))))))
+}
+
+// Прозорий PNG w×h зі спекою Іри; frame — біла рамка, inset — зони інтерфейсу згори/знизу (сторіз)
+export async function specLayer(w: number, h: number, spec: PhotoSpec, frame: number, inset = 0): Promise<Buffer | null> {
+  const blocks = spec.blocks.filter((b) => b.text.trim())
+  if (!blocks.length) return null
+  const iw = w - 2 * frame
+  const ih = h - 2 * frame - 2 * inset
+  const gap = Math.round(w * GAP)
+  const color = spec.color === 'dark' ? GRAPH : CREAM
+  const shadow = spec.color === 'dark' ? 'none' : '0 1px 3px rgba(0,0,0,0.45), 0 2px 18px rgba(0,0,0,0.45)'
+  const cx = frame + spec.x * iw
+  const cy = frame + inset + spec.y * ih
+  const kids: El[] = []
+  blocks.forEach((b, i) => {
+    if (i) kids.push(el('div', { height: gap, width: 1 }))
+    kids.push(...specBlock(b, iw, gap, color, shadow))
+  })
+  // Центр блоку — у (cx, cy): падінг з одного боку = 2·c − розмір, flex центрує в решті (як обкладинка відео, textPng centerY)
+  const root = el('div', {
+    width: w, height: h, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
+    paddingTop: Math.max(0, 2 * cy - h), paddingBottom: Math.max(0, h - 2 * cy), paddingLeft: Math.max(0, 2 * cx - w), paddingRight: Math.max(0, w - 2 * cx),
+  }, [el('div', { display: 'flex', flexDirection: 'column', alignItems: 'center', width: Math.round(spec.w * iw), textAlign: 'center' }, kids)])
   const svg = await satori(root as unknown as Parameters<typeof satori>[0], { width: w, height: h, fonts: loadFonts() })
   return sharp(Buffer.from(svg)).png().toBuffer()
 }

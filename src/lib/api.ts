@@ -1,3 +1,4 @@
+import type { PhotoSpec, SpecFrame } from './photoSpec'
 import { isDemo, tg } from './tg'
 import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type CoverMedia, type CoverSpec, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
@@ -101,6 +102,8 @@ export type RenderParams = {
   photo_text?: { title?: string; kicker?: string }
   photo_captions?: { items?: ({ title?: string } | null)[] }
   photo_edits?: Record<string, PhotoEdit>
+  // Текст Іри з редактора (сет 5) — за media_id; є спека → старі текстові правки фото не діють
+  photo_spec?: Record<string, PhotoSpec>
   wm?: PostWm
 }
 
@@ -128,7 +131,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm }
+type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm; spec?: PhotoSpec | null }
 type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 // «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
@@ -166,7 +169,7 @@ export async function getPost(id: string): Promise<PostDetail> {
 export async function reviewAction(
   id: string,
   expected_version_no: number,
-  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark',
+  action: 'approve' | 'unapprove' | 'comment' | 'restore' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark' | 'photo_spec',
   extra: Partial<CommentInput> & ActionExtra = {},
 ): Promise<ActionResult> {
   if (isDemo) {
@@ -174,6 +177,27 @@ export async function reviewAction(
     return demo.act(id, action, extra)
   }
   return call('/api/review', { method: 'POST', body: JSON.stringify({ id, expected_version_no, action, ...extra }) })
+}
+
+// ───────────── Редактор тексту на фото (сет 5) ─────────────
+
+// Прев'ю = той самий рендер, що файл у чаті (540 px), нічого не зберігає. Без spec — поточна спека фото + чистий кадр bg
+export type PhotoPreview = { jpg: string; bg?: string; spec: PhotoSpec; frame: SpecFrame; saved: boolean }
+export async function photoPreview(id: string, media_id: string, spec: PhotoSpec | null, bg = false): Promise<PhotoPreview> {
+  if (isDemo) {
+    await wait(spec ? 350 : 500)
+    return demo.photoPreview(id, media_id, spec)
+  }
+  return call('/api/review', { method: 'POST', body: JSON.stringify({ id, action: 'photo_preview', media_id, spec, bg }) })
+}
+
+// «✨ Варіанти» — 3–4 підказки агента (*золоте* слово в зірочках), нічого не зберігає
+export async function photoIdeas(id: string, title: string, kicker: string): Promise<string[]> {
+  if (isDemo) {
+    await wait(1200)
+    return ['Ранок без *поспіху*', 'Риф просто біля *берега*', 'Тиша над *лагуною*', 'Маска після *сніданку*']
+  }
+  return (await call<{ titles: string[] }>('/api/review', { method: 'POST', body: JSON.stringify({ id, action: 'photo_ideas', spec: { title, kicker } }) })).titles
 }
 
 // ───────────── Готелі: пауза / повернення (сет 3) ─────────────
@@ -468,7 +492,8 @@ const demo = (() => {
   const now = new Date().toISOString()
   // Демо-фото: градієнти замість справжніх (url null → плейсхолдер у каруселі)
   const pool = ['D-1', 'D-2', 'D-3', 'D-4', 'D-5', 'D-6']
-  const media = Object.fromEntries(pool.map((m, i) => [m, { media_id: m, url: null, description: `Демо-фото ${i + 1}`, width: 1200, height: 1500 }]))
+  const DEMO_PHOTO = ['/demo/video/d1_0.jpg', '/demo/video/d2_0.jpg', '/demo/video/d3_0.jpg']
+  const media = Object.fromEntries(pool.map((m, i) => [m, { media_id: m, url: DEMO_PHOTO[i] ?? null, description: `Демо-фото ${i + 1}`, width: 1200, height: 1500 }]))
   const mk = (id: string, day: string, platform: string, pillar: string, hotel: string | null, texts: string[], status: ReviewStatus, comment?: string, photos: string[] = []): PostDetail => ({
     plan: {
       id, day, platform, slot_type: 'demo', pillar, tour_id: null, hotel_id: hotel ? 'HTL-000' : null, scheduled_for: null, slot_time: null,
@@ -522,6 +547,18 @@ const demo = (() => {
         ...(p.plan.review_status === 'published' ? { inquiries: p.inquiries ?? 0 } : {}),
       })),
     post: (id: string): PostDetail => structuredClone(byId(id)),
+    // Демо-прев'ю: сервера нема → jpg порожній (апка показує DOM-прев'ю), фон — демо-фото
+    photoPreview: (id: string, mid: string, spec: PhotoSpec | null): PhotoPreview => {
+      const p = byId(id)
+      const cur = p.versions.at(-1)
+      const saved = cur?.render_params?.photo_spec?.[mid] ?? null
+      const first = cur?.media_ids[0] === mid
+      const s: PhotoSpec = spec ?? saved ?? { v: 1, x: 0.5, y: 0.8, w: 0.82, veil: null, color: 'light', source: 'ai', blocks: [
+        ...(first ? [{ role: 'kicker' as const, text: 'Мальдіви · Демо-готель', font: 'tenor' as const, size: 0.026, lh: 1.3, gold: [], cap: 'upper' as const }] : []),
+        { role: 'title', text: first ? 'Риф просто біля берега' : 'Маска після сніданку', font: 'cormorant', size: first ? 0.0748 : 0.055, lh: 1.18, gold: [], cap: null },
+      ] }
+      return { jpg: '', bg: p.media[mid]?.url ?? '', spec: structuredClone(s), frame: { w: 1080, h: 1350, pad: 30, inset: 0 }, saved: Boolean(saved) }
+    },
     // Демо-план: пости розкладено по днях поточного тижня + 2 слоти, які агент ще не написав
     plan: (week: number): WeekPlan => {
       const d0 = new Date()
@@ -592,6 +629,16 @@ const demo = (() => {
         p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', comment_id: null, media_ids: ids })
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
         return { ok: true as const, swapped: true }
+      }
+      if (action === 'photo_spec' && extra.media_id) {
+        const prev = p.versions.at(-1)!
+        const specs = { ...(prev.render_params?.photo_spec ?? {}) }
+        if (extra.spec) specs[extra.media_id] = { ...extra.spec, source: 'ira' }
+        else delete specs[extra.media_id]
+        const n = prev.version_no + 1
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, photo_spec: specs } })
+        p.plan.version_no = n; p.plan.current_version_id = `${id}-v${n}`
+        return { ok: true as const }
       }
       if (action === 'photo_edit' && extra.media_id) {
         const prev = p.versions.at(-1)!

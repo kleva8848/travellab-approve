@@ -18,6 +18,7 @@ const node = (name, type, typeVersion, parameters, extra = {}) => ({ id: name.to
 // Тон Іри (PRMPT-011) — як SYSTEM у montage-test/video_agent.py і WF-061; правила заголовка — як ai_title у montage-test/cover.py
 const SYSTEM = `Ти — контент-агентка Іри (TravelLab: кураторка люкс-подорожей, острівні family-резорти, Мальдіви).
 Пишеш ЗАГОЛОВОК ДЛЯ ОБКЛАДИНКИ короткого вертикального відео (рілс / сторіз) — великий напис на першому кадрі, який видно в сітці профілю.
+Якщо формат «Фото-пост» — це напис на фото поста (редактор Іри в апці): та сама логіка, деталь бери з підпису до поста й готелю.
 Тон Іри (PRMPT-011): жива проста мова, ОДНА думка; не вигадуй, що Іра там була (без «я була», «ми відпочивали»);
 без перебільшень («найкращий», «єдиний», «мало де», «рай», «казка»); не називай готель, якого нема в даних. Природна граматично правильна українська.
 
@@ -35,7 +36,7 @@ const SYSTEM = `Ти — контент-агентка Іри (TravelLab: кур
 const prepare = `const b = $json.body || {};
 const rules = Array.isArray(b.rules) ? b.rules.filter(Boolean).slice(0, 12) : [];
 const user = [
-  (b.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + (b.name || '') + '» · ' + (b.platform === 'telegram' ? 'Telegram-канал' : 'Instagram'),
+  (b.format === 'photo' ? 'Фото-пост' : b.format === 'reel' ? 'Рілс' : 'Сторіз') + ' «' + (b.name || '') + '» · ' + (b.platform === 'telegram' ? 'Telegram-канал' : 'Instagram'),
   'Місце: ' + (b.place || '—') + (b.hotel ? ' · готель ' + b.hotel : ''),
   'Надпис зверху (kicker): ' + (b.kicker || '—'),
   'Поточний заголовок: ' + (b.title || '—'),

@@ -677,3 +677,40 @@ export async function coverTitles(id: string, raw: unknown) {
   if (!titles.length) return { code: 502, error: 'Агент зараз не відповів — спробуй ще раз за хвилинку.' }
   return { code: 200, titles }
 }
+
+// «✨ Варіанти» в редакторі тексту на фото поста (сет 5): той самий WF «Video Cover Titles», формат 'photo' —
+// агенту йде текст поста й поточний напис; лише підказки, нічого не зберігаємо (Іра тапає варіант → він стає в поле)
+export async function photoTitles(planId: string, raw: unknown) {
+  const p = await db().from('content_plan').select('platform, hotel_id, current_version_id, published_at').eq('id', planId).maybeSingle()
+  if (p.error) throw p.error
+  if (!p.data?.current_version_id) return { code: 404, error: 'not found' }
+  const d = p.data as { platform: string; hotel_id: string | null; current_version_id: string; published_at: string | null }
+  if (d.published_at) return { code: 409, error: 'Пост уже викладено.' }
+  const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const cur = String(s.title ?? '').replace(/\*/g, '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX)
+  const [v, rules, hotel] = await Promise.all([
+    db().from('post_versions').select('text, key_idea').eq('id', d.current_version_id).maybeSingle(),
+    iraRules(d.platform, d.hotel_id, planId),
+    d.hotel_id ? db().from('hotels').select('name, country').eq('hotel_id', d.hotel_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+  ])
+  if (v.error) throw v.error
+  const h = hotel.data as { name?: string; country?: string } | null
+  const j = await n8nJson('travellab-video-cover-titles', {
+    name: String((v.data as { key_idea?: string } | null)?.key_idea ?? ''), format: 'photo', platform: d.platform,
+    place: h?.country ?? null, hotel: h?.name ?? null,
+    kicker: String(s.kicker ?? '').replace(/\s+/g, ' ').trim().slice(0, KICKER_MAX), title: cur, screen: cur, voice: '',
+    caption: String((v.data as { text?: string } | null)?.text ?? '').replace(/\*\*/g, '').slice(0, 800), rules,
+  }, 40000)
+  const seen = new Set([cur.toLowerCase()])
+  const titles: string[] = []
+  for (const x of Array.isArray(j?.titles) ? j.titles : []) {
+    const t = cleanTitle(x)
+    const k = t.replace(/\*/g, '').toLowerCase()
+    if (!t || seen.has(k)) continue
+    seen.add(k)
+    titles.push(t)
+    if (titles.length >= TITLES_MAX) break
+  }
+  if (!titles.length) return { code: 502, error: 'Агент зараз не відповів — спробуй ще раз за хвилинку.' }
+  return { code: 200, titles }
+}

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import { db, getSettings } from './http.js'
 import { calmZone, softVeil, type Band, type Zone } from './look.js'
-import { textLayer, type PhotoText } from './overlay.js'
+import { specLayer, textLayer, type PhotoSpec, type PhotoText, type SpecBlock } from './overlay.js'
+import { FONT, wordCount } from './typo.js'
 import { addWatermark, watermarkTag, type WmKind } from './watermark.js'
 
 const BUCKET = 'post-media'
@@ -30,7 +31,10 @@ export const POST_WM: PostWm[] = ['wm1', 'wm3', 'off']
 const postWm = (v: unknown): WmKind | null => (v === 'off' ? null : v === 'wm3' ? 'wm3' : 'wm1')
 const CROP = { centre: sharp.gravity.centre, north: sharp.gravity.north, south: sharp.gravity.south } as const
 
-export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null): Promise<Buffer> {
+// Кадр без тексту: розмір під платформу, біла рамка, кроп. Окремо від тексту — редактор Іри (сет 5) малює прев'ю
+// на тому самому кадрі десятки разів, тож кадр кешується (див. baseFor)
+export type Base = { w: number; h: number; pad: number; inset: number; iw: number; ih: number; crop: Buffer }
+export async function base(src: Buffer, platform: string, edit: PhotoEdit = {}): Promise<Base> {
   // Спершу поворот за EXIF — далі розміри вже «як бачить людина»
   const { data, info } = await sharp(src).rotate().toBuffer({ resolveWithObject: true })
   let w = FEED.w
@@ -45,14 +49,33 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
   const pad = Math.round((platform === 'telegram' ? Math.max(w, h) : w) * FRAME)
   const iw = w - 2 * pad
   const ih = h - 2 * pad
-  if (edit.text === 'off') text = null
-  if (edit.text === 'top' || edit.text === 'bottom') hint = edit.text
   const position = edit.crop ? CROP[edit.crop] : sharp.strategy.attention
   const crop = await sharp(data).resize(iw, ih, { fit: 'cover', position }).removeAlpha().toColourspace('srgb').raw().toBuffer()
-  const zone: Zone | null = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
-  // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
-  const layer = zone && text ? await textLayer(w, h, text, zone, pad, inset, { size: edit.size, width: edit.width }) : null
-  const toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { veil: edit.veil, bright: edit.bright })
+  return { w, h, pad, inset, iw, ih, crop }
+}
+
+// spec — текст Іри з редактора (photo_spec): замість тексту агента, будь-де на фото, вуаль іде за блоком
+export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null, spec?: PhotoSpec | null): Promise<Buffer> {
+  return compose(await base(src, platform, edit), text, hint, edit, wm, spec)
+}
+
+export async function compose(b: Base, text: PhotoText | null | undefined, hint: string | null | undefined, edit: PhotoEdit, wm: WmKind | null, spec?: PhotoSpec | null): Promise<Buffer> {
+  const { w, h, pad, inset, iw, ih, crop } = b
+  if (edit.text === 'off') { text = null; spec = null }
+  if (edit.text === 'top' || edit.text === 'bottom') hint = edit.text
+  let zone: Zone | null
+  let toned: Buffer
+  let layer: Buffer | null
+  if (spec) {
+    layer = await specLayer(w, h, spec, pad, inset)
+    zone = layer ? { zone: spec.y < 0.5 ? 'top' : 'bottom', text: spec.color, source: 'hint' } : null
+    toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { bright: edit.bright, free: { strength: spec.veil } })
+  } else {
+    zone = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
+    // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
+    layer = zone && text ? await textLayer(w, h, text, zone, pad, inset, { size: edit.size, width: edit.width }) : null
+    toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { veil: edit.veil, bright: edit.bright })
+  }
   let img = sharp(toned, { raw: { width: iw, height: ih, channels: 3 } }).extend({ top: pad, bottom: pad, left: pad, right: pad, background: '#ffffff' })
   if (layer) img = sharp(await img.png().toBuffer()).composite([{ input: layer }])
   if (wm) img = sharp(await addWatermark(await img.png().toBuffer(), wm, zone?.zone ?? null, pad, inset))
@@ -61,6 +84,10 @@ export async function frame(src: Buffer, platform: string, text?: PhotoText | nu
 
 // Перший і останній рядок з непрозорими пікселями шару тексту → у координатах фото без рамки
 async function textBand(layer: Buffer, w: number, h: number, pad: number): Promise<Band | null> {
+  const r = await rows(layer, w, h)
+  return r && { y0: Math.max(0, r.y0 - pad), y1: Math.min(h - 2 * pad - 1, r.y1 - pad) }
+}
+async function rows(layer: Buffer, w: number, h: number): Promise<Band | null> {
   const a = await sharp(layer).ensureAlpha().extractChannel(3).raw().toBuffer()
   let y0 = -1
   let y1 = -1
@@ -69,7 +96,7 @@ async function textBand(layer: Buffer, w: number, h: number, pad: number): Promi
     for (let col = 0; col < w; col += 2) if (a[row * w + col] > 40) { on = true; break }
     if (on) { if (y0 < 0) y0 = row; y1 = row }
   }
-  return y0 < 0 ? null : { y0: Math.max(0, y0 - pad), y1: Math.min(h - 2 * pad - 1, y1 - pad) }
+  return y0 < 0 ? null : { y0, y1 }
 }
 
 type Overlay = PhotoText & { zone_hint?: string | null; for_text: string; media_id: string }
@@ -129,13 +156,14 @@ async function captionTexts(post: PostInfo, slides: { id: string; path: string }
 }
 
 type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[]; photo_text: string | null }
-type Slide = { id: string; i: number; src: string; path: string; text: (PhotoText & { zone_hint?: string | null }) | null }
+type Slide = { id: string; i: number; src: string; path: string; text: (PhotoText & { zone_hint?: string | null }) | null; spec: PhotoSpec | null }
 type Prepared = { ids: string[]; text: string; platform: string; versionNo: number; edits: Record<string, PhotoEdit>; wm: WmKind | null; wmStory: WmKind | null; first: string | undefined; slides: Slide[]; cover: (PhotoText & { zone_hint?: string | null }) | null }
 
 // Кеш експорту по слайду: ім'я файлу = хеш (фото + текст на ньому + правки + знак + платформа). Одна правка перемальовує лише свій слайд,
 // а не всі 10; правка тексту поста не чіпає фото (текст на фото не залежить від тексту поста)
-const slideHash = (platform: string, tag: string, s: { id: string; text: unknown }, edit: PhotoEdit | undefined) =>
-  createHash('sha1').update(JSON.stringify([REV, platform, tag, s.id, s.text, edit ?? null])).digest('hex').slice(0, 16)
+// Спека Іри (photo_spec) — у хеші лише якщо є: старі слайди без неї зберігають свої імена файлів (кеш не злітає)
+const slideHash = (platform: string, tag: string, s: { id: string; text: unknown; spec?: PhotoSpec | null }, edit: PhotoEdit | undefined) =>
+  createHash('sha1').update(JSON.stringify(s.spec ? [REV, platform, tag, s.id, s.spec, edit ?? null] : [REV, platform, tag, s.id, s.text, edit ?? null])).digest('hex').slice(0, 16)
 const exportPath = (planId: string, hash: string) => `exports/${planId}/${REV}_${hash}.jpg`
 
 // Усе потрібне для рендеру БЕЗ малювання: версія, фото, тексти на фото (кеш за media_id; Іра-текст агент не перебиває)
@@ -154,12 +182,14 @@ async function prepare(planId: string): Promise<Prepared> {
   const text = String(v.data?.text ?? '')
   const params = (v.data?.render_params as Record<string, unknown>) ?? {}
   const edits = (params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}
+  const specs = (params.photo_spec as Record<string, PhotoSpec> | undefined) ?? {}
   const withPath = ids.filter((id) => pathOf.get(id))
   const first = withPath[0]
   const rest = [...new Set(withPath.slice(1))]
   // Текст на фото прив'язаний до фото (media_id), а не до тексту поста: правка тексту поста заголовок на фото не міняє.
   // Якщо на слайді є текст Іри (або вона його вимкнула) — агента (WF-049) для цього слайда не кличемо
-  const own = (id: string) => edits[id]?.title !== undefined || edits[id]?.text === 'off'
+  // Спека Іри з редактора (source 'ira') — теж «свій» текст: агент цей слайд не перегенеровує ніколи
+  const own = (id: string) => edits[id]?.title !== undefined || edits[id]?.text === 'off' || Boolean(specs[id])
   let overlay: Overlay | null = null
   let captions: Captions | null = null
   if (first && text.trim()) {
@@ -202,9 +232,13 @@ async function prepare(planId: string): Promise<Prepared> {
     const src = pathOf.get(id)
     if (!src) return
     const t = textFor(id)
-    slides.push({ id, i, src, text: t, path: exportPath(planId, slideHash(platform, `${tag}|${wm ?? ''}`, { id, text: t }, edits[id])) })
+    const spec = specs[id] ?? null
+    slides.push({ id, i, src, text: t, spec, path: exportPath(planId, slideHash(platform, `${tag}|${wm ?? ''}`, { id, text: t, spec }, edits[id])) })
   })
-  const cover = first && edits[first]?.text !== 'off' ? textFor(first) : null
+  const fs = first ? specs[first] : undefined
+  const cover = !first || edits[first]?.text === 'off' ? null
+    : fs ? (() => { const t = fs.blocks.find((b) => b.role === 'title')?.text.trim(); return t ? { title: t, kicker: fs.blocks.find((b) => b.role === 'kicker')?.text.trim() || undefined } : null })()
+      : textFor(first)
   return { ids, text, platform, versionNo: Number(p.data.version_no), edits, wm, wmStory, first, slides, cover }
 }
 
@@ -218,7 +252,7 @@ export async function render(planId: string, story?: number, pre?: Prepared): Pr
         if (s.i !== story) return null
         const dl = await db().storage.from(BUCKET).download(s.src)
         if (dl.error) throw dl.error
-        const out = await frame(Buffer.from(await dl.data.arrayBuffer()), 'story', s.text, s.text?.zone_hint, pr.edits[s.id], pr.wmStory)
+        const out = await frame(Buffer.from(await dl.data.arrayBuffer()), 'story', s.text, s.text?.zone_hint, pr.edits[s.id], pr.wmStory, s.spec)
         return { name: `travellab_story_${s.i + 1}.jpg`, buf: out }
       }
       const name = `travellab_${pr.platform}_${s.i + 1}.jpg`
@@ -226,13 +260,13 @@ export async function render(planId: string, story?: number, pre?: Prepared): Pr
       if (!hit.error) return { name, buf: Buffer.from(await hit.data.arrayBuffer()) }
       const dl = await db().storage.from(BUCKET).download(s.src)
       if (dl.error) throw dl.error
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), pr.platform, s.text, s.text?.zone_hint, pr.edits[s.id], pr.wm)
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), pr.platform, s.text, s.text?.zone_hint, pr.edits[s.id], pr.wm, s.spec)
       const up = await db().storage.from(BUCKET).upload(s.path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
       return { name, buf: out }
     }),
   )
-  const photo_text = pr.cover ? [pr.cover.kicker, pr.cover.title].filter(Boolean).join(' · ') : null
+  const photo_text = pr.cover ? [pr.cover.kicker, pr.cover.title].filter(Boolean).join(' · ').replace(/\s*\n\s*/g, ' ') : null
   return { text: pr.text, platform: pr.platform, files: files.filter((f) => f !== null), photo_text }
 }
 
@@ -301,4 +335,115 @@ export async function sendStory(planId: string, chatId: number, slide: number) {
   f.append('document', new Blob([new Uint8Array(file.buf)], { type: 'image/jpeg' }), file.name)
   await tg('sendDocument', f)
   return { photos: 1 }
+}
+
+// ───────────── Редактор тексту на фото (сет 5) ─────────────
+
+export type { PhotoSpec } from './overlay.js'
+const SPEC_TEXT_MAX = 140
+const PREVIEW_W = 540
+
+// Спека з апки → чиста (межі, типи) або null. source ставить сервер: зберегла Іра → 'ira'
+export function cleanSpec(raw: unknown): PhotoSpec | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const num = (v: unknown, lo: number, hi: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n * 10000) / 10000)) : null
+  }
+  const x = num(r.x, 0, 1), y = num(r.y, 0, 1), w = num(r.w, 0.3, 1)
+  if (x === null || y === null || w === null || !Array.isArray(r.blocks)) return null
+  const veil = r.veil === null || r.veil === undefined ? null : num(r.veil, 0, 0.85)
+  const blocks: SpecBlock[] = []
+  for (const b of r.blocks.slice(0, 3) as Record<string, unknown>[]) {
+    if (!b || typeof b !== 'object') return null
+    const role = b.role === 'kicker' ? 'kicker' : b.role === 'title' ? 'title' : null
+    const font = typeof b.font === 'string' && b.font in FONT ? (b.font as SpecBlock['font']) : null
+    const size = num(b.size, 0.012, 0.2), lh = num(b.lh, 0.8, 2)
+    if (!role || !font || size === null || lh === null || typeof b.text !== 'string') return null
+    const text = b.text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, SPEC_TEXT_MAX)
+    const n = wordCount(text)
+    const gold = [...new Set((Array.isArray(b.gold) ? b.gold : []).map(Number).filter((g) => Number.isInteger(g) && g >= 0 && g < n))].sort((p, q) => p - q).slice(0, 6)
+    blocks.push({ role, text, font, size, lh, gold, cap: b.cap === 'upper' ? 'upper' : null })
+  }
+  return { v: 1, x, y, w, veil, color: r.color === 'dark' ? 'dark' : 'light', blocks, source: 'ira' }
+}
+
+// Теплий інстанс Vercel: Іра тягає текст — прев'ю щоразу на тому самому кадрі. Тримаємо кілька останніх кадрів (≈4 МБ кожен)
+const baseCache = new Map<string, Promise<Base>>()
+function baseFor(path: string, platform: string, edit: PhotoEdit): Promise<Base> {
+  const key = [path, platform, edit.crop ?? '', edit.look ?? ''].join('|')
+  let hit = baseCache.get(key)
+  if (!hit) {
+    hit = (async () => {
+      const dl = await db().storage.from(BUCKET).download(path)
+      if (dl.error) throw dl.error
+      return base(Buffer.from(await dl.data.arrayBuffer()), platform, edit)
+    })()
+    hit.catch(() => baseCache.delete(key))
+    baseCache.set(key, hit)
+    while (baseCache.size > 4) baseCache.delete(baseCache.keys().next().value!)
+  }
+  return hit
+}
+
+// Легкий контекст одного фото поста (без агента): платформа, шлях, правки, знак, спека
+async function slideCtx(planId: string, mediaId: string) {
+  const p = await db().from('content_plan').select('platform, current_version_id').eq('id', planId).maybeSingle()
+  if (p.error) throw p.error
+  if (!p.data?.current_version_id) return null
+  const v = await db().from('post_versions').select('media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle()
+  if (v.error) throw v.error
+  if (!((v.data?.media_ids as string[] | null) ?? []).includes(mediaId)) return null
+  const [m, tag] = await Promise.all([db().from('media').select('storage_path').eq('media_id', mediaId).maybeSingle(), watermarkTag()])
+  if (m.error) throw m.error
+  const path = m.data?.storage_path as string | null
+  if (!path) return null
+  const params = (v.data?.render_params as Record<string, unknown>) ?? {}
+  const edit = ((params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {})[mediaId] ?? {}
+  return { platform: String(p.data.platform), path, edit, wm: tag ? postWm(params.wm) : null, spec: ((params.photo_spec as Record<string, PhotoSpec> | undefined) ?? {})[mediaId] ?? null }
+}
+
+const small = async (jpg: Buffer) => `data:image/jpeg;base64,${(await sharp(jpg).resize(PREVIEW_W).jpeg({ quality: 82 }).toBuffer()).toString('base64')}`
+
+// Те, що зараз на фото, як спека: збережена Ірою — як є; інакше з тексту агента / старих правок (той самий вигляд, що файл зараз)
+async function deriveSpec(planId: string, mediaId: string, b: Base, edit: PhotoEdit): Promise<PhotoSpec> {
+  const pr = await prepare(planId)
+  const s = pr.slides.find((x) => x.id === mediaId)
+  if (s?.spec) return s.spec
+  return specFromAgent(b, edit.text === 'off' ? null : s?.text ?? null, edit, mediaId === pr.first)
+}
+
+// Текст агента (+ старі правки фото) → спека з тим самим виглядом
+export async function specFromAgent(b: Base, t: (PhotoText & { zone_hint?: string | null }) | null, edit: PhotoEdit, first: boolean): Promise<PhotoSpec> {
+  const zone = await calmZone(await sharp(b.crop, { raw: { width: b.iw, height: b.ih, channels: 3 } }).png().toBuffer(), edit.text === 'top' || edit.text === 'bottom' ? edit.text : t?.zone_hint)
+  const mul = edit.size === 'bigger' ? 1.2 : edit.size === 'smaller' ? 0.85 : 1
+  const title = t?.title ?? ''
+  const blocks: SpecBlock[] = [
+    ...(first || t?.kicker ? [{ role: 'kicker' as const, text: t?.kicker ?? '', font: 'tenor' as const, size: 0.026, lh: 1.3, gold: [], cap: 'upper' as const }] : []),
+    { role: 'title', text: title, font: 'cormorant', size: Math.round((t?.small ? 0.05 : title.length > 34 ? 0.058 : 0.068) * 1.1 * mul * 10000) / 10000, lh: 1.18, gold: [], cap: null },
+  ]
+  const side = edit.width === 'wide' ? 0.035 : edit.width === 'narrow' ? 0.18 : 0.09
+  const spec: PhotoSpec = { v: 1, x: 0.5, y: zone.zone === 'top' ? 0.18 : 0.82, w: Math.round((1 - 2 * side) * 1000) / 1000, veil: null, color: zone.text, blocks, source: 'ai' }
+  if (!t?.title) return spec
+  // Центр блоку = центр тексту агента на файлі зараз: міряємо обидва шари й зсуваємо спеку на різницю
+  const [old, mine] = await Promise.all([textLayer(b.w, b.h, t, zone, b.pad, b.inset, { size: edit.size, width: edit.width }), specLayer(b.w, b.h, spec, b.pad, b.inset)])
+  const [ro, rm] = await Promise.all([rows(old, b.w, b.h), mine ? rows(mine, b.w, b.h) : null])
+  if (ro && rm) spec.y = Math.min(0.97, Math.max(0.03, Math.round((spec.y + ((ro.y0 + ro.y1) - (rm.y0 + rm.y1)) / 2 / (b.ih - 2 * b.inset)) * 10000) / 10000))
+  return spec
+}
+
+// Прев'ю для редактора (нічого не зберігає): той самий рендер, що файл у чаті, зменшений до 540 px.
+// Без spec — поточна спека фото (+ чистий кадр bg для миттєвого DOM-прев'ю і розміри кадру)
+export async function photoPreview(planId: string, mediaId: string, raw: unknown, withBg: boolean) {
+  const c = await slideCtx(planId, mediaId)
+  if (!c) return null
+  const b = await baseFor(c.path, c.platform, c.edit)
+  const spec = raw === undefined || raw === null ? await deriveSpec(planId, mediaId, b, c.edit) : cleanSpec(raw)
+  if (!spec) return null
+  const [jpg, bg] = await Promise.all([
+    compose(b, null, null, { ...c.edit, text: undefined }, c.wm, spec).then(small),
+    withBg ? compose(b, null, null, { ...c.edit, text: 'off' }, null, null).then(small) : null,
+  ])
+  return { jpg, ...(bg ? { bg } : {}), spec, frame: { w: b.w, h: b.h, pad: b.pad, inset: b.inset }, saved: c.spec !== null }
 }

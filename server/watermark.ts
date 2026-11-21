@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import satori from 'satori'
 import sharp, { type OverlayOptions } from 'sharp'
 import { getSettings } from './http.js'
-import { loadFonts } from './overlay.js'
+import { loadFonts } from './typo.js'
 
 // Водяні знаки Іри (план §17), шампань-золото, на кожне фото:
 // wm1 — горизонтальний «TRAVEL LAB ─✦─ PRIVATE TRAVEL CONCIERGE» (обкладинки / знайомство)
