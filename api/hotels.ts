@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { failSchema } from '../server/schema.js'
+import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
+import { notifyN8n } from '../server/review.js'
 
 type HotelRow = { hotel_id: string; name: string | null; country: string | null; status: string; paused_at: string | null }
 type PlanLite = { hotel_id: string; review_status: string; scheduled_for: string | null; published_at: string | null }
@@ -33,6 +35,7 @@ async function load() {
 }
 
 // GET → { hotels: [...] }
+// POST { action: 'upload_url' | 'add_photos', hotel_id, items? } → фото в бібліотеку готелю
 // POST { action: 'pause' | 'resume', hotel_id } → { ok, skipped? | restored?, hotels }
 // Пауза: готель → Inactive (WF-018 бере лише Active) + майбутні ненаписані слоти → skipped (SQL 027, tl_pause_hotel)
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -44,6 +47,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const b = (req.body ?? {}) as Record<string, unknown>
     const hotelId = String(b.hotel_id ?? '')
     if (!/^[A-Za-z0-9_-]{1,40}$/.test(hotelId)) return void res.status(400).json({ error: 'bad hotel_id' })
+    // Фото в бібліотеку готелю без поста: підписане посилання → файл у Storage → рядки media (агент сам опише через Vision)
+    if (b.action === 'upload_url' || b.action === 'add_photos') {
+      const h = await db().from('hotels').select('hotel_id').eq('hotel_id', hotelId).maybeSingle()
+      if (h.error) throw h.error
+      if (!h.data) return void res.status(404).json({ error: 'not_found' })
+      const scope = `hotel-${hotelId}`
+      if (b.action === 'upload_url') return void res.json({ ok: true, ...(await uploadUrl(scope)) })
+      const items = (Array.isArray(b.items) ? (b.items as { path?: string; width?: number; height?: number }[]) : []).slice(0, 10)
+      if (!items.length || items.some((i) => !isUploadPath(scope, String(i.path ?? '')))) return void res.status(400).json({ error: 'bad path' })
+      if (!(await Promise.all(items.map((i) => uploadExists(String(i.path))))).every(Boolean)) return void res.status(400).json({ error: 'файл не завантажився' })
+      const dim = (x: unknown) => (Number.isInteger(x) && (x as number) > 0 && (x as number) < 20000 ? (x as number) : null)
+      const ids: string[] = []
+      for (const i of items) ids.push(await insertOwnMedia({ hotel_id: hotelId, storage_path: String(i.path), width: dim(i.width), height: dim(i.height) }))
+      await Promise.all(ids.map((id) => notifyN8n({ media_id: id }, 'travellab-media-describe')))
+      return void res.json({ ok: true, added: ids.length, ...(await load()) })
+    }
     if (b.action !== 'pause' && b.action !== 'resume') return void res.status(400).json({ error: 'unknown action' })
     const r = await db().rpc(b.action === 'pause' ? 'tl_pause_hotel' : 'tl_resume_hotel', { p_hotel_id: hotelId })
     if (r.error) throw r.error

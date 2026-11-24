@@ -30,18 +30,19 @@ export async function hotelPhotoCount(hotelId: string | null): Promise<number> {
 
 // ───────────── Своє фото (фаза 6b) ─────────────
 
-const UPLOAD_RE = (planId: string) => new RegExp(`^uploads/${planId}/[a-z0-9-]{8,40}\\.jpg$`)
+// scope = id плану (фото до поста) або `hotel-<hotel_id>` (фото в бібліотеку готелю)
+const UPLOAD_RE = (scope: string) => new RegExp(`^uploads/${scope}/[a-z0-9-]{8,40}\\.jpg$`)
 
 // Підписане посилання: апка вантажить файл прямо в Storage (повз ліміт тіла Vercel ~4.5 МБ)
-export async function uploadUrl(planId: string) {
-  const path = `uploads/${planId}/${crypto.randomUUID()}.jpg`
+export async function uploadUrl(scope: string) {
+  const path = `uploads/${scope}/${crypto.randomUUID()}.jpg`
   const r = await db().storage.from(BUCKET).createSignedUploadUrl(path)
   if (r.error) throw r.error
   return { path, signed_url: r.data.signedUrl }
 }
 
-export function isUploadPath(planId: string, path: string) {
-  return UPLOAD_RE(planId).test(path)
+export function isUploadPath(scope: string, path: string) {
+  return UPLOAD_RE(scope).test(path)
 }
 
 export async function uploadExists(path: string): Promise<boolean> {

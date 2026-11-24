@@ -38,3 +38,42 @@ export async function putToSignedUrl(signedUrl: string, blob: Blob) {
   const r = await fetch(signedUrl, { method: 'PUT', body: form, headers: { 'x-upsert': 'false' } })
   if (!r.ok) throw new Error('Фото не завантажилось — перевір інтернет і спробуй ще раз')
 }
+
+// Кілька фото підряд: готуємо по черзі (телефон не душимо паралеллю). Що не відкрилось — рахуємо окремо
+export async function prepareAll(files: File[]): Promise<{ ok: PreparedPhoto[]; failed: number; lastError: string }> {
+  const ok: PreparedPhoto[] = []
+  let failed = 0
+  let lastError = ''
+  for (const f of files) {
+    try {
+      ok.push(await preparePhoto(f))
+    } catch (e) {
+      failed++
+      lastError = e instanceof Error ? e.message : ''
+    }
+  }
+  return { ok, failed, lastError }
+}
+
+// Вантажимо по одному: кожне — своє підписане посилання. Повертає лише ті, що дійшли
+export async function uploadSequential(
+  photos: PreparedPhoto[],
+  getUrl: () => Promise<{ path: string; signed_url?: string }>,
+  skipPut: boolean,
+  onProgress: (done: number, total: number) => void,
+): Promise<{ items: { path: string; width: number; height: number; preview: string }[]; failed: number }> {
+  const items: { path: string; width: number; height: number; preview: string }[] = []
+  let failed = 0
+  onProgress(0, photos.length)
+  for (const p of photos) {
+    try {
+      const u = await getUrl()
+      if (!skipPut) await putToSignedUrl(u.signed_url ?? '', p.blob)
+      items.push({ path: u.path, width: p.width, height: p.height, preview: p.preview })
+    } catch {
+      failed++
+    }
+    onProgress(items.length + failed, photos.length)
+  }
+  return { items, failed }
+}

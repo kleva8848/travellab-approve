@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, getPost, hotelAction, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
-import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
+import { prepareAll, uploadSequential, type PreparedPhoto } from '../lib/image'
 import type { PhotoSpec, StyleKey } from '../lib/photoSpec'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
@@ -63,7 +63,8 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   const [toast, setToast] = useState('')
   const [slide, setSlide] = useState(0)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [own, setOwn] = useState<PreparedPhoto | null>(null)
+  const [own, setOwn] = useState<PreparedPhoto[]>([])
+  const [progress, setProgress] = useState('')
   const [ownMode, setOwnMode] = useState<'replace' | 'add'>('add')
   const [uploading, setUploading] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
@@ -225,39 +226,58 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
     await load()
   }
 
-  const pickOwn = async (file: File | undefined) => {
-    if (!file) return
-    try {
-      const prepared = await preparePhoto(file)
-      setOwn(prepared)
-      setOwnMode((shown.media_ids ?? []).length ? 'replace' : 'add')
-    } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Не вдалося відкрити фото')
-    }
+  // Можна обрати кілька фото одразу (до 10 у каруселі разом із вже доданими)
+  const pickOwn = async (list: FileList | null) => {
+    const left = Math.max(0, 10 - (shown.media_ids ?? []).length)
+    const files = Array.from(list ?? [])
+    if (!files.length) return
+    if (!left) return setToast('У каруселі вже 10 фото — максимум')
+    setProgress('Готую фото…')
+    const r = await prepareAll(files.slice(0, left))
+    setProgress('')
+    if (files.length > left) setToast(`Взяла перші ${left} — більше 10 у каруселі не буває`)
+    else if (r.failed) setToast(r.ok.length ? `${r.failed} фото не відкрилось — решту взяла` : r.lastError || 'Не вдалося відкрити фото')
+    if (!r.ok.length) return
+    setOwn((old) => [...old, ...r.ok].slice(0, left))
+    setOwnMode((shown.media_ids ?? []).length && r.ok.length === 1 ? 'replace' : 'add')
   }
 
   const cancelOwn = () => {
-    if (own) URL.revokeObjectURL(own.preview)
-    setOwn(null)
+    own.forEach((p) => URL.revokeObjectURL(p.preview))
+    setOwn([])
   }
 
-  // Своє фото: підписане посилання → файл прямо в Storage → новий рядок media + версія поста
+  const dropOwn = (i: number) => {
+    URL.revokeObjectURL(own[i].preview)
+    setOwn((o) => o.filter((_, k) => k !== i))
+  }
+
+  // Свої фото: кожне — підписане посилання й файл прямо в Storage (по черзі), потім ОДНА нова версія поста.
+  // Текст і статус поста не змінюються — тож працює і на затвердженому
   const uploadOwn = async () => {
-    if (!own) return
+    if (!own.length) return
     setUploading(true)
     try {
-      const u = await reviewAction(post.plan.id, post.plan.version_no, 'upload_url')
-      if (!isDemo) await putToSignedUrl(u.signed_url ?? '', own.blob)
-      const r = await act('add_photo', { path: u.path, mode: ownMode, slide_idx: slide, width: own.width, height: own.height, preview: own.preview })
+      const { items, failed } = await uploadSequential(own, async () => {
+        const u = await reviewAction(post.plan.id, post.plan.version_no, 'upload_url')
+        return { path: u.path ?? '', signed_url: u.signed_url }
+      }, isDemo, (d, t) => setProgress(t > 1 ? `Завантажую ${Math.min(d + 1, t)} з ${t}…` : ''))
+      if (!items.length) throw new Error('Фото не завантажились — перевір інтернет і спробуй ще раз')
+      const r = await act('add_photo', { items, mode: ownMode, slide_idx: slide })
       if (!r) return
       haptic('success')
-      setToast('Фото додано — зараз оброблю і покажу готове')
-      setOwn(null)
+      setToast(failed
+        ? `Додала ${items.length}, ${failed} не завантажилось — спробуй ті ще раз`
+        : items.length > 1 ? `Додала ${items.length} фото — тапни «✎ Текст на фото» на кожному` : 'Фото додано — зараз оброблю і покажу готове')
+      own.forEach((p) => URL.revokeObjectURL(p.preview))
+      setOwn([])
       await load()
+      onChanged()
     } catch (e) {
       haptic('error')
       setToast(e instanceof Error ? e.message : 'Фото не завантажилось')
     } finally {
+      setProgress('')
       setUploading(false)
     }
   }
@@ -515,13 +535,15 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                     </div>
                   </>
                 )}
-                {view === 'new' && !approved && (
+                {view === 'new' && !published && (
                   <div className="mt-2.5 flex gap-2">
-                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => void swapPhoto()}>
-                      Інша фотка{shown.media_ids.length > 1 ? ` (${slide + 1})` : ''}
-                    </button>
-                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => fileRef.current?.click()}>
-                      + Своє фото
+                    {!approved && (
+                      <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading} onClick={() => void swapPhoto()}>
+                        Інша фотка{shown.media_ids.length > 1 ? ` (${slide + 1})` : ''}
+                      </button>
+                    )}
+                    <button className="btn sec" style={{ height: 40, fontSize: 14 }} disabled={busy || uploading || !!progress} onClick={() => fileRef.current?.click()}>
+                      {progress || '+ Свої фото'}
                     </button>
                   </div>
                 )}
@@ -534,20 +556,31 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                     ? 'Агент підставить їх, щойно відкриєш пост наступного разу. Або додай своє.'
                     : 'Додай своє фото з телефону — агент сам допише до нього опис.'}
                 </div>
-                {!approved && (
-                  <button className="btn mt-3" style={{ height: 42, fontSize: 15 }} disabled={uploading} onClick={() => fileRef.current?.click()}>
-                    + Своє фото
+                {!published && (
+                  <button className="btn mt-3" style={{ height: 42, fontSize: 15 }} disabled={uploading || !!progress} onClick={() => fileRef.current?.click()}>
+                    {progress || '+ Свої фото'}
                   </button>
                 )}
               </div>
             ) : null}
 
-            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { void pickOwn(e.target.files?.[0]); e.target.value = '' }} />
-            {own && (
+            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void pickOwn(e.target.files); e.target.value = '' }} />
+            {own.length > 0 && (
               <div className="card mb-3">
-                <div className="mb-2 font-semibold">Твоє фото</div>
-                <img src={own.preview} alt="" className="w-full rounded" style={{ maxHeight: 320, objectFit: 'contain', background: 'var(--bg2)' }} />
-                {(shown.media_ids ?? []).length > 0 && (
+                <div className="mb-2 font-semibold">{own.length > 1 ? `Твої фото · ${own.length}` : 'Твоє фото'}</div>
+                {own.length === 1 ? (
+                  <img src={own[0].preview} alt="" className="w-full rounded" style={{ maxHeight: 320, objectFit: 'contain', background: 'var(--bg2)' }} />
+                ) : (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {own.map((p, i) => (
+                      <div key={p.preview} className="relative">
+                        <img src={p.preview} alt="" className="w-full rounded" style={{ aspectRatio: '1', objectFit: 'cover', background: 'var(--bg2)' }} />
+                        <button aria-label="Прибрати фото" disabled={uploading} onClick={() => dropOwn(i)} className="absolute right-1 top-1 h-6 w-6 rounded-full text-[13px]" style={{ background: 'rgba(0,0,0,.55)', color: '#fff' }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {own.length === 1 && (shown.media_ids ?? []).length > 0 && (
                   <div className="seg mt-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
                     <button className={ownMode === 'replace' ? 'on' : ''} onClick={() => setOwnMode('replace')}>
                       Замінити{shown.media_ids.length > 1 ? ` фото ${slide + 1}` : ''}
@@ -555,9 +588,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
                     <button className={ownMode === 'add' ? 'on' : ''} onClick={() => setOwnMode('add')}>Додати ще одне</button>
                   </div>
                 )}
+                {own.length > 1 && <div className="mt-2 text-[13px]" style={{ color: 'var(--hint)' }}>Усі підуть у карусель одним оновленням. Текст на кожному фото напишеш одразу після.</div>}
                 <div className="mt-3 flex gap-2">
                   <button className="btn sec" disabled={uploading} onClick={cancelOwn}>Скасувати</button>
-                  <button className="btn" disabled={uploading} onClick={() => void uploadOwn()}>{uploading ? 'Завантажую…' : 'Завантажити'}</button>
+                  <button className="btn" disabled={uploading} onClick={() => void uploadOwn()}>{uploading ? (progress || 'Завантажую…') : own.length > 1 ? `Завантажити ${own.length}` : 'Завантажити'}</button>
                 </div>
               </div>
             )}

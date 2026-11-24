@@ -23,6 +23,7 @@ type Body = {
   version_id?: string
   slide_idx?: number
   path?: string
+  items?: { path?: string; width?: number; height?: number }[]
   mode?: 'replace' | 'add'
   width?: number
   height?: number
@@ -312,10 +313,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return void res.json({ ok: true, ...(await uploadUrl(b.id)) })
     }
 
+    // Одне фото (path) або кілька за раз (items) — завжди ОДНА нова версія. Текст і статус поста не чіпаємо:
+    // працює і на затвердженому пості (лишається затвердженим, текст той самий)
     if (b.action === 'add_photo') {
-      const path = String(b.path ?? '')
-      if (!isUploadPath(b.id, path)) return void res.status(400).json({ error: 'bad path' })
-      if (!(await uploadExists(path))) return void res.status(400).json({ error: 'файл не завантажився' })
+      const items = (Array.isArray(b.items) && b.items.length ? b.items : [{ path: b.path, width: b.width, height: b.height }]).slice(0, 10)
+      if (items.some((i) => !isUploadPath(String(b.id), String(i.path ?? '')))) return void res.status(400).json({ error: 'bad path' })
+      if (!(await Promise.all(items.map((i) => uploadExists(String(i.path))))).every(Boolean)) return void res.status(400).json({ error: 'файл не завантажився' })
       const p = await db().from('content_plan').select('hotel_id, review_status, version_no, current_version_id, published_at').eq('id', b.id).maybeSingle()
       if (p.error) throw p.error
       if (!p.data || p.data.version_no !== expected || p.data.published_at || p.data.review_status === 'regenerating') return void conflict()
@@ -324,11 +327,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : { data: { media_ids: [] as string[] }, error: null }
       if (v.error) throw v.error
       const dim = (x: unknown) => (Number.isInteger(x) && (x as number) > 0 && (x as number) < 20000 ? (x as number) : null)
-      const mediaId = await insertOwnMedia({ hotel_id: p.data.hotel_id, storage_path: path, width: dim(b.width), height: dim(b.height) })
+      const newIds: string[] = []
+      for (const i of items) newIds.push(await insertOwnMedia({ hotel_id: p.data.hotel_id, storage_path: String(i.path), width: dim(i.width), height: dim(i.height) }))
       const ids = [...((v.data?.media_ids as string[] | undefined) ?? [])]
       const slide = Number(b.slide_idx)
-      if (b.mode === 'replace' && Number.isInteger(slide) && slide >= 0 && slide < ids.length) ids[slide] = mediaId
-      else ids.push(mediaId)
+      if (b.mode === 'replace' && newIds.length === 1 && Number.isInteger(slide) && slide >= 0 && slide < ids.length) ids[slide] = newIds[0]
+      else ids.push(...newIds)
       const r = await db().rpc('tl_add_version', {
         p_content_plan_id: b.id, p_text: null, p_trigger: 'own_photo', p_expected_version_no: expected,
         p_media_ids: ids.slice(0, 10), p_prompt_version: 'own-photo', p_review_status: p.data.review_status,
@@ -338,8 +342,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         throw r.error
       }
       // Опис і теги — у фоні (n8n Vision), апці не чекати
-      await notifyN8n({ media_id: mediaId }, 'travellab-media-describe')
-      return void res.json({ ok: true, media_id: mediaId })
+      await Promise.all(newIds.map((id) => notifyN8n({ media_id: id }, 'travellab-media-describe')))
+      return void res.json({ ok: true, media_id: newIds[0], added: newIds.length })
     }
 
     // Ручна публікація: Іра виклала пост сама → позначка в календарі (і навпаки, якщо помилилась)

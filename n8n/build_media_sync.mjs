@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const CFG = {
   supabase: { id: 'oj5JHcgmtpi0FPHx', name: 'Travel Lab Test' },
-  drive: { id: 'jl5ptJX1kMF34ZoI', name: 'v.clevtsov drive' },
+  drive: { id: 'cjY7BSZAIddR6oLs', name: 'v.clevtsov drive' },
   webhookAuth: { id: 'mO62EQmnKHlk93GW', name: 'TravelLab Approve Webhook' },
   batch: 25,
   size: 1600,

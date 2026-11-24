@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { ApiError, getHotels, hotelAction, type HotelItem } from '../lib/api'
-import { confirmAction, haptic } from '../lib/tg'
+import { useEffect, useRef, useState } from 'react'
+import { ApiError, getHotels, hotelAction, hotelAddPhotos, hotelUploadUrl, type HotelItem } from '../lib/api'
+import { prepareAll, uploadSequential } from '../lib/image'
+import { confirmAction, haptic, isDemo } from '../lib/tg'
 import { Spinner } from './ui'
 
 // Вкладка «Готелі»: тумблер Активний / На паузі. Готель на паузі не потрапляє в план тижня,
@@ -12,6 +13,9 @@ export function HotelsScreen() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState('')
+  const [upl, setUpl] = useState<{ id: string; text: string } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const target = useRef('')
 
   useEffect(() => {
     getHotels()
@@ -41,6 +45,31 @@ export function HotelsScreen() {
     }
   }
 
+  // Фото в бібліотеку готелю без поста: до 10 за раз, вантажаться по черзі, опис агент дописує сам
+  const addPhotos = async (list: FileList | null) => {
+    const files = Array.from(list ?? []).slice(0, 10)
+    const id = target.current
+    if (!files.length || !id || upl) return
+    setUpl({ id, text: 'Готую фото…' })
+    try {
+      const prep = await prepareAll(files)
+      if (!prep.ok.length) throw new Error(prep.lastError || 'Не вдалося відкрити фото')
+      const { items, failed } = await uploadSequential(prep.ok, () => hotelUploadUrl(id), isDemo, (d, t) => setUpl({ id, text: `Завантажую ${Math.min(d + 1, t)} з ${t}…` }))
+      if (!items.length) throw new Error('Фото не завантажились — перевір інтернет і спробуй ще раз')
+      const r = await hotelAddPhotos(id, items)
+      prep.ok.forEach((p) => URL.revokeObjectURL(p.preview))
+      setHotels(r.hotels)
+      haptic('success')
+      const bad = failed + prep.failed
+      say(bad ? `Додала ${items.length}, ${bad} не вийшло — спробуй ті ще раз` : `Додала ${items.length} фото в бібліотеку готелю`, 3500)
+    } catch (e) {
+      haptic('error')
+      say(e instanceof Error ? e.message : String(e), 3500)
+    } finally {
+      setUpl(null)
+    }
+  }
+
   const card = (h: HotelItem) => (
     <div key={h.hotel_id} className="card mt-2.5" style={{ opacity: h.paused ? 0.75 : 1 }}>
       <b className="block text-[15.5px]">{h.name}</b>
@@ -55,6 +84,9 @@ export function HotelsScreen() {
         <button className={!h.paused ? 'on' : ''} disabled={busy === h.hotel_id} onClick={() => void set(h, false)}>Активний</button>
         <button className={h.paused ? 'on' : ''} disabled={busy === h.hotel_id} onClick={() => void set(h, true)}>На паузі</button>
       </div>
+      <button className="btn sec mt-2.5" style={{ height: 40, fontSize: 14 }} disabled={!!upl} onClick={() => { target.current = h.hotel_id; fileRef.current?.click() }}>
+        {upl?.id === h.hotel_id ? upl.text : '+ Фото в бібліотеку'}
+      </button>
     </div>
   )
 
@@ -84,6 +116,7 @@ export function HotelsScreen() {
           )}
         </>
       )}
+      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void addPhotos(e.target.files); e.target.value = '' }} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   )

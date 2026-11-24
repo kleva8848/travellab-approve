@@ -133,8 +133,9 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm; spec?: PhotoSpec | null; style?: StyleKey }
-type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
+export type PhotoItem = { path: string; width: number; height: number; preview?: string }
+type ActionExtra = { items?: PhotoItem[]; reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm; spec?: PhotoSpec | null; style?: StyleKey }
+type ActionResult = { ok: true; added?: number; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 // «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
 export type StoryInfo = { link: string; hint: string; queued: number }
@@ -246,6 +247,22 @@ export async function hotelAction(action: 'pause' | 'resume', hotel_id: string):
     return { hotels: structuredClone(demoHotels), ok: true, ...(action === 'pause' ? { skipped: n } : { restored: 0 }) }
   }
   return call('/api/hotels', { method: 'POST', body: JSON.stringify({ action, hotel_id }) })
+}
+
+// Фото в бібліотеку готелю без поста: посилання для завантаження → потім один виклик, що створює рядки media
+export async function hotelUploadUrl(hotel_id: string): Promise<{ path: string; signed_url?: string }> {
+  if (isDemo) return { path: `uploads/hotel-${hotel_id}/demo.jpg`, signed_url: '' }
+  return call('/api/hotels', { method: 'POST', body: JSON.stringify({ action: 'upload_url', hotel_id }) })
+}
+
+export async function hotelAddPhotos(hotel_id: string, items: PhotoItem[]): Promise<HotelsResult & { added?: number }> {
+  if (isDemo) {
+    await wait(400)
+    const h = demoHotels.find((x) => x.hotel_id === hotel_id)
+    if (h) h.photos += items.length
+    return { hotels: structuredClone(demoHotels), ok: true, added: items.length }
+  }
+  return call('/api/hotels', { method: 'POST', body: JSON.stringify({ action: 'add_photos', hotel_id, items: items.map(({ path, width, height }) => ({ path, width, height })) }) })
 }
 
 // ───────────── Фаза 7: правила з правок Іри (лише адмін) ─────────────
@@ -622,15 +639,19 @@ const demo = (() => {
       if (action === 'send_to_chat') return { ok: true as const, photos: p.versions.at(-1)?.media_ids.length ?? 0 }
       if (action === 'add_photo') {
         const prev = p.versions.at(-1)!
-        const mid = `U-${p.versions.length + 1}`
-        p.media[mid] = { media_id: mid, url: extra.preview ?? null, description: 'Твоє фото', width: extra.width ?? null, height: extra.height ?? null }
+        const list = extra.items?.length ? extra.items : [{ path: '', width: extra.width ?? 0, height: extra.height ?? 0, preview: extra.preview }]
         const ids = [...prev.media_ids]
-        if (extra.mode === 'replace' && extra.slide_idx !== undefined && extra.slide_idx < ids.length) ids[extra.slide_idx] = mid
-        else ids.push(mid)
+        const made = list.map((it, k) => {
+          const mid = `U-${p.versions.length + 1}-${k}`
+          p.media[mid] = { media_id: mid, url: it.preview ?? null, description: 'Твоє фото', width: it.width || null, height: it.height || null }
+          return mid
+        })
+        if (extra.mode === 'replace' && made.length === 1 && extra.slide_idx !== undefined && extra.slide_idx < ids.length) ids[extra.slide_idx] = made[0]
+        else ids.push(...made)
         const n = p.versions.length + 1
-        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'own_photo', comment_id: null, media_ids: ids })
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'own_photo', comment_id: null, media_ids: ids.slice(0, 10) })
         Object.assign(p.plan, { version_no: n, current_version_id: `${id}-v${n}` })
-        return { ok: true as const, media_id: mid }
+        return { ok: true as const, media_id: made[0], added: made.length }
       }
       if (action === 'swap_photo') {
         const prev = p.versions.at(-1)!
