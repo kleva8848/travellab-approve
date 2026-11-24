@@ -74,6 +74,15 @@ const rules = all('Supabase - Get Rules');
 const CUTOVER = new Date('2026-09-19T12:00:00Z');
 const legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
 const goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));
+// Сет 7 (24.11): що вже писали про готель → recent_about_hotel (генератор: «не повторюй»). Плани з hotel_id і версії за 90 днів
+const hotelPlans = all('Supabase - Get Hotel Plans');
+const hotelVers = all('Supabase - Get Hotel Versions').filter(v => v.text);
+const lastVerOf = {};
+for (const v of hotelVers) if (!lastVerOf[v.content_plan_id] || Number(v.version_no) > Number(lastVerOf[v.content_plan_id].version_no)) lastVerOf[v.content_plan_id] = v;
+const recentAboutHotel = (p) => !p.hotel_id ? [] : hotelPlans
+  .filter(x => x.hotel_id === p.hotel_id && x.id !== p.id && lastVerOf[x.id])
+  .sort((a, b) => String(b.scheduled_for || b.created_at).localeCompare(String(a.scheduled_for || a.created_at)))
+  .slice(0, 3).map(x => { const v = lastVerOf[x.id]; return { key_idea: v.key_idea || '', lead: String(v.text).split('\\n').map(l => l.trim()).filter(Boolean).slice(0, 2).join(' ').slice(0, 260) }; });
 const goldenAll = all('Supabase - Get Golden Versions').filter(v => v.text).sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)));
 
 // Хто про що вже питав: ключ «про що + поле» (готель/тур спільні для всіх постів, тема — на пост)
@@ -178,9 +187,11 @@ for (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.
     title: hotel.name, destination: [hotel.country, hotel.region].filter(Boolean).join(', '), segment: (hotel.tags || []).includes('family') ? 'family' : '',
     dates_example: p._dates || '', price_range: hotel.price_from_night ? 'від ' + hotel.price_from_night + ' ' + (hotel.price_currency || 'USD') + ' за ніч' : String(hotel.price_from || ''), highlights: ''
   };
+  // few-shot (Сет 7): без старих Notion-постів; ≤ 2 золотих тієї ж платформи і НЕ про цей самий готель (щоб не копіювати його кут)
   const golden = goldenAll
-    .filter(v => v.content_plan_id !== p.id && (goldenPlans[v.content_plan_id] || {}).platform === p.platform)
-    .slice(0, 3).map(v => ({ text: v.text }));
+    .filter(v => v.content_plan_id !== p.id && (goldenPlans[v.content_plan_id] || {}).platform === p.platform
+      && !(p.hotel_id && (goldenPlans[v.content_plan_id] || {}).hotel_id === p.hotel_id))
+    .slice(0, 2).map(v => ({ text: v.text }));
   const myRules = pickIraRules(rules, p);
   const note = topic ? 'Тема від Іри: ' + topic : (p.note || '');
   gen.push({
@@ -190,12 +201,13 @@ for (const p of plans.filter(p => eligible(p) && inWindow(p)).sort((a, b) => (a.
       slot: { day: p.day, platform: p.platform, slot_type: p.slot_type, pillar: p.pillar, note },
       week_parity: DateTime.fromISO(p.scheduled_for).weekNumber % 2 === 0 ? 'even' : 'odd',
       tour: genTour, hotel, story,
-      fewshot: [...golden, ...legacy],
+      fewshot: golden,
+      recent_about_hotel: recentAboutHotel(p),
       rules: myRules,
       passthrough: { content_plan_id: p.id }
     }
   });
-  report.push({ ...row, decision: 'generate', golden_examples: golden.length, rules: myRules.length, photos: p.hotel_id ? photoCount(p) : 0 });
+  report.push({ ...row, decision: 'generate', golden_examples: golden.length, recent_about_hotel: recentAboutHotel(p).length, rules: myRules.length, photos: p.hotel_id ? photoCount(p) : 0 });
 }
 
 const supabaseUrl = String(s.supabase_url || '').replace(/\\/$/, '');
@@ -317,6 +329,11 @@ const nodes = [
   getAll('Supabase - Get Golden Plans', 1980, 'content_plan',
     "=id=in.({{ $('Supabase - Get Golden Versions').all().map(i => i.json.content_plan_id).filter(Boolean).join(',') || '00000000-0000-0000-0000-000000000000' }})",
     { onError: 'continueRegularOutput' }),
+  getAll('Supabase - Get Hotel Plans', 2200, 'content_plan',
+    "=hotel_id=not.is.null&current_version_id=not.is.null&review_status=not.in.(skipped,backlog,failed)&created_at=gte.{{ $now.minus({ days: 90 }).toFormat('yyyy-MM-dd') }}",
+    { onError: 'continueRegularOutput', y: 220 }),
+  getAll('Supabase - Get Hotel Versions', 2420, 'post_versions',
+    "=created_at=gte.{{ $now.minus({ days: 90 }).toFormat('yyyy-MM-dd') }}", { onError: 'continueRegularOutput', y: 220 }),
   getAll('Supabase - Get Rules', 2200, 'ira_rules', 'status=eq.active', { onError: 'continueRegularOutput' }),
   node('Code - Pre-Gate', 'n8n-nodes-base.code', 2, 2420, { jsCode: gate }, { executeOnce: true }),
   ifNode('IF - Dry Run?', 2640, '={{ $json.dry_run }}', 'true'),
@@ -370,7 +387,7 @@ const connections = {
   'Webhook - Manual Run': to('Supabase - Get Settings'),
   ...chain('Supabase - Get Settings', 'Supabase - Get Plans', 'Supabase - Get Hotels', 'Supabase - Get Tours', 'Supabase - Get Stories',
     'Supabase - Get Data Requests', 'Supabase - Get Approved Posts', 'Supabase - Get Golden Versions', 'Supabase - Get Golden Plans',
-    'Supabase - Get Rules', 'Code - Pre-Gate', 'IF - Dry Run?'),
+    'Supabase - Get Rules', 'Supabase - Get Hotel Plans', 'Supabase - Get Hotel Versions', 'Code - Pre-Gate', 'IF - Dry Run?'),
   'IF - Dry Run?': branches('Code - Dry Run Report', 'HTTP - Insert Data Requests'),
   ...chain('HTTP - Insert Data Requests', 'HTTP - Mark Needs Data', 'Code - Slots To Generate', 'Loop - Slots'),
   // splitInBatches v3: output 0 = done, output 1 = наступний слот

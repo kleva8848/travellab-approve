@@ -505,14 +505,14 @@ const CUTOVER = new Date('2026-09-19T12:00:00Z');
 const legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
 const goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));
 const golden = all('Supabase - Get Golden Versions').filter(v => v.text).sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at)))
-  .filter(v => (goldenPlans[v.content_plan_id] || {}).platform === 'telegram').slice(0, 3).map(v => ({ text: v.text }));
+  .filter(v => (goldenPlans[v.content_plan_id] || {}).platform === 'telegram').slice(0, 2).map(v => ({ text: v.text }));
 const rules = pickIraRules(all('Supabase - Get Rules'), plan);
 return [{ json: applyIraRules({
   mode: 'initial',
   slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar, note: '' },
   week_parity: DateTime.fromISO(plan.scheduled_for).weekNumber % 2 === 0 ? 'even' : 'odd',
   tour: null, hotel: plan.hotel_id ? hotels[plan.hotel_id] || null : null, story: r.story,
-  fewshot: [...golden, ...legacy],
+  fewshot: golden, // Сет 7: без старих Notion-постів, ≤ 2
   passthrough: { content_plan_id: plan.id }
 }, rules) }];`
 

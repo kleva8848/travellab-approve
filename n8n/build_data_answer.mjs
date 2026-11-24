@@ -118,8 +118,9 @@ if (isOffer && hotel && !tour) genTour = {
 };
 
 const goldenPlans = Object.fromEntries(all('Supabase - Get Golden Plans').map(p => [p.id, p]));
-const golden = all('Supabase - Get Golden Versions').filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform)
-  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at))).slice(0, 3).map(v => ({ text: v.text }));
+const golden = all('Supabase - Get Golden Versions').filter(v => v.text && v.content_plan_id !== plan.id && (goldenPlans[v.content_plan_id] || {}).platform === plan.platform
+    && !(plan.hotel_id && (goldenPlans[v.content_plan_id] || {}).hotel_id === plan.hotel_id))  // Сет 7: не про той самий готель
+  .sort((a, b) => String(b.golden_at).localeCompare(String(a.golden_at))).slice(0, 2).map(v => ({ text: v.text }));
 const CUTOVER = new Date('2026-09-19T12:00:00Z');
 const legacy = all('Supabase - Get Approved Posts').filter(p => p.content && p.created_at && new Date(p.created_at) >= CUTOVER);
 const rules = pickIraRules(all('Supabase - Get Rules'), plan);
@@ -147,7 +148,7 @@ return [{ json: {
     slot: { day: plan.day, platform: plan.platform, slot_type: plan.slot_type, pillar: plan.pillar, note },
     week_parity: dt.weekNumber % 2 === 0 ? 'even' : 'odd',
     tour: genTour, hotel, story,
-    fewshot: [...golden, ...legacy],
+    fewshot: golden, // Сет 7: без старих Notion-постів, ≤ 2
     rules,
     old_text: hasText ? cur.text : '',
     ira_feedback: hasText ? 'Іра відповіла на питання агента — врахуй ці факти в пості:\\n' + qa : '',

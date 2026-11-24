@@ -68,6 +68,8 @@ const rows = (n) => $(n).all().map(i => i.json).filter(j => Object.keys(j).lengt
 const tours = rows('Supabase - Get Ready Tours');
 const hotels = rows('Supabase - Get Ready Hotels');
 const stories = rows('Supabase - Get New Stories');
+// Сет 7 (24.11): останні 21 день плану (content_plan з hotel_id) — для скорингу готелів. Вузол з onError=continue: {error} без hotel_id відкидаємо
+const recent = rows('Supabase - Get Recent Plans').filter(r => r.hotel_id && r.scheduled_for);
 
 // ── Аудиторії з апки (SQL 017). Вузли з onError=continue: при помилці приходить {error} без id — відкидаємо
 const escRe = (w) => w.replace(/[.*+?^$\{}()|[\]\\]/g, '\\$&');
@@ -109,6 +111,30 @@ const MONTHS = ['січень', 'лютий', 'березень', 'квітен�
 const m0 = weekStart.getUTCMonth();
 const HORIZON = MONTHS[(m0 + 1) % 12] + '–' + MONTHS[(m0 + 3) % 12];
 
+// ── Сет 7: скоринг готелів замість rotate(). Джерело — останні 21 день content_plan (лише ДО цього тижня: повторний запуск не «з'їдає» власні рядки).
+// Використання = слот не skipped (пропущений слот готель не показав). Бал = тижні від останнього використання (≤ 4) − частка пропусків
+// (Іра часто скіпає готель → нижче; паузу готелю «готель на паузі» не рахуємо) + 0.5, якщо пасує портрету тижня.
+// Охолодження: готель може повернутись не раніше ніж через 2 тижні після того, як був у плані (тиждень W → W+2). Малий пул → слот без готелю, а не повтор.
+const DAY_MS = 86400000, COOLDOWN_WEEKS = 2, WEEKS_CAP = 4;
+const lastUsed = {}, nSkip = {}, nAll = {};
+for (const r of recent) {
+  if (r.scheduled_for >= WEEK_START) continue;
+  const id = r.hotel_id;
+  if (r.review_status === 'skipped') {
+    if (/на паузі/i.test(String(r.review_note || '') + String(r.skip_reason || ''))) continue;
+    nSkip[id] = (nSkip[id] || 0) + 1; nAll[id] = (nAll[id] || 0) + 1;
+  } else {
+    nAll[id] = (nAll[id] || 0) + 1;
+    if (!lastUsed[id] || r.scheduled_for > lastUsed[id]) lastUsed[id] = r.scheduled_for;
+  }
+}
+// різниця в ЦІЛИХ тижнях (понеділок до понеділка) — щоб бал не залежав від дня тижня, у який готель був у плані
+const monOf = (ymdStr) => { const d = new Date(ymdStr + 'T00:00:00Z'); return d.getTime() - ((d.getUTCDay() + 6) % 7) * DAY_MS; };
+const weeksSince = (id) => lastUsed[id] ? Math.round((weekStart.getTime() - monOf(lastUsed[id])) / DAY_MS / 7) : WEEKS_CAP;
+const cooled = (h) => weeksSince(h.hotel_id) >= COOLDOWN_WEEKS;
+const skipShare = (id) => nAll[id] ? (nSkip[id] || 0) / nAll[id] : 0;
+const baseScore = (h) => Math.min(WEEKS_CAP, weeksSince(h.hotel_id)) - skipShare(h.hotel_id);
+
 // ── Офер: лише найстаріший готовий тур (≤ OFFERS_PER_WEEK). Решта турів чекає наступних тижнів.
 const offerTours = tours.slice(0, Math.max(OFFERS_PER_WEEK.telegram, OFFERS_PER_WEEK.instagram));
 const offerTour = offerTours[0] || null;
@@ -118,8 +144,11 @@ if (stories[0] && stories[0].hotel_id) used.add(stories[0].hotel_id);
 
 const byId = (a, b) => String(a.hotel_id).localeCompare(String(b.hotel_id));
 const rotate = (arr) => arr.length ? arr.slice(WEEK % arr.length).concat(arr.slice(0, WEEK % arr.length)) : arr;
-// Немає туру → готель з ціною «від … за ніч» (колонки може не бути — тоді просто не офер)
-const priceHotel = offerTour ? null : (rotate(hotels.filter(h => h.hotel_id && Number(h.price_from_night) > 0).sort(byId))[0] || null);
+// Рейтинг: найвищий бал першим; рівні бали (напр. усі «не використовувались») — у порядку ротації за тижнем, як було до Сету 7
+const ranked = (arr, bonus) => rotate(arr.slice().sort(byId)).map((h, i) => ({ h, i, sc: baseScore(h) + (bonus ? bonus(h) : 0) }))
+  .sort((a, b) => (b.sc - a.sc) || (a.i - b.i)).map(x => x.h);
+// Немає туру → готель з ціною «від … за ніч» (колонки може не бути — тоді просто не офер); теж за скорингом і з охолодженням
+const priceHotel = offerTour ? null : (ranked(hotels.filter(h => h.hotel_id && Number(h.price_from_night) > 0 && cooled(h)))[0] || null);
 if (priceHotel) used.add(priceHotel.hotel_id);
 
 // ── «Незвичайні готелі»: детермінований критерій
@@ -132,17 +161,19 @@ const UNUSUAL_TEXT = /перш(ий|а|е)\s|єдин|підводн|над\s+(�
 const ready = (h) => !!(h && h.hotel_id && String(h.key_detail || '').trim() && String(h.who_for || '').trim());
 const tagged = (h) => (Array.isArray(h.tags) ? h.tags : []).some(t => UNUSUAL_TAG.test(String(t)));
 const marked = (h) => UNUSUAL_TEXT.test(String(h.key_detail || '')) || UNUSUAL_TEXT.test(String(h.type || ''));
-const free = hotels.filter(h => ready(h) && !used.has(h.hotel_id));
-const unusualPool = free.filter(tagged).sort(byId).length ? free.filter(tagged).sort(byId) : free.filter(marked).sort(byId);
-const unusualHotel = unusualPool.length ? unusualPool[WEEK % unusualPool.length] : null;
+const free = hotels.filter(h => ready(h) && !used.has(h.hotel_id) && cooled(h));
+const unusualPool = free.filter(tagged).length ? free.filter(tagged) : free.filter(marked);
+const unusualHotel = ranked(unusualPool)[0] || null;
 if (unusualHotel) used.add(unusualHotel.hotel_id);
 
 // ── Готелі для контент-слотів (замість зайвих оферів): вільні, з ротацією за тижнем
 // Спершу готелі, що пасують портрету тижня (теги / who_for / тип / локація), далі решта — ротація зберігається
 const fits = (h) => FOCUS.match.test([(h.tags || []).join(' '), h.who_for, h.type, h.country, h.region, h.name].join(' '));
-const rotated = rotate(hotels.filter(h => h.hotel_id && !used.has(h.hotel_id)).sort(byId));
-let pool = rotated.filter(fits).concat(rotated.filter(h => !fits(h)));
+let pool = ranked(hotels.filter(h => h.hotel_id && !used.has(h.hotel_id) && cooled(h)), h => fits(h) ? 0.5 : 0);
 const nextHotel = () => { const h = pool.shift() || null; if (h) used.add(h.hotel_id); return h ? h.hotel_id : null; };
+const NOHOTEL = 'без готелю: усі готелі на охолодженні (2 тижні) — відповідай на питання клієнта як експертна думка';
+// слот без готелю: рубрика «про готель» → власна думка (питання аудиторії з note), без м'якої рекомендації
+const noHotel = (s) => { if (s.hotel_id) return; Object.assign(s, { pillar: s.platform === 'threads' ? 'tour_expert' : 'personal_take', soft: false, note: NOHOTEL, no_hotel: true }); };
 
 const pickedStory = stories.length > 0 ? stories[0] : null;
 const slots = [];
@@ -205,6 +236,9 @@ S({ day: 'Сб', platform: 'instagram', slot_type: 'stories', pillar: 'template'
 if (!OFFERS_PER_WEEK.instagram) slots.filter(s => s.platform === 'instagram' && s.pillar === 'tour_offer')
   .forEach(s => Object.assign(s, { pillar: 'hotel_place', tour_id: null, note: null }));
 
+// Сет 7: слоти, де вільного готелю не знайшлось (охолодження), — без готелю; питання аудиторії лишається
+slots.filter(s => ['hotel_place', 'insider', 'atmosphere'].includes(s.pillar) || (s.pillar === 'tour_expert' && s.pair_key === 'A')).forEach(noHotel);
+
 // ── Портрет + питання клієнта → note (генератор отримує slot.note). Пара (pair_key) — одне питання на всі платформи.
 // Без питання: відео, «за кадром», особиста історія з черги (не перебиваємо її), прямий офер (висновок тижня)
 // «Незвичайні готелі» (своя рубрика — кут уже заданий) і сторіз-шаблон (досить фокусу тижня).
@@ -227,7 +261,7 @@ for (const s of slots) {
   if (offer) parts.push('Офер — логічний висновок тижня для цього портрета.');
   parts.push('Поїздки на ' + HORIZON + '; раннє бронювання не рекламувати.');
   if (s.note) parts.push(s.note);
-  Object.assign(s, { note: parts.join(' '), question: q, persona_id: FOCUS.id, personas_from: FROM_DB ? 'app' : 'code' });
+  Object.assign(s, { note: parts.join(' '), question: q, persona_id: FOCUS.id, personas_from: FROM_DB ? 'app' : 'code'});
 }
 
 // Дата слоту для апки / Buffer Filler (WF-051) і стан огляду
@@ -261,6 +295,7 @@ const what = (s) => {
   else if (s.hotel_name) about = ' — ' + s.hotel_name;
   else if (s.story_id) about = s.story_snip ? ' — «' + s.story_snip + '…»' : ' — історія з черги';
   if (s.story_id && s.story_snip && (s.tour_title || s.hotel_name)) about += ' — «' + s.story_snip + '…»';
+  if (s.no_hotel) about = ' — без готелю (усі на охолодженні 2 тижні)';
   return PLAT[s.platform] + ': ' + kind + ', ' + (s.soft ? "🤝 м'яка рекомендація" : topic) + about + (s.question ? '\n   ❓ ' + s.question : '');
 };
 const ws = items[0] && items[0].week_start;
@@ -295,7 +330,20 @@ for (const [name, table, x] of [[AUD, 'audiences', 0], [AUDQ, 'audience_question
 }
 wf.connections[STORIES] = { main: [[{ node: AUD, type: 'main', index: 0 }]] }
 wf.connections[AUD] = { main: [[{ node: AUDQ, type: 'main', index: 0 }]] }
-wf.connections[AUDQ] = { main: [[{ node: PLAN_NODE, type: 'main', index: 0 }]] }
+// Сет 7: останні 21 день content_plan (усі статуси: використання рахує код без skipped, частку пропусків — за skipped)
+const RECENT = 'Supabase - Get Recent Plans'
+if (!wf.nodes.some((n) => n.name === RECENT)) {
+  const aq = wf.nodes.find((n) => n.name === AUDQ)
+  wf.nodes.push({
+    parameters: { operation: 'getAll', tableId: 'content_plan', returnAll: true, filterType: 'string',
+      filterString: "={{ 'scheduled_for=gte.' + $now.setZone('Europe/Kyiv').minus({ days: 21 }).toFormat('yyyy-MM-dd') + '&hotel_id=not.is.null' }}" },
+    name: RECENT, type: 'n8n-nodes-base.supabase', typeVersion: 1,
+    position: [aq.position[0] + 112, aq.position[1]],
+    credentials: sb.credentials, alwaysOutputData: true, executeOnce: true, onError: 'continueRegularOutput',
+  })
+}
+wf.connections[AUDQ] = { main: [[{ node: RECENT, type: 'main', index: 0 }]] }
+wf.connections[RECENT] = { main: [[{ node: PLAN_NODE, type: 'main', index: 0 }]] }
 const plan = wf.nodes.find((n) => n.name === PLAN_NODE)
 if (!plan) throw new Error('нема вузла ' + PLAN_NODE)
 plan.parameters.jsCode = PLAN_CODE
