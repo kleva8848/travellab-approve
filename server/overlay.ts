@@ -1,7 +1,7 @@
 import satori from 'satori'
 import sharp from 'sharp'
 import type { Zone } from './look.js'
-import { blockLines, CREAM, el, FONT, GAP, GOLD, GRAPH, loadFonts, TRACK_UPPER, typo, type El, type SpecFont } from './typo.js'
+import { blockLines, CAP, capBox, capLetter, CREAM, el, FONT, GAP, GOLD, GRAPH, loadFonts, TRACK_UPPER, typo, type El, type SpecFont } from './typo.js'
 
 // Текст на фото як у тесті раунду 7: по центру, поля 9%, зверху 8% / знизу 7%.
 // Брендові шрифти (як у відео, src/lib/video.ts FONT): Cormorant Garamond — основний рядок, Tenor Sans капсом з розрядкою — готель / місце / інфо.
@@ -47,7 +47,8 @@ export async function textLayer(w: number, h: number, t: PhotoText, zone: Zone, 
 // x, y — центр блоку тексту; w — ширина блоку; size — кегль, частка ширини фото; lh — міжрядковий інтервал.
 // veil: null — сила вуалі сама (від яскравості під текстом), число 0…0.85 — як поставила Іра. color: light — кремовий текст на затемненні,
 // dark — графітовий на світлій вуалі. source: 'ira' — збережено Ірою, агент цей слайд ніколи не перегенеровує
-export type SpecBlock = { role: 'kicker' | 'title'; text: string; font: SpecFont; size: number; lh: number; gold: number[]; cap?: 'upper' | null }
+// cap: 'upper' — капсом з розрядкою; 'hand' — велика рукописна перша літера (сет 6, лише заголовок, не рукописним шрифтом)
+export type SpecBlock = { role: 'kicker' | 'title'; text: string; font: SpecFont; size: number; lh: number; gold: number[]; cap?: 'upper' | 'hand' | null }
 export type PhotoSpec = { v: 1; x: number; y: number; w: number; veil: number | null; color: 'light' | 'dark'; blocks: SpecBlock[]; source: 'ira' | 'ai' }
 
 // Блок → вузли satori. Слова — flex-елементи з відступом рівно в пробіл (satori не вміє інлайн-спанів для золотих слів),
@@ -60,12 +61,25 @@ function specBlock(b: SpecBlock, unit: number, gap: number, color: string, shado
   const sp = f.space * size + track
   const gold = new Set(b.gold)
   const base = { fontFamily: f.name, fontWeight: f.weight, fontSize: size, lineHeight: b.lh, letterSpacing: track, textTransform: upper ? 'uppercase' : 'none', color, textShadow: shadow }
-  const word = (w: { text: string; n: number }) => el('div', gold.has(w.n) ? { color: GOLD } : {}, w.text)
+  const cap = capOf(b)
+  const word = (w: { text: string; n: number }) => {
+    const st = gold.has(w.n) ? { color: GOLD } : {}
+    if (!(cap && w.n === 0)) return el('div', st, w.text)
+    // Перше слово з рукописною літерою: літера (свій шрифт і кегль, звисає під рядок) + решта слова
+    const c = capBox(b.font, size, b.lh)
+    const rest = w.text.trimStart().slice(1)
+    const letter = el('div', { fontFamily: FONT[CAP.font].name, fontWeight: FONT[CAP.font].weight, fontSize: c.size, lineHeight: 1, letterSpacing: 0, textTransform: 'none', marginTop: c.mt, marginBottom: c.mb, marginRight: rest ? c.mr : 0 }, cap)
+    return el('div', { ...st, display: 'flex', alignItems: 'flex-start' }, rest ? [letter, el('div', {}, rest)] : [letter])
+  }
+  const row = cap ? { alignItems: 'flex-start' } : {}
   return blockLines(b.text).map((groups) => groups === null
     ? el('div', { height: gap, width: 1 })
-    : el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp, width: '100%' },
-      groups.map((g) => (g.length === 1 ? word(g[0]) : el('div', { display: 'flex', columnGap: sp }, g.map(word))))))
+    : el('div', { ...base, ...row, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp, width: '100%' },
+      groups.map((g) => (g.length === 1 ? word(g[0]) : el('div', { ...row, display: 'flex', columnGap: sp }, g.map(word))))))
 }
+
+// Рукописна літера цього блоку або null: лише заголовок, не рукописним шрифтом, перша літера зі списку CAP_OK
+export const capOf = (b: SpecBlock) => (b.cap === 'hand' && b.role === 'title' && !(FONT[b.font] ?? FONT.cormorant).script ? capLetter(b.text) : null)
 
 // Прозорий PNG w×h зі спекою Іри; frame — біла рамка, inset — зони інтерфейсу згори/знизу (сторіз)
 export async function specLayer(w: number, h: number, spec: PhotoSpec, frame: number, inset = 0): Promise<Buffer | null> {

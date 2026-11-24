@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
-import { photoIdeas, photoPreview } from '../lib/api'
+import { photoIdeas, photoPreview, stylePref } from '../lib/api'
 import {
-  blockLines, blockLook, CREAM, fromStars, GAP, GOLD, GRAPH, keepGold, LH, sameSpec, SIZE, SPEC_FONT, SPEC_TEXT_MAX, VEIL_AUTO, VEIL_MAX, WIDTH, words,
-  type PhotoSpec, type SpecBlock, type SpecFont, type SpecFrame,
+  applyPreset, blockLines, blockLook, CAP, capBox, capLetter, capOf, CREAM, fromStars, GAP, GOLD, GRAPH, keepGold, LH, presetFromSpec, PRESETS, sameSpec, samePreset, SIZE, SPEC_FONT, SPEC_TEXT_MAX,
+  STYLE_HINT, STYLE_KEYS, STYLE_NAME, VEIL_AUTO, VEIL_MAX, WIDTH, words,
+  type PhotoSpec, type Preset, type SpecBlock, type SpecFont, type SpecFrame, type StyleKey, type VisualStyle,
 } from '../lib/photoSpec'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { Spinner } from './ui'
@@ -20,7 +21,8 @@ type Props = {
   photos: number
   busy: boolean
   onClose: () => void
-  onSave: (spec: PhotoSpec | null) => Promise<boolean>
+  // style — стиль усього поста, якщо Іра обрала його на обкладинці (сет 6)
+  onSave: (spec: PhotoSpec | null, style?: StyleKey) => Promise<boolean>
 }
 
 const FONTS: SpecFont[] = ['cormorant', 'tenor', 'hand']
@@ -29,7 +31,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
 export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onSave }: Props) {
-  const [init, setInit] = useState<{ spec: PhotoSpec; frame: SpecFrame; bg: string; saved: boolean } | null>(null)
+  const [init, setInit] = useState<{ spec: PhotoSpec; frame: SpecFrame; bg: string; saved: boolean; style: VisualStyle } | null>(null)
   const [spec, setSpec] = useState<PhotoSpec | null>(null)
   const [server, setServer] = useState<{ key: string; jpg: string } | null>(null)
   const [rendering, setRendering] = useState(false)
@@ -39,6 +41,12 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
   const [ideas, setIdeas] = useState<string[]>([])
   const [ideasBusy, setIdeasBusy] = useState(false)
   const [ideasErr, setIdeasErr] = useState('')
+  // Шрифтові пари (сет 6): стиль поста, діючі пресети, які Іра змінила «для всіх»
+  const [style, setStyle] = useState<VisualStyle>('classic')
+  const [presets, setPresets] = useState<Record<StyleKey, Preset>>(PRESETS)
+  const [custom, setCustom] = useState<StyleKey[]>([])
+  const [prefBusy, setPrefBusy] = useState(false)
+  const [prefMsg, setPrefMsg] = useState('')
   const seq = useRef(0)
 
   // Відкрили — поточна спека фото (збережена Ірою або з тексту агента) + чистий кадр + готовий вигляд
@@ -47,8 +55,11 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
     photoPreview(planId, mediaId, null, true)
       .then((r) => {
         if (!alive) return
-        setInit({ spec: r.spec, frame: r.frame, bg: r.bg ?? '', saved: r.saved })
+        setInit({ spec: r.spec, frame: r.frame, bg: r.bg ?? '', saved: r.saved, style: r.style ?? 'classic' })
         setSpec(r.spec)
+        setStyle(r.style ?? 'classic')
+        if (r.presets) setPresets(r.presets)
+        setCustom(r.custom ?? [])
         setServer({ key: JSON.stringify(r.spec), jpg: r.jpg })
         setSel(Math.max(0, r.spec.blocks.findIndex((b) => b.role === 'title')))
       })
@@ -71,7 +82,9 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
     return () => clearTimeout(t)
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps -- лише коли змінилась спека
 
-  const dirty = Boolean(init && spec && !sameSpec(init.spec, spec))
+  const cover = slide === 0
+  const styleChanged = Boolean(init && cover && style !== init.style && style !== 'classic')
+  const dirty = Boolean(init && spec && (!sameSpec(init.spec, spec) || styleChanged))
   const close = async () => {
     if (dirty && !(await confirmAction('Вийти без збереження? Зміни тексту на фото пропадуть.'))) return
     onClose()
@@ -130,7 +143,51 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
   }
   const save = async () => {
     setEditing(false)
-    await onSave(spec)
+    await onSave(spec, styleChanged && style !== 'classic' ? style : undefined)
+  }
+  // Обрала пару: шрифти й розміри цього фото за пресетом (текст і місце лишаються); при «Зберегти» — стиль усього поста
+  const pickStyle = (k: StyleKey) => {
+    haptic('select')
+    setStyle(k)
+    setPrefMsg('')
+    setSpec(applyPreset(spec, presets[k], cover))
+  }
+  const asPreset = style === 'classic' ? null : presetFromSpec(spec, presets[style])
+  const canRemember = Boolean(asPreset && style !== 'classic' && !samePreset(asPreset, presets[style]))
+  const remember = async () => {
+    if (style === 'classic' || !asPreset) return
+    if (!(await confirmAction(`Так виглядатимуть усі пости «${STYLE_NAME[style]}», де текст на фото пише агент. Твій власний текст на інших фото не зміниться. Запам'ятати?`))) return
+    setPrefBusy(true)
+    setPrefMsg('')
+    try {
+      const p = await stylePref(planId, style, asPreset)
+      if (p) setPresets((x) => ({ ...x, [style]: p }))
+      setCustom((c) => (c.includes(style) ? c : [...c, style]))
+      haptic('success')
+      setPrefMsg(`✓ Запам'ятала «${STYLE_NAME[style]}» для всіх постів`)
+    } catch (e) {
+      setPrefMsg(`Не вийшло: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setPrefBusy(false)
+    }
+  }
+  const resetStyle = async () => {
+    if (style === 'classic') return
+    if (!(await confirmAction(`Повернути стандартний вигляд «${STYLE_NAME[style]}» для всіх постів?`))) return
+    setPrefBusy(true)
+    setPrefMsg('')
+    try {
+      await stylePref(planId, style, null)
+      setPresets((x) => ({ ...x, [style]: PRESETS[style] }))
+      setCustom((c) => c.filter((k) => k !== style))
+      setSpec(applyPreset(spec, PRESETS[style], cover))
+      haptic('success')
+      setPrefMsg(`✓ «${STYLE_NAME[style]}» знову стандартний`)
+    } catch (e) {
+      setPrefMsg(`Не вийшло: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setPrefBusy(false)
+    }
   }
   const backToAgent = async () => {
     if (!(await confirmAction('Повернути текст, який написав агент? Твій текст на цьому фото зникне.'))) return
@@ -170,6 +227,28 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
           {block.role === 'kicker' && <button className="chip" style={{ fontSize: 13.5, padding: '6px 12px' }} onClick={dropKicker}>Прибрати надпис</button>}
         </div>
 
+        {cover && (
+          <div className="card mt-2.5">
+            <div className="text-[13px] font-semibold">Стиль поста · шрифтова пара</div>
+            <div className="seg mt-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+              {STYLE_KEYS.map((k) => (
+                <button key={k} className={style === k ? 'on' : ''} onClick={() => pickStyle(k)}>{STYLE_NAME[k]}</button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+              {style === 'classic' ? 'Пост у старому вигляді. Обери пару — шрифти зміняться, текст і місце лишаться.' : STYLE_HINT[style]}
+              {style !== 'classic' && custom.includes(style) ? ' · твій вигляд' : ''}
+            </div>
+            {style !== 'classic' && (canRemember || custom.includes(style) || prefMsg) && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {canRemember && <button className="chip" disabled={prefBusy} onClick={() => void remember()}>{prefBusy ? '⏳' : '📌'} Запам'ятати «{STYLE_NAME[style]}» для всіх</button>}
+                {custom.includes(style) && <button className="chip" disabled={prefBusy} onClick={() => void resetStyle()}>↺ Стандартний</button>}
+                {prefMsg && <span className="text-[12.5px]" style={{ color: prefMsg.startsWith('✓') ? 'var(--ok, var(--hint))' : 'var(--bad)' }}>{prefMsg}</span>}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="card mt-2.5">
           <div className="text-[13px] font-semibold">Шрифт · {label(block).toLowerCase()}</div>
           <div className="qchips" style={{ marginTop: 6 }}>
@@ -180,7 +259,16 @@ export function PhotoEditor({ planId, mediaId, slide, photos, busy, onClose, onS
             {block.font !== 'hand' && (
               <button className={block.cap === 'upper' ? 'on' : ''} onClick={() => { haptic('select'); setBlock(sel, { cap: block.cap === 'upper' ? null : 'upper' }) }}>ВЕЛИКИМИ</button>
             )}
+            {cover && isTitle && block.font !== 'hand' && (
+              <button className={block.cap === 'hand' ? 'on' : ''} style={{ fontFamily: SPEC_FONT[CAP.font].family, fontSize: 16 }}
+                onClick={() => { haptic('select'); setBlock(sel, { cap: block.cap === 'hand' ? null : 'hand' }) }}>Рукописна літера</button>
+            )}
           </div>
+          {block.cap === 'hand' && isTitle && block.text.trim() && !capLetter(block.text) && (
+            <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+              «{block.text.trim()[0]}» рукописом читається погано (схоже на іншу літеру) — перша літера лишиться звичайною.
+            </div>
+          )}
           <Slider name="Розмір" value={block.size} min={SIZE.min} max={SIZE.max} step={0.001} show={`${Math.round(block.size * 1000)}`} onChange={(v) => setBlock(sel, { size: r4(v) })} />
           <Slider name="Між рядками" value={block.lh} min={LH.min} max={LH.max} step={0.02} show={block.lh.toFixed(2)} onChange={(v) => setBlock(sel, { lh: r4(v) })} />
           {blockWords.length > 0 && (
@@ -398,19 +486,33 @@ function Stage({ frame: f, bg, jpg, fresh, spec, sel, editing, onMove, onTap, on
 }
 
 // Рядки блоку — та сама будова, що specBlock у server/overlay.ts (слова flex-елементами, відступ = пробіл шрифту)
+// Рукописна літера (сет 6) — так само, як у specBlock: перше слово = літера (свій кегль, звисає під рядок) + решта
 function BlockView({ b, f, gap }: { b: SpecBlock; f: SpecFrame; gap: number }) {
   const { font, size, upper, track, sp } = blockLook(b, f)
   const gold = useMemo(() => new Set(b.gold), [b.gold])
   const base = { fontFamily: font.family, fontWeight: font.weight, fontSize: size, lineHeight: b.lh, letterSpacing: track, textTransform: upper ? 'uppercase' as const : 'none' as const }
+  const cap = capOf(b)
+  const c = cap ? capBox(b.font, size, b.lh) : null
+  const word = (w: { text: string; n: number }) => {
+    const st = gold.has(w.n) ? { color: GOLD } : undefined
+    if (!c || w.n !== 0) return <span key={w.n} style={st}>{w.text}</span>
+    const rest = w.text.trimStart().slice(1)
+    return (
+      <span key={w.n} className="flex items-start" style={st}>
+        <span style={{ fontFamily: SPEC_FONT[CAP.font].family, fontWeight: SPEC_FONT[CAP.font].weight, fontSize: c.size, lineHeight: 1, letterSpacing: 0, textTransform: 'none', marginTop: c.mt, marginBottom: c.mb, marginRight: rest ? c.mr : 0 }}>{cap}</span>
+        {rest && <span>{rest}</span>}
+      </span>
+    )
+  }
   return (
     <>
       {blockLines(b.text).map((groups, li) => groups === null
         ? <div key={li} style={{ height: gap }} />
         : (
-          <div key={li} className="flex w-full flex-wrap justify-center" style={{ ...base, columnGap: sp }}>
+          <div key={li} className={`flex w-full flex-wrap justify-center ${c ? 'items-start' : ''}`} style={{ ...base, columnGap: sp }}>
             {groups.map((g) => (
-              <div key={g[0].n} className="flex" style={{ columnGap: sp }}>
-                {g.map((w) => <span key={w.n} style={gold.has(w.n) ? { color: GOLD } : undefined}>{w.text}</span>)}
+              <div key={g[0].n} className={`flex ${c ? 'items-start' : ''}`} style={{ columnGap: sp }}>
+                {g.map(word)}
               </div>
             ))}
           </div>

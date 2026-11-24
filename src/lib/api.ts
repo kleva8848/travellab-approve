@@ -1,4 +1,4 @@
-import type { PhotoSpec, SpecFrame } from './photoSpec'
+import { PRESETS, type Preset, type PhotoSpec, type SpecFrame, type StyleKey, type VisualStyle } from './photoSpec'
 import { isDemo, tg } from './tg'
 import { demoVideo, demoVideoGaps, demoVideos, patchDemoVideo, saveDemoVideo, type CoverMedia, type CoverSpec, type RemountJob, type VideoDraft, type VideoList, type VideoPlan } from './video'
 
@@ -105,6 +105,8 @@ export type RenderParams = {
   // Текст Іри з редактора (сет 5) — за media_id; є спека → старі текстові правки фото не діють
   photo_spec?: Record<string, PhotoSpec>
   wm?: PostWm
+  // Шрифтова пара поста (сет 6): за рубрикою або як обрала Іра; classic — вигляд до сету 6
+  visual_style?: VisualStyle
 }
 
 export type Comment = { id: string; version_id: string | null; target: 'text' | 'photo'; body: string; status: string; created_at: string }
@@ -131,7 +133,7 @@ export type PostDetail = {
 
 export type CommentInput = { text: string; photo: string; chips_text: string[]; chips_photo: string[] }
 
-type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm; spec?: PhotoSpec | null }
+type ActionExtra = { reason?: string; answers?: { id: string; answer: string }[]; version_id?: string; slide_idx?: number; path?: string; mode?: 'replace' | 'add'; width?: number; height?: number; preview?: string; date?: string; time?: string; on?: boolean; media_id?: string; edit?: { [K in keyof PhotoEdit]?: PhotoEdit[K] | null }; wm?: PostWm; spec?: PhotoSpec | null; style?: StyleKey }
 type ActionResult = { ok: true; inquiries?: number; queued?: boolean; remaining?: number; swapped?: boolean; path?: string; signed_url?: string; media_id?: string; photos?: number; photo_text?: string | null; version_no?: number; urls?: (string | null)[]; plan?: { scheduled_for?: string | null; slot_time?: string | null } }
 
 // «🎙 Розповісти історію»: посилання в бот, підказка тижня, скільки історій у черзі
@@ -182,13 +184,23 @@ export async function reviewAction(
 // ───────────── Редактор тексту на фото (сет 5) ─────────────
 
 // Прев'ю = той самий рендер, що файл у чаті (540 px), нічого не зберігає. Без spec — поточна спека фото + чистий кадр bg
-export type PhotoPreview = { jpg: string; bg?: string; spec: PhotoSpec; frame: SpecFrame; saved: boolean }
+// style / presets / custom — лише при відкритті (сет 6): стиль поста, діючі пресети, які з них Іра змінила «для всіх»
+export type PhotoPreview = { jpg: string; bg?: string; spec: PhotoSpec; frame: SpecFrame; saved: boolean; style?: VisualStyle; presets?: Record<StyleKey, Preset>; custom?: StyleKey[] }
 export async function photoPreview(id: string, media_id: string, spec: PhotoSpec | null, bg = false): Promise<PhotoPreview> {
   if (isDemo) {
     await wait(spec ? 350 : 500)
     return demo.photoPreview(id, media_id, spec)
   }
   return call('/api/review', { method: 'POST', body: JSON.stringify({ id, action: 'photo_preview', media_id, spec, bg }) })
+}
+
+// «Запам'ятати для всіх» (сет 6): пресет стилю → render_prefs; null — повернути стандартний
+export async function stylePref(id: string, style: StyleKey, preset: Preset | null): Promise<Preset | null> {
+  if (isDemo) {
+    await wait(400)
+    return preset
+  }
+  return (await call<{ preset: Preset | null }>('/api/review', { method: 'POST', body: JSON.stringify({ id, action: 'style_pref', style, preset }) })).preset
 }
 
 // «✨ Варіанти» — 3–4 підказки агента (*золоте* слово в зірочках), нічого не зберігає
@@ -557,7 +569,7 @@ const demo = (() => {
         ...(first ? [{ role: 'kicker' as const, text: 'Мальдіви · Демо-готель', font: 'tenor' as const, size: 0.026, lh: 1.3, gold: [], cap: 'upper' as const }] : []),
         { role: 'title', text: first ? 'Риф просто біля берега' : 'Маска після сніданку', font: 'cormorant', size: first ? 0.0748 : 0.055, lh: 1.18, gold: [], cap: null },
       ] }
-      return { jpg: '', bg: p.media[mid]?.url ?? '', spec: structuredClone(s), frame: { w: 1080, h: 1350, pad: 30, inset: 0 }, saved: Boolean(saved) }
+      return { jpg: '', bg: p.media[mid]?.url ?? '', spec: structuredClone(s), frame: { w: 1080, h: 1350, pad: 30, inset: 0 }, saved: Boolean(saved), style: cur?.render_params?.visual_style ?? 'thought', presets: structuredClone(PRESETS), custom: [] }
     },
     // Демо-план: пости розкладено по днях поточного тижня + 2 слоти, які агент ще не написав
     plan: (week: number): WeekPlan => {
@@ -636,7 +648,7 @@ const demo = (() => {
         if (extra.spec) specs[extra.media_id] = { ...extra.spec, source: 'ira' }
         else delete specs[extra.media_id]
         const n = prev.version_no + 1
-        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, photo_spec: specs } })
+        p.versions.push({ ...prev, id: `${id}-v${n}`, version_no: n, image_v: prev.image_v + 1, trigger: 'photo_edit', prompt_version: 'photo_look', comment_id: null, render_params: { ...prev.render_params, ...(extra.style ? { visual_style: extra.style } : {}), photo_spec: specs } })
         p.plan.version_no = n; p.plan.current_version_id = `${id}-v${n}`
         return { ok: true as const }
       }

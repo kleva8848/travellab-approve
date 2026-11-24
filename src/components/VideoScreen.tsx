@@ -7,6 +7,7 @@ import {
   type CoverMedia, type CoverSpec, type FontKey, type LineStyle, type RemountJob, type RemountKind, type ShotSrc, type VideoDraft, type VLine, type VText, type WmKind, type WmPos,
 } from '../lib/video'
 import { Center, Spinner } from './ui'
+import { CAP, capLetter, SPEC_FONT } from '../lib/photoSpec'
 
 const FADE = 0.45
 const SUB_FADE = 0.12 // субтитри голосу — як SUB_FADE у server/video_layers.ts
@@ -1064,6 +1065,23 @@ function CoverCard({ d, spec, dirty, disabled, onChange, onReset, onSave, onSend
           </div>
         </>
       )}
+
+      <div className="mt-4 text-[13px] font-semibold">Шрифт заголовка</div>
+      <div className="qchips" style={{ marginTop: 6 }}>
+        {(['cormorant', 'tenor'] as const).map((f) => (
+          <button key={f} className={(spec.font ?? 'cormorant') === f ? 'on' : ''} disabled={disabled}
+            style={{ fontFamily: SPEC_FONT[f].family, fontWeight: SPEC_FONT[f].weight, fontSize: 15 }}
+            onClick={() => { haptic('select'); set({ font: f === 'tenor' ? 'tenor' : undefined }) }}>{SPEC_FONT[f].name}</button>
+        ))}
+        <button className={spec.cap === 'hand' ? 'on' : ''} disabled={disabled} style={{ fontFamily: SPEC_FONT[CAP.font].family, fontSize: 16 }}
+          onClick={() => { haptic('select'); set({ cap: spec.cap === 'hand' ? undefined : 'hand' }) }}>Рукописна літера</button>
+      </div>
+      {spec.cap === 'hand' && title.text.trim() && !capLetter(title.text) && (
+        <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>
+          «{title.text.trim()[0]}» рукописом читається погано — перша літера лишиться звичайною.
+        </div>
+      )}
+      <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: 'var(--hint)' }}>Та сама пара, що на фото постів: Cormorant + рукописна літера — «Думка», Tenor — «Готель».</div>
 
       <div className="mt-4 text-[13px] font-semibold">Де текст</div>
       <div className="qchips" style={{ marginTop: 6 }}>

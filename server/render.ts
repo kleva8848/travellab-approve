@@ -3,6 +3,7 @@ import sharp from 'sharp'
 import { db, getSettings } from './http.js'
 import { calmZone, softVeil, type Band, type Zone } from './look.js'
 import { specLayer, textLayer, type PhotoSpec, type PhotoText, type SpecBlock } from './overlay.js'
+import { isStyle, loadPresets, pickStyle, PRESETS, STYLE_KEYS, type Preset, type StyleKey, type VisualStyle } from './presets.js'
 import { FONT, wordCount } from './typo.js'
 import { addWatermark, watermarkTag, type WmKind } from './watermark.js'
 
@@ -54,12 +55,13 @@ export async function base(src: Buffer, platform: string, edit: PhotoEdit = {}):
   return { w, h, pad, inset, iw, ih, crop }
 }
 
-// spec — текст Іри з редактора (photo_spec): замість тексту агента, будь-де на фото, вуаль іде за блоком
-export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null, spec?: PhotoSpec | null): Promise<Buffer> {
-  return compose(await base(src, platform, edit), text, hint, edit, wm, spec)
+// spec — текст Іри з редактора (photo_spec): замість тексту агента, будь-де на фото, вуаль іде за блоком.
+// look — шрифтова пара поста (сет 6, server/presets.ts) для тексту агента; null — старий вигляд (classic)
+export async function frame(src: Buffer, platform: string, text?: PhotoText | null, hint?: string | null, edit: PhotoEdit = {}, wm: WmKind | null = null, spec?: PhotoSpec | null, look?: Preset | null): Promise<Buffer> {
+  return compose(await base(src, platform, edit), text, hint, edit, wm, spec, look)
 }
 
-export async function compose(b: Base, text: PhotoText | null | undefined, hint: string | null | undefined, edit: PhotoEdit, wm: WmKind | null, spec?: PhotoSpec | null): Promise<Buffer> {
+export async function compose(b: Base, text: PhotoText | null | undefined, hint: string | null | undefined, edit: PhotoEdit, wm: WmKind | null, spec?: PhotoSpec | null, look?: Preset | null): Promise<Buffer> {
   const { w, h, pad, inset, iw, ih, crop } = b
   if (edit.text === 'off') { text = null; spec = null }
   if (edit.text === 'top' || edit.text === 'bottom') hint = edit.text
@@ -70,6 +72,12 @@ export async function compose(b: Base, text: PhotoText | null | undefined, hint:
     layer = await specLayer(w, h, spec, pad, inset)
     zone = layer ? { zone: spec.y < 0.5 ? 'top' : 'bottom', text: spec.color, source: 'hint' } : null
     toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { bright: edit.bright, free: { strength: spec.veil } })
+  } else if (look && text?.title) {
+    // Текст агента шрифтовою парою поста: той самий шар, що в редакторі Іри; вуаль — як у старого тексту агента (від краю)
+    const a = await agentSpec(b, text, hint, edit, look)
+    layer = a.layer
+    zone = a.zone
+    toned = softVeil(crop, iw, ih, zone, undefined, undefined, layer ? await textBand(layer, w, h, pad) : null, edit.look !== 'none', { veil: edit.veil, bright: edit.bright })
   } else {
     zone = text?.title ? await calmZone(await sharp(crop, { raw: { width: iw, height: ih, channels: 3 } }).png().toBuffer(), hint) : null
     // Текст рендеримо першим: його рядки = смуга, яку вуаль має накрити повністю
@@ -156,22 +164,26 @@ async function captionTexts(post: PostInfo, slides: { id: string; path: string }
 }
 
 type Rendered = { text: string; platform: string; files: { name: string; buf: Buffer }[]; photo_text: string | null }
-type Slide = { id: string; i: number; src: string; path: string; text: (PhotoText & { zone_hint?: string | null }) | null; spec: PhotoSpec | null }
-type Prepared = { ids: string[]; text: string; platform: string; versionNo: number; edits: Record<string, PhotoEdit>; wm: WmKind | null; wmStory: WmKind | null; first: string | undefined; slides: Slide[]; cover: (PhotoText & { zone_hint?: string | null }) | null }
+type Slide = { id: string; i: number; src: string; path: string; text: (PhotoText & { zone_hint?: string | null }) | null; spec: PhotoSpec | null; look: Preset | null }
+type Prepared = { ids: string[]; text: string; platform: string; versionNo: number; edits: Record<string, PhotoEdit>; wm: WmKind | null; wmStory: WmKind | null; first: string | undefined; slides: Slide[]; cover: (PhotoText & { zone_hint?: string | null }) | null; style: VisualStyle; presets: Record<StyleKey, Preset> }
 
 // Кеш експорту по слайду: ім'я файлу = хеш (фото + текст на ньому + правки + знак + платформа). Одна правка перемальовує лише свій слайд,
 // а не всі 10; правка тексту поста не чіпає фото (текст на фото не залежить від тексту поста)
-// Спека Іри (photo_spec) — у хеші лише якщо є: старі слайди без неї зберігають свої імена файлів (кеш не злітає)
-const slideHash = (platform: string, tag: string, s: { id: string; text: unknown; spec?: PhotoSpec | null }, edit: PhotoEdit | undefined) =>
-  createHash('sha1').update(JSON.stringify(s.spec ? [REV, platform, tag, s.id, s.spec, edit ?? null] : [REV, platform, tag, s.id, s.text, edit ?? null])).digest('hex').slice(0, 16)
+// Спека Іри (photo_spec) — у хеші лише якщо є: старі слайди без неї зберігають свої імена файлів (кеш не злітає).
+// Шрифтова пара (сет 6) — теж лише якщо є: classic-слайди лишають свої файли; «Запам'ятати для всіх» перемальовує пости цього стилю
+const slideHash = (platform: string, tag: string, s: { id: string; text: unknown; spec?: PhotoSpec | null; look?: Preset | null }, edit: PhotoEdit | undefined) =>
+  createHash('sha1').update(JSON.stringify(s.spec ? [REV, platform, tag, s.id, s.spec, edit ?? null] : s.look ? [REV, platform, tag, s.id, s.text, edit ?? null, s.look] : [REV, platform, tag, s.id, s.text, edit ?? null])).digest('hex').slice(0, 16)
 const exportPath = (planId: string, hash: string) => `exports/${planId}/${REV}_${hash}.jpg`
 
 // Усе потрібне для рендеру БЕЗ малювання: версія, фото, тексти на фото (кеш за media_id; Іра-текст агент не перебиває)
 async function prepare(planId: string): Promise<Prepared> {
-  const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id').eq('id', planId).maybeSingle()
+  const p = await db().from('content_plan').select('platform, version_no, current_version_id, hotel_id, pillar, approved_at, published_at').eq('id', planId).maybeSingle()
   if (p.error) throw p.error
   if (!p.data?.current_version_id) throw new Error('у поста немає версії')
-  const v = await db().from('post_versions').select('id, text, media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle()
+  const [v, presets] = await Promise.all([
+    db().from('post_versions').select('id, text, media_ids, render_params').eq('id', p.data.current_version_id).maybeSingle(),
+    loadPresets(),
+  ])
   if (v.error) throw v.error
   const ids = ((v.data?.media_ids as string[] | null) ?? []).slice(0, 10)
   const m = ids.length ? await db().from('media').select('media_id, storage_path').in('media_id', ids) : { data: [], error: null }
@@ -190,6 +202,13 @@ async function prepare(planId: string): Promise<Prepared> {
   // Якщо на слайді є текст Іри (або вона його вимкнула) — агента (WF-049) для цього слайда не кличемо
   // Спека Іри з редактора (source 'ira') — теж «свій» текст: агент цей слайд не перегенеровує ніколи
   const own = (id: string) => edits[id]?.title !== undefined || edits[id]?.text === 'off' || Boolean(specs[id])
+  // Шрифтова пара поста (сет 6): збережена → як є; нова → за рубрикою і запам'ятовуємо (пари не стрибають, якщо правила зміняться).
+  // Пости, які Іра вже затвердила / виклала до сету 6, лишаються в старому вигляді
+  const saved = params.visual_style
+  const style: VisualStyle = saved === 'classic' || isStyle(saved) ? saved
+    : p.data.approved_at || p.data.published_at ? 'classic' : pickStyle(p.data.pillar as string | null, Boolean(p.data.hotel_id))
+  const stylePatch: Record<string, unknown> = saved === style ? {} : { visual_style: style }
+  const look = style === 'classic' ? null : presets[style]
   let overlay: Overlay | null = null
   let captions: Captions | null = null
   if (first && text.trim()) {
@@ -208,10 +227,12 @@ async function prepare(planId: string): Promise<Prepared> {
     ])
     overlay = cover
     captions = rest.length ? caps : null
-    const patch: Record<string, unknown> = {}
+    const patch: Record<string, unknown> = { ...stylePatch }
     if (needCover && cover) patch.photo_text = cover
     if (needCaps && caps) patch.photo_captions = caps
     if (Object.keys(patch).length) await db().from('post_versions').update({ render_params: { ...params, ...patch } }).eq('id', v.data!.id)
+  } else if (Object.keys(stylePatch).length && v.data) {
+    await db().from('post_versions').update({ render_params: { ...params, ...stylePatch } }).eq('id', v.data.id)
   }
   const tag = await watermarkTag()
   const wm: WmKind | null = !tag ? null : postWm(params.wm)
@@ -233,13 +254,14 @@ async function prepare(planId: string): Promise<Prepared> {
     if (!src) return
     const t = textFor(id)
     const spec = specs[id] ?? null
-    slides.push({ id, i, src, text: t, spec, path: exportPath(planId, slideHash(platform, `${tag}|${wm ?? ''}`, { id, text: t, spec }, edits[id])) })
+    const sl = spec ? null : look
+    slides.push({ id, i, src, text: t, spec, look: sl, path: exportPath(planId, slideHash(platform, `${tag}|${wm ?? ''}`, { id, text: t, spec, look: sl }, edits[id])) })
   })
   const fs = first ? specs[first] : undefined
   const cover = !first || edits[first]?.text === 'off' ? null
     : fs ? (() => { const t = fs.blocks.find((b) => b.role === 'title')?.text.trim(); return t ? { title: t, kicker: fs.blocks.find((b) => b.role === 'kicker')?.text.trim() || undefined } : null })()
       : textFor(first)
-  return { ids, text, platform, versionNo: Number(p.data.version_no), edits, wm, wmStory, first, slides, cover }
+  return { ids, text, platform, versionNo: Number(p.data.version_no), edits, wm, wmStory, first, slides, cover, style, presets }
 }
 
 // Рендерить фото поточної версії поста; готовий слайд лежить у Storage `exports/<plan>/<REV>_<хеш>.jpg` — незмінений слайд береться з кешу
@@ -252,7 +274,7 @@ export async function render(planId: string, story?: number, pre?: Prepared): Pr
         if (s.i !== story) return null
         const dl = await db().storage.from(BUCKET).download(s.src)
         if (dl.error) throw dl.error
-        const out = await frame(Buffer.from(await dl.data.arrayBuffer()), 'story', s.text, s.text?.zone_hint, pr.edits[s.id], pr.wmStory, s.spec)
+        const out = await frame(Buffer.from(await dl.data.arrayBuffer()), 'story', s.text, s.text?.zone_hint, pr.edits[s.id], pr.wmStory, s.spec, s.look)
         return { name: `travellab_story_${s.i + 1}.jpg`, buf: out }
       }
       const name = `travellab_${pr.platform}_${s.i + 1}.jpg`
@@ -260,7 +282,7 @@ export async function render(planId: string, story?: number, pre?: Prepared): Pr
       if (!hit.error) return { name, buf: Buffer.from(await hit.data.arrayBuffer()) }
       const dl = await db().storage.from(BUCKET).download(s.src)
       if (dl.error) throw dl.error
-      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), pr.platform, s.text, s.text?.zone_hint, pr.edits[s.id], pr.wm, s.spec)
+      const out = await frame(Buffer.from(await dl.data.arrayBuffer()), pr.platform, s.text, s.text?.zone_hint, pr.edits[s.id], pr.wm, s.spec, s.look)
       const up = await db().storage.from(BUCKET).upload(s.path, out, { contentType: 'image/jpeg', upsert: true })
       if (up.error) throw up.error
       return { name, buf: out }
@@ -364,7 +386,7 @@ export function cleanSpec(raw: unknown): PhotoSpec | null {
     const text = b.text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, SPEC_TEXT_MAX)
     const n = wordCount(text)
     const gold = [...new Set((Array.isArray(b.gold) ? b.gold : []).map(Number).filter((g) => Number.isInteger(g) && g >= 0 && g < n))].sort((p, q) => p - q).slice(0, 6)
-    blocks.push({ role, text, font, size, lh, gold, cap: b.cap === 'upper' ? 'upper' : null })
+    blocks.push({ role, text, font, size, lh, gold, cap: b.cap === 'upper' ? 'upper' : b.cap === 'hand' && role === 'title' ? 'hand' : null })
   }
   return { v: 1, x, y, w, veil, color: r.color === 'dark' ? 'dark' : 'light', blocks, source: 'ira' }
 }
@@ -407,11 +429,40 @@ async function slideCtx(planId: string, mediaId: string) {
 const small = async (jpg: Buffer) => `data:image/jpeg;base64,${(await sharp(jpg).resize(PREVIEW_W).jpeg({ quality: 82 }).toBuffer()).toString('base64')}`
 
 // Те, що зараз на фото, як спека: збережена Ірою — як є; інакше з тексту агента / старих правок (той самий вигляд, що файл зараз)
-async function deriveSpec(planId: string, mediaId: string, b: Base, edit: PhotoEdit): Promise<PhotoSpec> {
-  const pr = await prepare(planId)
+async function deriveSpec(pr: Prepared, mediaId: string, b: Base, edit: PhotoEdit): Promise<PhotoSpec> {
   const s = pr.slides.find((x) => x.id === mediaId)
   if (s?.spec) return s.spec
-  return specFromAgent(b, edit.text === 'off' ? null : s?.text ?? null, edit, mediaId === pr.first)
+  const t = edit.text === 'off' ? null : s?.text ?? null
+  if (s?.look && t?.title) return (await agentSpec(b, t, t.zone_hint, edit, s.look)).spec
+  return specFromAgent(b, t, edit, mediaId === pr.first)
+}
+
+// Текст агента шрифтовою парою поста (сет 6) → спека + готовий шар. Розміщення як у старого тексту агента:
+// спокійна зона (без людей) зверху або знизу, край блоку — 8% від верху / 7% від низу; правки-чипи (розмір, поля) теж діють.
+// Рукописна літера — лише на обкладинці (правило Іри: рукопис тільки для коротких слів на обкладинці)
+export async function agentSpec(b: Base, t: PhotoText, hint: string | null | undefined, edit: PhotoEdit, look: Preset): Promise<{ spec: PhotoSpec; layer: Buffer | null; zone: Zone }> {
+  const zone = await calmZone(await sharp(b.crop, { raw: { width: b.iw, height: b.ih, channels: 3 } }).png().toBuffer(), edit.text === 'top' || edit.text === 'bottom' ? edit.text : hint)
+  const mul = edit.size === 'bigger' ? 1.2 : edit.size === 'smaller' ? 0.85 : 1
+  const r4 = (v: number) => Math.round(v * 10000) / 10000
+  const L = t.small ? look.caption : look.title
+  const blocks: SpecBlock[] = []
+  if (!t.small && look.kicker && t.kicker) blocks.push({ role: 'kicker', text: t.kicker, font: look.kicker.font, size: look.kicker.size, lh: look.kicker.lh, gold: [], cap: look.kicker.cap === 'upper' ? 'upper' : null })
+  blocks.push({
+    role: 'title', text: t.title, font: L.font, size: r4(L.size * (!t.small && t.title.length > 34 ? 0.853 : 1) * mul), lh: L.lh, gold: [],
+    cap: L.cap === 'upper' ? 'upper' : L.cap === 'hand' && !t.small ? 'hand' : null,
+  })
+  const side = edit.width === 'wide' ? 0.035 : edit.width === 'narrow' ? 0.18 : 0.09
+  const spec: PhotoSpec = { v: 1, x: 0.5, y: zone.zone === 'top' ? 0.2 : 0.8, w: r4(1 - 2 * side), veil: null, color: zone.text, blocks, source: 'ai' }
+  const ih = b.h - 2 * b.pad - 2 * b.inset
+  let layer = await specLayer(b.w, b.h, spec, b.pad, b.inset)
+  const r = layer ? await rows(layer, b.w, b.h) : null
+  if (layer && r) {
+    // Край блоку на тому ж місці, що старий текст агента (textLayer: paddingTop 8% / paddingBottom 7% висоти без рамки)
+    const target = zone.zone === 'top' ? b.pad + b.inset + (b.h - 2 * b.pad) * 0.08 - r.y0 : b.h - b.pad - b.inset - (b.h - 2 * b.pad) * 0.07 - r.y1
+    spec.y = Math.min(0.97, Math.max(0.03, r4(spec.y + target / ih)))
+    layer = await specLayer(b.w, b.h, spec, b.pad, b.inset)
+  }
+  return { spec, layer, zone }
 }
 
 // Текст агента (+ старі правки фото) → спека з тим самим виглядом
@@ -435,15 +486,23 @@ export async function specFromAgent(b: Base, t: (PhotoText & { zone_hint?: strin
 
 // Прев'ю для редактора (нічого не зберігає): той самий рендер, що файл у чаті, зменшений до 540 px.
 // Без spec — поточна спека фото (+ чистий кадр bg для миттєвого DOM-прев'ю і розміри кадру)
+// Відкриття редактора (withBg) — ще й шрифтова пара поста і пресети (сет 6: чипи «Готель / Думка / Мінімал», «Запам'ятати для всіх»)
 export async function photoPreview(planId: string, mediaId: string, raw: unknown, withBg: boolean) {
   const c = await slideCtx(planId, mediaId)
   if (!c) return null
   const b = await baseFor(c.path, c.platform, c.edit)
-  const spec = raw === undefined || raw === null ? await deriveSpec(planId, mediaId, b, c.edit) : cleanSpec(raw)
+  const derive = raw === undefined || raw === null
+  const pr = derive || withBg ? await prepare(planId) : null
+  const spec = derive ? await deriveSpec(pr!, mediaId, b, c.edit) : cleanSpec(raw)
   if (!spec) return null
+  const styles = withBg && pr ? {
+    style: pr.style,
+    presets: pr.presets,
+    custom: STYLE_KEYS.filter((k) => JSON.stringify(pr.presets[k]) !== JSON.stringify(PRESETS[k])),
+  } : {}
   const [jpg, bg] = await Promise.all([
     compose(b, null, null, { ...c.edit, text: undefined }, c.wm, spec).then(small),
     withBg ? compose(b, null, null, { ...c.edit, text: 'off' }, null, null).then(small) : null,
   ])
-  return { jpg, ...(bg ? { bg } : {}), spec, frame: { w: b.w, h: b.h, pad: b.pad, inset: b.inset }, saved: c.spec !== null }
+  return { jpg, ...(bg ? { bg } : {}), spec, frame: { w: b.w, h: b.h, pad: b.pad, inset: b.inset }, saved: c.spec !== null, ...styles }
 }

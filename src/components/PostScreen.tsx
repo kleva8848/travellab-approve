@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, getPost, hotelAction, reviewAction, type PhotoEdit, type PostDetail, type PostWm, type Version } from '../lib/api'
 import { preparePhoto, putToSignedUrl, type PreparedPhoto } from '../lib/image'
-import type { PhotoSpec } from '../lib/photoSpec'
+import type { PhotoSpec, StyleKey } from '../lib/photoSpec'
 import { diffWords, renderDiff, renderPost } from '../lib/text'
 import { confirmAction, haptic, isDemo, useBackButton } from '../lib/tg'
 import { AudienceCard } from './AudienceCard'
@@ -378,9 +378,10 @@ export function PostScreen({ id, index, total, doneIds, order, onBack, onNext, o
   }
 
   // «Зберегти» в редакторі: одна нова версія (той самий текст поста), агент цей слайд більше не перегенеровує; null — текст агента
-  const saveSpec = async (spec: PhotoSpec | null) => {
+  // style — обрала на обкладинці «Готель / Думка / Мінімал» (сет 6): стиль усього поста
+  const saveSpec = async (spec: PhotoSpec | null, style?: StyleKey) => {
     if (!editor) return false
-    const r = await act('photo_spec', { media_id: editor.mid, spec })
+    const r = await act('photo_spec', { media_id: editor.mid, spec, ...(style ? { style } : {}) })
     setEditor(null)
     if (!r) return false
     haptic('success')

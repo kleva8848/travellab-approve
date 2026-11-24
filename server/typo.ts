@@ -8,11 +8,34 @@ import { join } from 'node:path'
 
 export type SpecFont = 'cormorant' | 'tenor' | 'hand'
 // space — ширина пробілу (частка кегля) з TTF (cmap → hmtx), щоб відступ між словами-елементами = звичайний пробіл
-export const FONT: Record<SpecFont, { name: string; file: string; weight: 400 | 500; space: number; script: boolean }> = {
-  cormorant: { name: 'Cormorant Garamond', file: 'CormorantGaramond-Medium.ttf', weight: 500, space: 0.234, script: false },
-  tenor: { name: 'Tenor Sans', file: 'TenorSans-Regular.ttf', weight: 400, space: 0.35, script: false },
+// asc / desc — hhea (= OS/2 typo) з TTF, частки кегля: де в рядку лежить базова лінія (для рукописної літери)
+export const FONT: Record<SpecFont, { name: string; file: string; weight: 400 | 500; space: number; script: boolean; asc: number; desc: number }> = {
+  cormorant: { name: 'Cormorant Garamond', file: 'CormorantGaramond-Medium.ttf', weight: 500, space: 0.234, script: false, asc: 0.924, desc: 0.287 },
+  tenor: { name: 'Tenor Sans', file: 'TenorSans-Regular.ttf', weight: 400, space: 0.35, script: false, asc: 0.92, desc: 0.25 },
   // тимчасова заміна Buongiorno Rastellino (сет 6) — безкоштовний Marck Script з кирилицею
-  hand: { name: 'Marck Script', file: 'MarckScript-Regular.ttf', weight: 400, space: 0.48, script: true },
+  hand: { name: 'Marck Script', file: 'MarckScript-Regular.ttf', weight: 400, space: 0.48, script: true, asc: 0.864, desc: 0.385 },
+}
+
+// ───────────── Рукописна велика літера (сет 6): cap 'hand' — перша літера заголовка обкладинки ─────────────
+// Шрифт літери — CAP.font. Buongiorno Rastellino (коли Rentafont письмово скаже «так») — заміна тут.
+// scale — кегль літери від кегля заголовка; drop — наскільки низ літери опускається під рядок (частка кегля заголовка);
+// kern — відступ від літери до решти слова. Ті самі числа — у src/lib/photoSpec.ts (CAP)
+export const CAP = { font: 'hand' as SpecFont, scale: 2, drop: 0.42, kern: 0.03 }
+// Літери, які рукописом читаються першими (перевірка Buongiorno, Assets/round6/letters/README.md).
+// Інша перша літера (Т Е Ґ Д Ф Х Ю Ї, цифра, лапки) — заголовок звичайний, заради літери не переписуємо
+export const CAP_OK = new Set([...'АБВГЄЖЗИІЙКЛМНОПРСУЦЧШЩЯABCDHIJKLMNOPQUWYZ'])
+export const capLetter = (text: string) => {
+  const c = text.trimStart()[0]?.toUpperCase()
+  return c && CAP_OK.has(c) ? c : null
+}
+// Коробка літери в рядку заголовка: базова лінія літери = базова лінія рядка + drop; від'ємний низ — щоб рядок не ставав вищим
+// (одна відстань між рядками — правило Іри), літера просто звисає на наступний рядок
+export function capBox(titleFont: SpecFont, size: number, lh: number) {
+  const t = FONT[titleFont] ?? FONT.cormorant
+  const c = FONT[CAP.font]
+  const cs = Math.round(size * CAP.scale)
+  const mt = Math.round(((lh - t.asc - t.desc) / 2 + t.asc) * size + CAP.drop * size - ((1 - c.asc - c.desc) / 2 + c.asc) * cs)
+  return { size: cs, mt, mb: Math.round(size * lh) - mt - cs, mr: Math.round(CAP.kern * size) }
 }
 export const CREAM = '#F3EBDD'
 export const GRAPH = '#2F2B27'

@@ -26,10 +26,20 @@ const STYLES: Record<string, { font: string; size: number; gold: boolean; gap: n
   label: { font: 'tenor', size: 38, gold: true, gap: 10, track: 7, upper: true },
 }
 // Брендові шрифти — як FONT у src/lib/video.ts (hand = Marck Script, тимчасова заміна Buongiorno Rastellino)
-const FONT: Record<string, { name: string; file: string; weight: 400 | 500; lh: number; scale: number; script: boolean }> = {
-  cormorant: { name: 'Cormorant Garamond', file: 'CormorantGaramond-Medium.ttf', weight: 500, lh: 1.308, scale: 1.1, script: false },
-  tenor: { name: 'Tenor Sans', file: 'TenorSans-Regular.ttf', weight: 400, lh: 1.264, scale: 1, script: false },
-  hand: { name: 'Marck Script', file: 'MarckScript-Regular.ttf', weight: 400, lh: 1.349, scale: 1.15, script: true },
+// asc / desc — hhea з TTF (частки кегля), для рукописної літери обкладинки
+const FONT: Record<string, { name: string; file: string; weight: 400 | 500; lh: number; scale: number; script: boolean; asc: number; desc: number }> = {
+  cormorant: { name: 'Cormorant Garamond', file: 'CormorantGaramond-Medium.ttf', weight: 500, lh: 1.308, scale: 1.1, script: false, asc: 0.924, desc: 0.287 },
+  tenor: { name: 'Tenor Sans', file: 'TenorSans-Regular.ttf', weight: 400, lh: 1.264, scale: 1, script: false, asc: 0.92, desc: 0.25 },
+  hand: { name: 'Marck Script', file: 'MarckScript-Regular.ttf', weight: 400, lh: 1.349, scale: 1.15, script: true, asc: 0.864, desc: 0.385 },
+}
+// Рукописна велика літера заголовка обкладинки (сет 6) — копія CAP / CAP_OK / capBox з server/typo.ts (тут без відносних імпортів)
+const CAP = { font: 'hand', scale: 2, drop: 0.42, kern: 0.03 }
+const CAP_OK = new Set([...'АБВГЄЖЗИІЙКЛМНОПРСУЦЧШЩЯABCDHIJKLMNOPQUWYZ'])
+function capBox(f: (typeof FONT)[string], size: number, lh: number) {
+  const c = FONT[CAP.font]
+  const cs = Math.round(size * CAP.scale)
+  const mt = Math.round(((lh - f.asc - f.desc) / 2 + f.asc) * size + CAP.drop * size - ((1 - c.asc - c.desc) / 2 + c.asc) * cs)
+  return { size: cs, mt, mb: Math.round(size * lh) - mt - cs, mr: Math.round(CAP.kern * size) }
 }
 const WM: Record<string, { w: number; h: number }> = { wm2: { w: 150, h: 150 }, wm1: { w: 330, h: 110 }, wm3: { w: 225, h: 150 } }
 
@@ -104,14 +114,25 @@ function line(l: VLine, gap: number): El {
     textTransform: !f.script && st.upper ? 'uppercase' : 'none', color: st.gold ? GOLD : '#fff',
     textShadow: '0 4px 7px rgba(0,0,0,0.75)',
   }
-  if (!l.gold.length) return el('div', { ...base, display: 'flex', justifyContent: 'center', textAlign: 'center' }, words.join(' '))
+  const first = words[0]?.[0]?.toUpperCase()
+  const cap = l.cap === 'hand' && !f.script && first && CAP_OK.has(first) ? first : null
+  if (!l.gold.length && !cap) return el('div', { ...base, display: 'flex', justifyContent: 'center', textAlign: 'center' }, words.join(' '))
   // l.gold — номери окремих слів; склеєне «у\u00A0воду» — кілька слів в одному непереносному блоці
   const gold = new Set(l.gold)
   const sp = space(f.name) * size + track
   let n = -1
-  const word = (w: string) => el('div', gold.has(++n) ? { color: GOLD } : {}, w)
-  return el('div', { ...base, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp },
-    words.map((w) => (w.includes('\u00A0') ? el('div', { display: 'flex', columnGap: sp }, w.split('\u00A0').map(word)) : word(w))))
+  const word = (w: string) => {
+    const st = gold.has(++n) ? { color: GOLD } : {}
+    if (!(cap && n === 0)) return el('div', st, w)
+    // перше слово: рукописна літера (свій кегль, звисає під рядок, рядок не стає вищим) + решта слова
+    const c = capBox(f, size, f.lh)
+    const rest = w.slice(1)
+    const letter = el('div', { fontFamily: FONT[CAP.font].name, fontWeight: FONT[CAP.font].weight, fontSize: c.size, lineHeight: 1, letterSpacing: 0, textTransform: 'none', marginTop: c.mt, marginBottom: c.mb, marginRight: rest ? c.mr : 0 }, cap)
+    return el('div', { ...st, display: 'flex', alignItems: 'flex-start' }, rest ? [letter, el('div', {}, rest)] : [letter])
+  }
+  const row = cap ? { alignItems: 'flex-start' } : {}
+  return el('div', { ...base, ...row, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', columnGap: sp },
+    words.map((w) => (w.includes('\u00A0') ? el('div', { ...row, display: 'flex', columnGap: sp }, w.split('\u00A0').map(word)) : word(w))))
 }
 
 const lineGap = (prev: VLine | undefined, l: VLine) => (!prev ? 0 : prev.style === l.style ? 4 : (STYLES[l.style] ?? STYLES.sub).gap * 2)
@@ -205,7 +226,8 @@ export async function videoLayers(plan: Plan, shots: Shot[], dur: number): Promi
 // Обкладинка (сет 1, обкладинки): чистий кадр 1080×1920 + kicker + заголовок (*золоте* слово) + знак → JPEG.
 // Текст — той самий textPng, що в шарах відео; блок по центру на y (за замовчуванням COVER_Y — центральна зона, щоб сітка профілю 3:4 не зрізала).
 // y Іра посуває в апці (сет 2: на деяких кадрах текст лягає на обличчя) — у межах COVER_Y_MIN…MAX, тобто в сітці 4:5 (y 285–1635)
-export type CoverSpec = { kicker?: string; title: string; y?: number; wm?: { kind: string; pos: string; color: string } }
+// font / cap (сет 6) — та сама шрифтова пара, що на фото постів: заголовок Cormorant або Tenor, рукописна перша літера. Без них — як було
+export type CoverSpec = { kicker?: string; title: string; y?: number; wm?: { kind: string; pos: string; color: string }; font?: 'cormorant' | 'tenor'; cap?: 'hand' | null }
 export const COVER_Y = 1180   // нижче за обличчя в центрі кадру, але в зоні сітки профілю 3:4 (y 240–1680)
 export const COVER_Y_MIN = 580
 export const COVER_Y_MAX = 1380
@@ -218,7 +240,7 @@ export async function coverJpeg(bg: Buffer, spec: CoverSpec, width?: number): Pr
     .map((w, i, a) => w + (i === a.length - 1 ? '' : /^\p{L}{1,2}$/u.test(w) ? '\u00A0' : ' ')).join('')
   const lines: VLine[] = []
   if (spec.kicker?.trim()) lines.push({ text: clean(spec.kicker.trim()), style: 'label', gold: [] })
-  if (spec.title?.trim()) lines.push({ text: clean(spec.title.trim()), style: 'hook', gold: goldIdx(spec.title.trim()) })
+  if (spec.title?.trim()) lines.push({ text: clean(spec.title.trim()), style: 'hook', gold: goldIdx(spec.title.trim()), ...(spec.font === 'tenor' ? { font: 'tenor' } : {}), ...(spec.cap === 'hand' ? { cap: 'hand' as const } : {}) })
   const layers: OverlayOptions[] = []
   const y = Math.max(COVER_Y_MIN, Math.min(COVER_Y_MAX, Math.round(Number(spec.y ?? COVER_Y)) || COVER_Y))
   if (lines.length) layers.push({ input: await textPng({ id: 'cover', from: 0, to: 0, y: 0, scrim: 0.42, lines } as VText, y) })

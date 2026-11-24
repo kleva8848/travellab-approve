@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { db, fail, requireUser } from '../server/http.js'
 import { insertOwnMedia, isUploadPath, uploadExists, uploadUrl } from '../server/media.js'
 import { cleanSpec, photoPreview, POST_WM, previewUrls, sendStory, sendToChat, type PhotoEdit, type PhotoSpec, type PostWm } from '../server/render.js'
+import { isStyle, resetPreset, savePreset } from '../server/presets.js'
 import { inquiryCounts, notifyN8n, openQuestions } from '../server/review.js'
 import { DATE_RE, kyivNow, scheduleIfNeeded, TIME_RE } from '../server/schedule.js'
 import { failSchema } from '../server/schema.js'
@@ -12,7 +13,7 @@ const MAX_COMMENT = 2000
 const MAX_TEXT = 5000
 
 type Body = {
-  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark' | 'photo_preview' | 'photo_spec' | 'photo_ideas'
+  action?: 'approve' | 'comment' | 'restore' | 'unapprove' | 'swap_photo' | 'upload_url' | 'add_photo' | 'send_to_chat' | 'edit_text' | 'publish' | 'unpublish' | 'preview' | 'reschedule' | 'skip' | 'unskip' | 'unmiss' | 'golden' | 'photo_edit' | 'send_story' | 'answer_data' | 'inquiry' | 'watermark' | 'photo_preview' | 'photo_spec' | 'photo_ideas' | 'style_pref'
   id?: string
   expected_version_no?: number
   text?: string
@@ -35,6 +36,8 @@ type Body = {
   answers?: { id?: string; answer?: string }[]
   spec?: unknown
   bg?: boolean
+  style?: string
+  preset?: unknown
 }
 
 const MAX_ANSWER = 1000
@@ -190,6 +193,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return void res.status(code).json(code === 200 ? { ok: true, ...r } : r)
     }
 
+    // «Запам'ятати для всіх» (сет 6): шрифти й розміри стилю → render_prefs (global). Так виглядатимуть усі пости цього стилю,
+    // крім фото, де текст Іри власний і затверджених до сету 6. preset: null — повернути стандартний
+    if (b.action === 'style_pref') {
+      if (!isStyle(b.style)) return void res.status(400).json({ error: 'bad style' })
+      if (b.preset === null) {
+        await resetPreset(b.style)
+        return void res.json({ ok: true, preset: null })
+      }
+      return void res.json({ ok: true, preset: await savePreset(b.style, b.preset) })
+    }
+
     // «Зберегти» в редакторі: одна нова версія (не на кожен тап) з тим самим текстом поста — render_params.photo_spec[media_id], source 'ira'
     // (агент цей слайд більше не перегенеровує). Старі текстові правки фото (title / kicker / вгору-вниз / розмір) прибираємо — діє спека;
     // кроп, обробка, яскравість лишаються. spec: null — «Повернути текст агента»
@@ -208,6 +222,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const edits = { ...((params.photo_edits as Record<string, PhotoEdit> | undefined) ?? {}) }
       if (spec) specs[mid] = spec
       else delete specs[mid]
+      // Стиль поста (сет 6): обрала на обкладинці «Готель / Думка / Мінімал» → підписи фото 2–10 (текст агента) теж у цій парі
+      const style = isStyle(b.style) ? { visual_style: b.style } : {}
       if (edits[mid]) {
         const { title: _t, kicker: _k, text: _x, size: _s, width: _w, veil: _v, ...rest } = edits[mid]
         if (Object.keys(rest).length) edits[mid] = rest
@@ -215,7 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const r = await db().rpc('tl_add_version', {
         p_content_plan_id: b.id, p_text: null, p_trigger: 'photo_edit', p_expected_version_no: expected,
-        p_render_params: { ...params, photo_edits: edits, photo_spec: specs }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
+        p_render_params: { ...params, ...style, photo_edits: edits, photo_spec: specs }, p_prompt_version: 'photo_look', p_review_status: p.data.review_status,
       })
       if (r.error) {
         if (r.error.code === 'P0409' || /version_conflict/.test(r.error.message)) return void conflict()

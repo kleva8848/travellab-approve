@@ -38,13 +38,14 @@ type DraftRow = {
 type Montage = { music?: { title: string; artist: string; mood: string } | null; voice?: { dur: number } | null }
 // Заявка на перемонтаж кадрів (SQL 020) — виконує montage-test/remount_worker.py
 type Remount = { kind: string; shot?: number; order?: number[]; start?: number; state: 'queued' | 'running' | 'done' | 'error'; at: string; by: number; error?: string; note?: string[] }
-type VLine = { text: string; style: string; gold: number[]; maxW?: number; font?: string }
+type VLine = { text: string; style: string; gold: number[]; maxW?: number; font?: string; cap?: 'hand' }
 type VText = { id: string; from: number; to: number; y: number; scrim: number; lines: VLine[]; sec?: [number, number] }
 export type Plan = { texts: VText[]; wm: { kind: string; pos: string; color: string }; cover: number }
 // Обкладинка (SQL 025, сет 2): фон — чистий кадр (t секунд clean.mp4), kicker — надпис зверху, title — «*золоте* слово», y — висота центру тексту.
 // bg.kind 'media' (сет 3) — фото з бази (таблиця media, bucket post-media) замість кадру відео
 export type CoverBg = { kind: 'frame'; t: number } | { kind: 'media'; media_id: string }
-export type CoverSpec = { bg: CoverBg; kicker: string; title: string; y: number; wm: Plan['wm'] }
+// font / cap (сет 6): шрифт заголовка і рукописна перша літера — як на фото постів; без них — Cormorant, як було
+export type CoverSpec = { bg: CoverBg; kicker: string; title: string; y: number; wm: Plan['wm']; font?: 'cormorant' | 'tenor'; cap?: 'hand' | null }
 type CoverCand = { path: string; t: number; sharp?: number }
 
 const COLS = 'id, name, format, platform, place, hotel_id, dur, web_path, poster_path, shots, plan, status, scheduled_for, updated_at, final_path, cover_path, rendered_at, render_error, sent_at, remount, montage, caption, nomusic_path, delivered_at, published_at, published_ref, cover_spec, cover_cands'
@@ -474,6 +475,8 @@ function cleanCover(raw: unknown, cands: CoverCand[]): CoverSpec | null {
     title: txt(s.title, TITLE_MAX).split(' ').filter((w) => w.replace(/\*/g, '')).join(' '),
     y: int(s.y, COVER_Y_MIN, COVER_Y_MAX, COVER_Y),
     wm: cleanWm(s.wm),
+    ...(s.font === 'tenor' ? { font: 'tenor' as const } : {}),
+    ...(s.cap === 'hand' ? { cap: 'hand' as const } : {}),
   }
 }
 
